@@ -68,3 +68,5 @@ class SinglePattern : public Pattern {
 public:
     virtual ~SinglePattern() = default;
 };
+
+

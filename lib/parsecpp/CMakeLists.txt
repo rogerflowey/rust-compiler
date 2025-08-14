@@ -6,30 +6,25 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # --- 1. Define the Header-Only Library ---
-# This is what consumers like your 'compiler' executable will use.
 add_library(parsecpp INTERFACE)
 
 target_include_directories(parsecpp INTERFACE
-    # The public headers are in the 'include' directory
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# --- 2. Define Tests for the Library ---
 if(BUILD_TESTING)
-    include(FetchContent)
-FetchContent_Declare(
-  googletest
-    URL https://github.com/google/googletest/archive/5376968f6948923e2411081fd9372e71a59d8e77.zip
-    )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
+    # GTest is now fetched by the parent project. We just use it.
+    
+    add_executable(parsecpp_tests test/test_parsec_basic.cpp)
 
-    add_executable(parsecpp_tests src/test_parsec_basic.cpp)
-
+    # Link against the library it's testing and GTest.
     target_link_libraries(parsecpp_tests PRIVATE
         parsecpp
         gtest_main
     )
+    
+    # Register with CTest.
     include(CTest)
     add_test(NAME parsecpp-basic COMMAND parsecpp_tests)
-
 endif()

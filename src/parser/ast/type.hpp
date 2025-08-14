@@ -10,7 +10,7 @@ public:
 
 class PrimitiveType : public Type {
 public:
-    enum Kind { I32, U32, USIZE, BOOL, CHAR };
+    enum Kind { I32, U32, STRING, USIZE, BOOL, CHAR };
     Kind kind;
     PrimitiveType(Kind kind) : kind(kind) {}
 };

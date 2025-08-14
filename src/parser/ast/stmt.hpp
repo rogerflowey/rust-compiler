@@ -1,27 +1,20 @@
 #pragma once
 
-#include <string>
+#include "common.hpp"
+#include <optional>
 
-#include "expr.hpp"
-
-class Statement {
+class LetStmt : public Statement {
 public:
-    virtual ~Statement() = default;
+    PatternPtr pattern;
+    std::optional<TypePtr> type_annotation;
+    std::optional<ExprPtr> initializer;
+
+    LetStmt(PatternPtr pattern, std::optional<TypePtr> type, std::optional<ExprPtr> initializer)
+        : pattern(std::move(pattern)), type_annotation(std::move(type)), initializer(std::move(initializer)) {}
 };
 
-class LetStatement : public Statement {
-    std::string name;
-    Expr* value;
+class ExprStmt : public Statement {
 public:
-    LetStatement(std::string name, Expr* value)
-        : name(std::move(name)), value(value) {}
-    const std::string& getName() const { return name; }
-    Expr* getValue() const { return value; }
-};
-
-class ExprStatement : public Statement {
-    Expr* expression;
-public:
-    ExprStatement(Expr* expression) : expression(expression) {}
-    Expr* getExpression() const { return expression; }
+    ExprPtr expr;
+    ExprStmt(ExprPtr expr) : expr(std::move(expr)) {}
 };

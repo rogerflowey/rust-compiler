@@ -7,8 +7,13 @@
 // ---- literals ------
 class IntLiteralExpr : public Expr {
 public:
-    int64_t value;
-    IntLiteralExpr(int64_t value) : value(value) {}
+    int32_t value;
+    IntLiteralExpr(int32_t value) : value(value) {}
+};
+class UintLiteralExpr : public Expr {
+public:
+    uint32_t value;
+    UintLiteralExpr(uint32_t value) : value(value) {}
 };
 
 class BoolLiteralExpr : public Expr {
@@ -23,6 +28,12 @@ public:
     CharLiteralExpr(char value) : value(value) {}
 };
 
+class StringLiteralExpr : public Expr {
+public:
+    std::string value;
+    bool is_cstyle = false;
+    StringLiteralExpr(std::string value) : value(std::move(value)) {}
+};
 
 class PathExpr : public Expr {
 public:
