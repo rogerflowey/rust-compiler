@@ -1,0 +1,35 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "Default Config",
+            "description": "Default build settings",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "BUILD_TESTING": "ON"
+            }
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "default-test",
+            "displayName": "Default Test (Output on Failure)",
+            "description": "Run tests, showing output only for failures",
+            "configurePreset": "default",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "verbose-test",
+            "displayName": "Verbose Test Output",
+            "description": "Run tests and show all output",
+            "configurePreset": "default",
+            "output": {
+                "verbosity": "verbose"
+            }
+        }
+    ]
+}

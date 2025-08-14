@@ -20,7 +20,7 @@ add_subdirectory(lib/parsecpp)
 
 # --- Main Executable ---
 add_executable(compiler main.cpp)
-target_link_libraries(compiler PRIVATE parsecpp::pratt)
+target_link_libraries(compiler PRIVATE parsecpp)
 
 # --- User-friendly Output ---
 message(STATUS "Compiler executable will be built as: ${CMAKE_BINARY_DIR}/compiler")
