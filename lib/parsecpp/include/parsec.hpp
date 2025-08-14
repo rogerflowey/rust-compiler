@@ -1,13 +1,25 @@
 #pragma once
+
 #include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 #include <utility>
 #include <memory>
-#include <stdexcept> // For lazy parser error
+#include <stdexcept>
+#include <tuple>
+#include <type_traits> // For std::invoke_result_t and type checks
 
 namespace parsec {
+
+// Helper to check if a type is a std::tuple
+template<typename>
+struct is_tuple : std::false_type {};
+template<typename... Ts>
+struct is_tuple<std::tuple<Ts...>> : std::true_type {};
+template<typename T>
+inline constexpr bool is_tuple_v = is_tuple<T>::value;
+
 
 template <typename Token> struct ParseContext {
   const std::vector<Token> &tokens;
@@ -24,27 +36,27 @@ template <typename Token> struct ParseContext {
 
 template <typename ReturnType, typename Token> class Parser;
 
-// Forward declarations for friend functions
+// Forward declarations for free-function combinators
 template <typename R, typename T>
 Parser<R, T> orElse(const Parser<R, T> &p1, const Parser<R, T> &p2);
 
 template <typename R1, typename R2, typename T>
-Parser<std::pair<R1, R2>, T> andThen(const Parser<R1, T> &p1, const Parser<R2, T> &p2);
+auto andThen(const Parser<R1, T> &p1, const Parser<R2, T> &p2);
 
 template <typename R, typename T>
 Parser<std::vector<R>, T> many(const Parser<R, T> &p);
 
 template <typename R, typename T>
-Parser<std::vector<R>, T> many1(const Parser<R, T> &p);
+auto many1(const Parser<R, T> &p);
 
 template <typename R, typename T>
 Parser<std::optional<R>, T> optional(const Parser<R, T> &p);
 
 template <typename R1, typename R2, typename T>
-Parser<std::vector<R1>, T> sepBy(const Parser<R1, T> &p, const Parser<R2, T> &sep);
+auto sepBy(const Parser<R1, T> &p, const Parser<R2, T> &sep);
 
 template <typename R1, typename R2, typename T>
-Parser<std::vector<R1>, T> sepBy1(const Parser<R1, T> &p, const Parser<R2, T> &sep);
+auto sepBy1(const Parser<R1, T> &p, const Parser<R2, T> &sep);
 
 template <typename R, typename T>
 std::pair<Parser<R, T>, std::function<void(Parser<R, T>)>>
@@ -52,8 +64,10 @@ lazy();
 
 template <typename ReturnType, typename Token> class Parser {
 public:
+  using ReturnType_t = ReturnType; // Type alias for flatMap
   using ParseFn =
       std::function<std::optional<ReturnType>(ParseContext<Token> &)>;
+
   Parser() = default;
   Parser(ParseFn fn) : parseFn(std::move(fn)) {}
 
@@ -66,104 +80,65 @@ public:
     return result;
   }
 
-  template <typename NewReturnType>
-  Parser<NewReturnType, Token> map(std::function<NewReturnType(ReturnType)> f) const {
-    ParseFn current_fn = this->parseFn;
-    return Parser<NewReturnType, Token>([current_fn, f](ParseContext<Token> &context) -> std::optional<NewReturnType> {
-      auto originalPos = context.position;
-      auto result = current_fn(context);
-      if (result) {
-        return f(*result);
-      }
-      context.position = originalPos;
-      return std::nullopt;
-    });
+  template <typename F>
+  auto map(F&& f) const {
+      using NewReturnType = std::invoke_result_t<F, ReturnType&&>;
+      return Parser<NewReturnType, Token>([*this, f = std::forward<F>(f)](ParseContext<Token> &context) mutable -> std::optional<NewReturnType> {
+          auto result = this->parse(context);
+          if (result) {
+              return f(std::move(*result));
+          }
+          return std::nullopt;
+      });
   }
-  /**
-   * Monadic bind. Takes the result of this parser and uses it to create a new parser, which is then run.
-   * This allows for context-sensitive parsing where the next parser depends on the result of the previous one.
-   */
+
+  template <typename F>
+  auto flatMap(F&& f) const;
+
+  auto orElse(const Parser<ReturnType, Token>& other) const;
+
   template <typename NewReturnType>
-  Parser<NewReturnType, Token> flatMap(std::function<Parser<NewReturnType, Token>(ReturnType)> f) const;
-
-  /**
-   * Tries this parser, and if it fails, tries the `other` parser.
-   * Corresponds to the `|` operator and `orElse` free function.
-   */
-  Parser<ReturnType, Token> orElse(const Parser<ReturnType, Token>& other) const;
-
-  /**
-   * Sequentially composes this parser with another, returning a pair of their results.
-   * Corresponds to the `>>` operator and `andThen` free function.
-   */
-  template <typename NewReturnType>
-  Parser<std::pair<ReturnType, NewReturnType>, Token> andThen(const Parser<NewReturnType, Token>& other) const;
-
-  /**
-   * Sequentially composes this parser with another, discarding the result of the other.
-   * Corresponds to the `<` operator and `keepLeft` free function.
-   */
+  auto andThen(const Parser<NewReturnType, Token>& other) const;
+  
   template <typename OtherReturnType>
-  Parser<ReturnType, Token> keepLeft(const Parser<OtherReturnType, Token>& other) const;
+  auto keepLeft(const Parser<OtherReturnType, Token>& other) const;
 
-  /**
-   * Sequentially composes this parser with another, discarding the result of this one.
-   * Corresponds to the `>` operator and `keepRight` free function.
-   */
   template <typename NewReturnType>
-  Parser<NewReturnType, Token> keepRight(const Parser<NewReturnType, Token>& other) const;
+  auto keepRight(const Parser<NewReturnType, Token>& other) const;
 
-  /**
-   * Applies this parser zero or more times, collecting the results in a vector.
-   * Corresponds to the `many` free function.
-   */
-  Parser<std::vector<ReturnType>, Token> many() const;
+  auto many() const;
+  auto many1() const;
+  auto optional() const;
 
-  /**
-   * Applies this parser one or more times, collecting the results in a vector.
-   * Corresponds to the `many1` free function.
-   */
-  Parser<std::vector<ReturnType>, Token> many1() const;
-
-  /**
-   * Tries to apply this parser and returns its result wrapped in an optional.
-   * Always succeeds, returning an empty optional if the parser fails.
-   * Corresponds to the `optional` free function.
-   */
-  Parser<std::optional<ReturnType>, Token> optional() const;
-
-  /**
-   * Parses one or more occurrences of this parser, separated by a separator parser.
-   * Corresponds to the `sepBy1` free function.
-   */
   template <typename SepType>
-  Parser<std::vector<ReturnType>, Token> sepBy1(const Parser<SepType, Token>& separator) const;
+  auto sepBy1(const Parser<SepType, Token>& separator) const;
 
-  /**
-   * Parses zero or more occurrences of this parser, separated by a separator parser.
-   * Corresponds to the `sepBy` free function.
-   */
   template <typename SepType>
-  Parser<std::vector<ReturnType>, Token> sepBy(const Parser<SepType, Token>& separator) const;
+  auto sepBy(const Parser<SepType, Token>& separator) const;
 
 private:
   ParseFn parseFn;
 
-  // Grant access to the private parseFn for combinators
+  template <typename R, typename T>
+  friend class Parser;
+
   template <typename R, typename T>
   friend Parser<R, T> orElse(const Parser<R, T> &p1, const Parser<R, T> &p2);
 
   template <typename R1, typename R2, typename T>
-  friend Parser<std::pair<R1, R2>, T> andThen(const Parser<R1, T> &p1, const Parser<R2, T> &p2);
+  friend auto andThen(const Parser<R1, T> &p1, const Parser<R2, T> &p2);
   
   template <typename R, typename T>
   friend Parser<std::vector<R>, T> many(const Parser<R, T> &p);
 
   template <typename R, typename T>
-  friend Parser<std::vector<R>, T> many1(const Parser<R, T> &p);
-
-  template <typename R, typename T>
   friend Parser<std::optional<R>, T> optional(const Parser<R, T> &p);
+  
+  template <typename R1, typename R2, typename T>
+  friend auto keepLeft(const Parser<R1, T> &p1, const Parser<R2, T> &p2);
+
+  template <typename R1, typename R2, typename T>
+  friend auto keepRight(const Parser<R1, T> &p1, const Parser<R2, T> &p2);
 
   template <typename R, typename T>
   friend std::pair<Parser<R, T>, std::function<void(Parser<R, T>)>>
@@ -171,14 +146,143 @@ private:
 };
 
 //================================================================
-//== Free-function / Operator combinators (Existing)
+//== Free-function / Operator combinators
 //================================================================
+template <typename R1, typename R2, typename Token>
+auto andThen(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
+    auto fn1 = p1.parseFn;
+    auto fn2 = p2.parseFn;
 
-template <typename ReturnType, typename Token>
-Parser<ReturnType, Token> orElse(const Parser<ReturnType, Token> &p1, const Parser<ReturnType, Token> &p2) {
+    auto combine = [](auto&& r1, auto&& r2) {
+        if constexpr (is_tuple_v<std::decay_t<decltype(r1)>> && is_tuple_v<std::decay_t<decltype(r2)>>) {
+            return std::tuple_cat(std::forward<decltype(r1)>(r1), std::forward<decltype(r2)>(r2));
+        } else if constexpr (is_tuple_v<std::decay_t<decltype(r1)>>) {
+            return std::tuple_cat(std::forward<decltype(r1)>(r1), std::make_tuple(std::forward<decltype(r2)>(r2)));
+        } else if constexpr (is_tuple_v<std::decay_t<decltype(r2)>>) {
+            return std::tuple_cat(std::make_tuple(std::forward<decltype(r1)>(r1)), std::forward<decltype(r2)>(r2));
+        } else {
+            return std::make_tuple(std::forward<decltype(r1)>(r1), std::forward<decltype(r2)>(r2));
+        }
+    };
+    using NewReturnType = decltype(combine(std::declval<R1>(), std::declval<R2>()));
+
+    return Parser<NewReturnType, Token>([fn1, fn2, combine](ParseContext<Token> &context) -> std::optional<NewReturnType> {
+        auto originalPos = context.position;
+        auto res1 = fn1(context);
+        if (!res1) { 
+            context.position = originalPos;
+            return std::nullopt; 
+        }
+        
+        auto res2 = fn2(context);
+        if (!res2) {
+            context.position = originalPos;
+            return std::nullopt;
+        }
+        return combine(std::move(*res1), std::move(*res2));
+    });
+}
+
+template <typename R1, typename R2, typename Token>
+auto operator>>(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
+  return andThen(p1, p2);
+}
+
+template <typename R1, typename R2, typename Token>
+auto keepLeft(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
+    auto fn1 = p1.parseFn;
+    auto fn2 = p2.parseFn;
+
+    return Parser<R1, Token>([fn1, fn2](ParseContext<Token> &context) -> std::optional<R1> {
+        auto originalPos = context.position;
+        auto res1 = fn1(context);
+        if (!res1) {
+            context.position = originalPos;
+            return std::nullopt;
+        }
+
+        auto res2 = fn2(context);
+        if (!res2) {
+            context.position = originalPos;
+            return std::nullopt;
+        }
+
+        return res1;
+    });
+}
+
+template <typename R1, typename R2, typename Token>
+auto operator<(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
+    return keepLeft(p1, p2);
+}
+
+template <typename R1, typename R2, typename Token>
+auto keepRight(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
+    auto fn1 = p1.parseFn;
+    auto fn2 = p2.parseFn;
+
+    return Parser<R2, Token>([fn1, fn2](ParseContext<Token> &context) -> std::optional<R2> {
+        auto originalPos = context.position;
+
+        auto res1 = fn1(context);
+        if (!res1) {
+            context.position = originalPos;
+            return std::nullopt;
+        }
+
+        auto res2 = fn2(context);
+        if (!res2) {
+            context.position = originalPos;
+            return std::nullopt;
+        }
+
+        return res2;
+    });
+}
+template <typename R1, typename R2, typename Token>
+auto operator>(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
+    return keepRight(p1, p2);
+}
+
+template <typename R, typename Token>
+Parser<std::vector<R>, Token> many(const Parser<R, Token> &p) {
+  auto p_fn = p.parseFn;
+  return Parser<std::vector<R>, Token>([p_fn](ParseContext<Token> &context) -> std::optional<std::vector<R>> {
+    std::vector<R> results;
+    while (true) {
+      auto originalPos = context.position;
+      auto res = p_fn(context);
+      if (res) {
+        results.push_back(std::move(*res));
+      } else {
+        context.position = originalPos;
+        break;
+      }
+    }
+    return results;
+  });
+}
+
+template <typename R, typename Token>
+auto many1(const Parser<R, Token> &p) {
+    return (p >> many(p)).map([](auto&& t) {
+        auto&& first = std::get<0>(std::forward<decltype(t)>(t));
+        auto&& rest = std::get<1>(std::forward<decltype(t)>(t));
+        std::vector<R> results;
+        results.reserve(1 + rest.size());
+        results.push_back(std::move(first));
+        for(auto&& item : rest) {
+            results.push_back(std::move(item));
+        }
+        return results;
+    });
+}
+
+template <typename R, typename T>
+Parser<R, T> orElse(const Parser<R, T> &p1, const Parser<R, T> &p2) {
   auto fn1 = p1.parseFn;
   auto fn2 = p2.parseFn;
-  return Parser<ReturnType, Token>([fn1, fn2](ParseContext<Token> &context) -> std::optional<ReturnType> {
+  return Parser<R, T>([fn1, fn2](ParseContext<T> &context) -> std::optional<R> {
     auto originalPos = context.position;
     auto res1 = fn1(context);
     if (res1) {
@@ -189,126 +293,57 @@ Parser<ReturnType, Token> orElse(const Parser<ReturnType, Token> &p1, const Pars
   });
 }
 
-template <typename ReturnType, typename Token>
-Parser<ReturnType, Token> operator|(const Parser<ReturnType, Token> &p1, const Parser<ReturnType, Token> &p2) {
+template <typename R, typename T>
+Parser<R, T> operator|(const Parser<R, T> &p1, const Parser<R, T> &p2) {
   return orElse(p1, p2);
 }
 
-template <typename R1, typename R2, typename Token>
-Parser<std::pair<R1, R2>, Token> andThen(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
-  auto fn1 = p1.parseFn;
-  auto fn2 = p2.parseFn;
-  return Parser<std::pair<R1, R2>, Token>([fn1, fn2](ParseContext<Token> &context) -> std::optional<std::pair<R1, R2>> {
-    auto originalPos = context.position;
-    auto res1 = fn1(context);
-    if (!res1) {
-      context.position = originalPos;
-      return std::nullopt;
-    }
-    auto res2 = fn2(context);
-    if (!res2) {
-      context.position = originalPos;
-      return std::nullopt;
-    }
-    return std::make_pair(*res1, *res2);
-  });
-}
-
-template <typename R1, typename R2, typename Token>
-Parser<std::pair<R1, R2>, Token> operator>>(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
-  return andThen(p1, p2);
-}
-
-template <typename R1, typename R2, typename Token>
-Parser<R1, Token> keepLeft(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
-    return (p1 >> p2).map(std::function{[](std::pair<R1, R2> p) { return p.first; }});
-}
-
-template <typename R1, typename R2, typename Token>
-Parser<R1, Token> operator<(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
-    return keepLeft(p1, p2);
-}
-
-template <typename R1, typename R2, typename Token>
-Parser<R2, Token> keepRight(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
-    return (p1 >> p2).map(std::function{[](std::pair<R1, R2> p) { return p.second; }});
-}
-
-template <typename R1, typename R2, typename Token>
-Parser<R2, Token> operator>(const Parser<R1, Token> &p1, const Parser<R2, Token> &p2) {
-    return keepRight(p1, p2);
-}
-
-template <typename ReturnType, typename Token>
-Parser<std::vector<ReturnType>, Token> many(const Parser<ReturnType, Token> &p) {
+template <typename R, typename T>
+Parser<std::optional<R>, T> optional(const Parser<R, T> &p) {
   auto p_fn = p.parseFn;
-  return Parser<std::vector<ReturnType>, Token>([p_fn](ParseContext<Token> &context) -> std::optional<std::vector<ReturnType>> {
-    std::vector<ReturnType> results;
-    while (true) {
-      auto originalPos = context.position;
-      auto res = p_fn(context);
-      if (res) {
-        results.push_back(*res);
-      } else {
-        context.position = originalPos;
-        break;
-      }
-    }
-    return results;
-  });
-}
-
-template <typename ReturnType, typename Token>
-Parser<std::vector<ReturnType>, Token> many1(const Parser<ReturnType, Token> &p) {
-  return (p >> many(p)).map([](std::pair<ReturnType, std::vector<ReturnType>> p) {
-      std::vector<ReturnType> results;
-      results.push_back(p.first);
-      results.insert(results.end(), p.second.begin(), p.second.end());
-      return results;
-  });
-}
-
-template <typename ReturnType, typename Token>
-Parser<std::optional<ReturnType>, Token> optional(const Parser<ReturnType, Token> &p) {
-  auto p_fn = p.parseFn;
-  return Parser<std::optional<ReturnType>, Token>([p_fn](ParseContext<Token> &context) -> std::optional<std::optional<ReturnType>> {
+  return Parser<std::optional<R>, T>([p_fn](ParseContext<T> &context) -> std::optional<std::optional<R>> {
     auto originalPos = context.position;
     auto res = p_fn(context);
     if (res) {
       return res;
     }
     context.position = originalPos;
-    return std::optional<ReturnType>{}; // Return success(optional is empty)
+    return std::optional<R>{};
   });
 }
 
-template <typename ReturnType, typename Token>
-Parser<ReturnType, Token> succeed(ReturnType value) {
-  return Parser<ReturnType, Token>([value](ParseContext<Token> &) {
-    return std::make_optional(value);
+template <typename R, typename T>
+Parser<R, T> succeed(R value) {
+  return Parser<R, T>([value = std::move(value)](ParseContext<T> &) mutable {
+    return std::make_optional(std::move(value));
+  });
+}
+
+template <typename R, typename Token> Parser<R, Token> fail() {
+  return Parser<R, Token>([](ParseContext<Token> &) {
+    return std::nullopt;
   });
 }
 
 template <typename R1, typename R2, typename Token>
-Parser<std::vector<R1>, Token> sepBy1(const Parser<R1, Token> &p, const Parser<R2, Token> &sep) {
+auto sepBy1(const Parser<R1, Token> &p, const Parser<R2, Token> &sep) {
     auto sepThenP = sep > p;
-    return (p >> many(sepThenP)).map([](std::pair<R1, std::vector<R1>> p) {
+    return (p >> many(sepThenP)).map([](auto&& t) {
+        auto&& first = std::get<0>(std::forward<decltype(t)>(t));
+        auto&& rest = std::get<1>(std::forward<decltype(t)>(t));
         std::vector<R1> results;
-        results.push_back(p.first);
-        results.insert(results.end(), p.second.begin(), p.second.end());
+        results.reserve(1 + rest.size());
+        results.push_back(std::move(first));
+        for(auto&& item : rest) {
+            results.push_back(std::move(item));
+        }
         return results;
     });
 }
 
 template <typename R1, typename R2, typename Token>
-Parser<std::vector<R1>, Token> sepBy(const Parser<R1, Token> &p, const Parser<R2, Token> &sep) {
+auto sepBy(const Parser<R1, Token> &p, const Parser<R2, Token> &sep) {
     return orElse(sepBy1(p, sep), succeed<std::vector<R1>, Token>({}));
-}
-
-template <typename ReturnType, typename Token> Parser<ReturnType, Token> fail() {
-  return Parser<ReturnType, Token>([](ParseContext<Token> &) {
-    return std::nullopt;
-  });
 }
 
 template <typename Token>
@@ -377,19 +412,18 @@ lazy() {
     return {p, setter};
 }
 
-//================================================================
-//== NEW: Method-style combinator implementations
-//================================================================
 
 template <typename ReturnType, typename Token>
-template <typename NewReturnType>
-Parser<NewReturnType, Token> Parser<ReturnType, Token>::flatMap(std::function<Parser<NewReturnType, Token>(ReturnType)> f) const {
-    ParseFn current_fn = this->parseFn;
-    return Parser<NewReturnType, Token>([current_fn, f](ParseContext<Token> &context) -> std::optional<NewReturnType> {
+template <typename F>
+auto Parser<ReturnType, Token>::flatMap(F&& f) const {
+    using NextParser = std::invoke_result_t<F, ReturnType&&>;
+    using NewReturnType = typename NextParser::ReturnType_t;
+
+    return Parser<NewReturnType, Token>([*this, f = std::forward<F>(f)](ParseContext<Token> &context) mutable -> std::optional<NewReturnType> {
         auto originalPos = context.position;
-        auto result1 = current_fn(context);
+        auto result1 = this->parse(context);
         if (result1) {
-            Parser<NewReturnType, Token> next_parser = f(*result1);
+            auto next_parser = f(std::move(*result1));
             auto result2 = next_parser.parse(context);
             if (result2) {
                 return result2;
@@ -401,52 +435,52 @@ Parser<NewReturnType, Token> Parser<ReturnType, Token>::flatMap(std::function<Pa
 }
 
 template <typename ReturnType, typename Token>
-Parser<ReturnType, Token> Parser<ReturnType, Token>::orElse(const Parser<ReturnType, Token>& other) const {
+auto Parser<ReturnType, Token>::orElse(const Parser<ReturnType, Token>& other) const {
     return parsec::orElse(*this, other);
 }
 
 template <typename ReturnType, typename Token>
 template <typename NewReturnType>
-Parser<std::pair<ReturnType, NewReturnType>, Token> Parser<ReturnType, Token>::andThen(const Parser<NewReturnType, Token>& other) const {
+auto Parser<ReturnType, Token>::andThen(const Parser<NewReturnType, Token>& other) const {
     return parsec::andThen(*this, other);
 }
 
 template <typename ReturnType, typename Token>
 template <typename OtherReturnType>
-Parser<ReturnType, Token> Parser<ReturnType, Token>::keepLeft(const Parser<OtherReturnType, Token>& other) const {
+auto Parser<ReturnType, Token>::keepLeft(const Parser<OtherReturnType, Token>& other) const {
     return parsec::keepLeft(*this, other);
 }
 
 template <typename ReturnType, typename Token>
 template <typename NewReturnType>
-Parser<NewReturnType, Token> Parser<ReturnType, Token>::keepRight(const Parser<NewReturnType, Token>& other) const {
+auto Parser<ReturnType, Token>::keepRight(const Parser<NewReturnType, Token>& other) const {
     return parsec::keepRight(*this, other);
 }
 
 template <typename ReturnType, typename Token>
-Parser<std::vector<ReturnType>, Token> Parser<ReturnType, Token>::many() const {
+auto Parser<ReturnType, Token>::many() const {
     return parsec::many(*this);
 }
 
 template <typename ReturnType, typename Token>
-Parser<std::vector<ReturnType>, Token> Parser<ReturnType, Token>::many1() const {
+auto Parser<ReturnType, Token>::many1() const {
     return parsec::many1(*this);
 }
 
 template <typename ReturnType, typename Token>
-Parser<std::optional<ReturnType>, Token> Parser<ReturnType, Token>::optional() const {
+auto Parser<ReturnType, Token>::optional() const {
     return parsec::optional(*this);
 }
 
 template <typename ReturnType, typename Token>
 template <typename SepType>
-Parser<std::vector<ReturnType>, Token> Parser<ReturnType, Token>::sepBy(const Parser<SepType, Token>& separator) const {
+auto Parser<ReturnType, Token>::sepBy(const Parser<SepType, Token>& separator) const {
     return parsec::sepBy(*this, separator);
 }
 
 template <typename ReturnType, typename Token>
 template <typename SepType>
-Parser<std::vector<ReturnType>, Token> Parser<ReturnType, Token>::sepBy1(const Parser<SepType, Token>& separator) const {
+auto Parser<ReturnType, Token>::sepBy1(const Parser<SepType, Token>& separator) const {
     return parsec::sepBy1(*this, separator);
 }
 
