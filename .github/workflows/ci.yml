@@ -1,0 +1,53 @@
+# .github/workflows/ci.yml
+
+name: C++ CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  # Set the build type for CMake.
+  BUILD_TYPE: Release
+
+jobs:
+  build-and-test:
+    # Use the latest version of Ubuntu as the runner.
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Get the code from your repository
+    - name: Check out repository code
+      uses: actions/checkout@v4
+
+    # 2. Install required system dependencies
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+
+    # 3. Configure CMake
+    - name: Configure CMake
+      # This step creates the build directory and configures the project.
+      # -DBUILD_TESTING=ON is the crucial flag that tells our CMakeLists.txt
+      # to include the test targets.
+      run: >
+        cmake -B ${{github.workspace}}/build
+        -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+        -DBUILD_TESTING=ON
+
+    # 4. Build the project
+    - name: Build
+      # This command builds all targets, including the compiler and the test executables.
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+
+    # 5. Run the tests
+    - name: Test
+      # Change to the build directory before running CTest.
+      working-directory: ${{github.workspace}}/build
+      # Execute tests defined by add_test() in CMake.
+      # --output-on-failure will print the test logs only if a test fails,
+      # which is perfect for CI.
+      run: ctest -C ${{env.BUILD_TYPE}} --output-on-failure
