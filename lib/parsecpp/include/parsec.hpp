@@ -81,6 +81,9 @@ public:
   template <typename SepType>
   auto list(const Parser<SepType, Token> &separator) const;
 
+  template <typename SepType>
+  auto tuple(const Parser<SepType, Token> &separator) const;
+
 private:
   ParseFn parseFn;
 
@@ -246,7 +249,6 @@ auto Parser<ReturnType, Token>::optional() const {
       });
 }
 
-// this parser
 template <typename ReturnType, typename Token>
 template <typename SepType>
 auto Parser<ReturnType, Token>::list1(
@@ -293,6 +295,18 @@ auto Parser<ReturnType, Token>::list(
     const Parser<SepType, Token> &separator) const {
   return this->list1(separator).orElse(Parser<std::vector<ReturnType>, Token>(
       [](auto &) { return std::make_optional(std::vector<ReturnType>{}); }));
+}
+
+template <typename ReturnType, typename Token>
+template <typename SepType>
+auto Parser<ReturnType, Token>::tuple(
+    const Parser<SepType, Token> &separator) const {
+  return ((*this >> ((separator > *this).many())) < separator.optional())
+      .map([](std::tuple<ReturnType, std::vector<ReturnType>> &&result) {
+        auto &[first, rest] = result;
+        rest.emplace(rest.begin(), std::move(first));
+        return std::move(rest);
+      });
 }
 
 template <typename R, typename T>

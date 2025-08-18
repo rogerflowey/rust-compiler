@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -53,10 +54,22 @@ public:
     const std::string& getName() const { return name; }
 };
 
+enum PathSegType{
+    IDENTIFIER,
+    SELF,
+    self
+};
+
+struct PathSegment {
+    PathSegType type;
+    std::optional<IdPtr> id;
+};
+
 class Path {
-    std::vector<IdPtr> segments;
+    std::vector<PathSegment> segments;
 public:
-    Path(std::vector<IdPtr> segments) : segments(std::move(segments)) {}
+    Path(std::vector<PathSegment> segments) : segments(std::move(segments)) {}
+    const std::vector<PathSegment>& getSegments() const { return segments; }
 };
 
 class Pattern {

@@ -14,7 +14,7 @@ enum TokenType {
   TOKEN_KEYWORD,
   TOKEN_NUMBER,
   TOKEN_STRING,
-  TOKEN_CSTRING, // For c"...", cr"...", etc.
+  TOKEN_CSTRING,
   TOKEN_CHAR,
   TOKEN_OPERATOR,
   TOKEN_DELIMITER,
@@ -42,7 +42,6 @@ class Lexer {
 
   static const std::unordered_set<std::string> keywords;
   static const std::unordered_set<char> delimiters;
-  // Changed to std::string to support "::"
   static const std::unordered_set<std::string> separators;
   static const std::unordered_set<std::string> operators;
 
@@ -133,9 +132,13 @@ inline void Lexer::parseNext() {
 
 // --- Matcher Implementations ---
 inline bool Lexer::matchIdentifierOrKeyword() const {
-  return std::isalpha(input.peek());
+  // FIX: Include '_' as a valid start for an identifier
+  return std::isalpha(input.peek()) || input.peek() == '_';
 }
-inline bool Lexer::matchNumber() const { return std::isdigit(input.peek()) || input.peek() == '_'; }
+inline bool Lexer::matchNumber() const { 
+  // FIX: Only match if the first character is a digit
+  return std::isdigit(input.peek()); 
+}
 inline bool Lexer::matchString() const {
   return input.match("\"") || input.match("b\"");
 }
@@ -153,7 +156,6 @@ inline bool Lexer::matchOperator() const {
 inline bool Lexer::matchDelimiter() const {
   return delimiters.count(input.peek());
 }
-// MODIFIED: Check for characters that can start a separator
 inline bool Lexer::matchSeparator() const {
   char c = input.peek();
   return c == ',' || c == ';' || c == ':';
@@ -305,6 +307,7 @@ inline Token Lexer::parseChar() {
 
 inline Token Lexer::parseIdentifierOrKeyword() {
   std::string word;
+  // Handles identifiers starting with letters or underscores
   while (!input.eof() && (std::isalnum(input.peek()) || input.peek() == '_')) {
     word += input.get();
   }
@@ -312,11 +315,37 @@ inline Token Lexer::parseIdentifierOrKeyword() {
                               : Token{TOKEN_IDENTIFIER, word};
 }
 
+// FIX: Modified to handle underscores and type suffixes (e.g., 123_456i32)
 inline Token Lexer::parseNumber() {
   std::string number;
-  while (!input.eof() && std::isdigit(input.peek())) {
-    number += input.get();
+  
+  // 1. Parse the numeric part (digits and underscores)
+  while (!input.eof() && (std::isdigit(input.peek()) || input.peek() == '_')) {
+    char c = input.get();
+    // Only store digits, ignore underscores in the value string
+    if (c != '_') {
+        number += c;
+    }
   }
+
+  // 2. Check for type suffix (e.g., i32, u64)
+  if (!input.eof() && std::isalpha(input.peek())) {
+    std::string suffix;
+    int i = 0;
+    while(!input.eof(i) && std::isalnum(input.peek(i))) {
+        suffix += input.peek(i);
+        i++;
+    }
+
+    // Simple check for common suffixes starting with i, u, or f
+    if (suffix.length() > 0 && 
+        (suffix[0] == 'i' || suffix[0] == 'u' || suffix[0] == 'f')) {
+        // Consume the suffix
+        input.advance(suffix.length());
+        number += suffix;
+    }
+  }
+
   return {TOKEN_NUMBER, number};
 }
 
@@ -395,9 +424,8 @@ inline const std::unordered_set<std::string> Lexer::keywords = {
     "trait",  "true",   "type",  "unsafe",   "use",    "where",  "while"};
 inline const std::unordered_set<char> Lexer::delimiters = {'{', '}', '(',
                                                            ')', '[', ']'};
-// MODIFIED: Changed to std::string and added "::"
 inline const std::unordered_set<std::string> Lexer::separators = {",", ";", ":", "::"};
 inline const std::unordered_set<std::string> Lexer::operators = {
     ">>=", "<<=", "==", "!=", "<=", ">=", "&&", "||", "..", "+=", "-=",
     "*=",  "/=",  "%=", "&=", "|=", "^=", "<<", ">>", "+",  "-",  "*",
-    "/",   "%",   "&",  "|",  "^",  "!",  "=",  "<",  ">",  "."};
+    "/",   "%",   "&",  "|",  "^",  "!",  "=",  "<",  ">",  ".", "@"};

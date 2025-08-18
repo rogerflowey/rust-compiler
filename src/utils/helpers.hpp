@@ -1,8 +1,6 @@
 
 #pragma once
 // numeric_parser.cp
-#include <vector>
-#include <sstream>
 #include <cctype> // for std::isdigit
 #include <string>
 #include <optional>
@@ -21,54 +19,21 @@ struct ParsedNumeric {
 
 std::optional<ParsedNumeric> separateNumberAndType(const std::string& input);
 
-// Helper function to check if a string consists only of digits.
-static bool isAllDigits(const std::string& s) {
-    if (s.empty()) {
-        return false;
-    }
-    for (char c : s) {
-        if (!std::isdigit(static_cast<unsigned char>(c))) {
-            return false;
-        }
-    }
-    return true;
-}
+// (intentionally left minimal)
 
-std::optional<ParsedNumeric> separateNumberAndType(const std::string& input) {
-    if (input.length() <= 1 || input[0] != '_') {
+inline std::optional<ParsedNumeric> separateNumberAndType(const std::string& input) {
+    if (input.empty() || !std::isdigit(static_cast<unsigned char>(input[0]))) {
         return std::nullopt;
     }
 
-    std::vector<std::string> parts;
-    std::stringstream ss(input.substr(1));
-    std::string part;
+    // Split into leading digits and optional alnum suffix (e.g., i32, u64, usize)
+    size_t i = 0;
+    while (i < input.size() && std::isdigit(static_cast<unsigned char>(input[i]))) {
+        ++i;
+    }
 
-    while (std::getline(ss, part, '_')) {
-        if (!part.empty()) {
-            parts.push_back(part);
-        }
-    }
-    if (parts.empty()) {
-        return std::nullopt;
-    }
     ParsedNumeric result;
-    std::string last_part = parts.back();
-
-    if (!isAllDigits(last_part)) {
-        result.type = last_part;
-        parts.pop_back();
-    }
-    if (parts.empty()) {
-        return std::nullopt;
-    }
-    
-    std::stringstream number_stream;
-    for (const auto& num_part : parts) {
-        if (!isAllDigits(num_part)) {
-            return std::nullopt;
-        }
-        number_stream << num_part;
-    }
-    result.number = number_stream.str();
+    result.number = input.substr(0, i);
+    result.type = (i < input.size()) ? input.substr(i) : std::string{};
     return result;
 }

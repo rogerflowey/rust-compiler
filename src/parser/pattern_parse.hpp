@@ -5,7 +5,6 @@
 #include "src/lexer/lexer.hpp"
 #include "src/parser/ast/common.hpp"
 #include "utils.hpp"
-#include <vector>
 
 using namespace parsec;
 
@@ -14,25 +13,35 @@ class PatternGrammar {
   std::function<void(PatternParser)> p_pattern_setter;
 
   PatternParser p_single_pattern;
+
+  PatternParser p_literal_pattern;
   PatternParser p_identifier_pattern;
   PatternParser p_wildcard_pattern;
-  PatternParser p_tuple_pattern;
+  PatternParser p_ref_pattern;
+  PatternParser p_tuplestruct_pattern;
+  PatternParser p_path_pattern;
   void pre_init_patterns();
+  void init_literal_pattern(const ExprParser &);
   void init_identifier_pattern();
   void init_wildcard_pattern();
-  void init_tuple_pattern();
+  void init_ref_pattern();
+  void init_tuplestruct_pattern(const PathParser &);
+  void init_path_pattern(const PathParser &);
   void final_init();
 
 public:
-  PatternGrammar();
+  PatternGrammar(const ExprParser &p_expr,const PathParser &p_path);
   PatternParser get_parser() { return p_pattern; }
 };
 
-inline PatternGrammar::PatternGrammar() {
+inline PatternGrammar::PatternGrammar(const ExprParser &p_expr,const PathParser &p_path) {
   pre_init_patterns();
+  init_literal_pattern(p_expr);
   init_identifier_pattern();
   init_wildcard_pattern();
-  init_tuple_pattern();
+  init_ref_pattern();
+  init_tuplestruct_pattern(p_path);
+  init_path_pattern(p_path);
   final_init();
 }
 
@@ -42,15 +51,32 @@ inline void PatternGrammar::pre_init_patterns() {
   this->p_pattern_setter = std::move(setter);
 }
 
-inline void PatternGrammar::init_identifier_pattern() {
-  p_identifier_pattern =
-      (equal({TOKEN_KEYWORD, "ref"}).optional())
-          .andThen(equal({TOKEN_KEYWORD, "mut"}).optional())
-          .andThen(p_identifier)
-          .map([](std::tuple<std::optional<Token>, std::optional<Token>, IdPtr>
-                      &&result) -> PatternPtr {
-            auto &[ref_tok, mut_tok, id] = result;
+inline void
+PatternGrammar::init_literal_pattern(const ExprParser &p_literal) {
+  p_literal_pattern =
+      equal({TOKEN_OPERATOR, "-"})
+          .optional()
+          .andThen(p_literal)
+          .map([](std::tuple<std::optional<Token>, ExprPtr> &&result)
+                   -> PatternPtr {
+            auto &[neg_tok, expr] = result;
+            return std::make_unique<LiteralPattern>(std::move(expr),
+                                                    neg_tok.has_value());
+          });
+}
 
+
+inline void PatternGrammar::init_identifier_pattern() {
+  // This parser captures `ref mut name`
+  auto p_binding = (equal({TOKEN_KEYWORD, "ref"}).optional())
+                       .andThen(equal({TOKEN_KEYWORD, "mut"}).optional())
+                       .andThen(p_identifier);
+
+  p_identifier_pattern =
+      (p_binding >> (equal({TOKEN_OPERATOR, "@"}) > p_pattern).optional())
+          .map([](std::tuple<std::optional<Token>, std::optional<Token>, IdPtr,
+                               std::optional<PatternPtr>> &&result) -> PatternPtr {
+            auto& [ref_tok, mut_tok, id, subpattern_opt] = result;
             auto pattern = std::make_unique<IdentifierPattern>(std::move(id));
             if (ref_tok.has_value()) {
               pattern->is_ref = true;
@@ -58,30 +84,66 @@ inline void PatternGrammar::init_identifier_pattern() {
             if (mut_tok.has_value()) {
               pattern->is_mut = true;
             }
+            if (subpattern_opt.has_value()) {
+              pattern->subpattern = std::move(*subpattern_opt);
+            }
             return pattern;
           });
 }
 
 inline void PatternGrammar::init_wildcard_pattern() {
   p_wildcard_pattern =
-      equal({TOKEN_DELIMITER, "_"}).map([](Token) -> PatternPtr {
+      equal({TOKEN_IDENTIFIER, "_"}).map([](Token) -> PatternPtr {
         return std::make_unique<WildcardPattern>();
       });
 }
 
-inline void PatternGrammar::init_tuple_pattern() {
-  p_tuple_pattern =
-      (equal({TOKEN_DELIMITER, "("}) >
-       p_pattern.list(equal({TOKEN_SEPARATOR, ","})) <
-       equal({TOKEN_DELIMITER, ")"}))
-          .map([](std::vector<PatternPtr> &&elements) -> PatternPtr {
-            return std::make_unique<TuplePattern>(std::move(elements));
+inline void PatternGrammar::init_ref_pattern() {
+  p_ref_pattern =
+      ((equal({TOKEN_OPERATOR, "&"}).map([](Token) { return 1; }) |
+        equal({TOKEN_OPERATOR, "&&"}).map([](Token) { return 2; })) >>
+       equal({TOKEN_KEYWORD, "mut"}).optional() >> p_pattern)
+          .map([](std::tuple<int, std::optional<Token>, PatternPtr> &&result)
+                   -> PatternPtr {
+            auto &[ref_level, mut_tok, pattern] = result;
+            return std::make_unique<ReferencePattern>(
+                std::move(pattern), ref_level, mut_tok.has_value());
           });
 }
 
+inline void PatternGrammar::init_tuplestruct_pattern(const PathParser &p_path) {
+  p_tuplestruct_pattern =
+      (p_path >> (equal({TOKEN_DELIMITER, "("}) >
+                  p_pattern.tuple(equal({TOKEN_SEPARATOR, ","})) <
+                  equal({TOKEN_DELIMITER, ")"})))
+          .map([](std::tuple<PathPtr, std::vector<PatternPtr>> &&result) -> PatternPtr {
+            auto &[path, elements] = result;
+            return std::make_unique<TupleStructPattern>(std::move(path),std::move(elements));
+          });
+}
+
+inline void PatternGrammar::init_path_pattern(const PathParser &p_path) {
+  p_path_pattern = PatternParser([p_path](parsec::ParseContext<Token> &ctx) -> std::optional<PatternPtr> {
+    auto original = ctx.position;
+    auto pathRes = p_path.parse(ctx);
+    if (!pathRes) {
+      return std::nullopt;
+    }
+    const auto &segs = (*pathRes)->getSegments();
+    if (segs.size() == 1 && segs[0].type == PathSegType::IDENTIFIER) {
+      ctx.position = original;
+      return std::nullopt;
+    }
+    return std::make_optional<PatternPtr>(std::make_unique<PathPattern>(std::move(*pathRes)));
+  });
+}
+
 inline void PatternGrammar::final_init() {
-  p_single_pattern =
-      p_identifier_pattern | p_wildcard_pattern | p_tuple_pattern;
-  // since or-pattern is not required yet
+  p_single_pattern = p_ref_pattern
+                 | p_literal_pattern
+                 | p_tuplestruct_pattern
+                 | p_path_pattern
+                 | p_wildcard_pattern 
+                 | p_identifier_pattern;
   p_pattern_setter(p_single_pattern);
 }

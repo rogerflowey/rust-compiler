@@ -270,6 +270,57 @@ TEST(ParsecTest, ListParser) {
     EXPECT_EQ(pos3, 9);
 }
 
+TEST(ParsecTest, TupleParser) {
+    auto item = satisfy<char>([](char c) { return std::isdigit(c); });
+    auto sep = token(',');
+    auto p = item.tuple(sep);
+
+    // Test case 1: Single item
+    auto [res1, pos1] = test_parse(p, "1");
+    ASSERT_TRUE(res1.has_value());
+    EXPECT_EQ(*res1, std::vector<char>({'1'}));
+    EXPECT_EQ(pos1, 1);
+
+    // Test case 2: Single item with trailing separator
+    auto [res2, pos2] = test_parse(p, "1,");
+    ASSERT_TRUE(res2.has_value());
+    EXPECT_EQ(*res2, std::vector<char>({'1'}));
+    EXPECT_EQ(pos2, 2);
+
+    // Test case 3: Multiple items
+    auto [res3, pos3] = test_parse(p, "1,2,3");
+    ASSERT_TRUE(res3.has_value());
+    EXPECT_EQ(*res3, std::vector<char>({'1', '2', '3'}));
+    EXPECT_EQ(pos3, 5);
+
+    // Test case 4: Multiple items with trailing separator
+    auto [res4, pos4] = test_parse(p, "1,2,3,");
+    ASSERT_TRUE(res4.has_value());
+    EXPECT_EQ(*res4, std::vector<char>({'1', '2', '3'}));
+    EXPECT_EQ(pos4, 6);
+
+    // Test case 5: Partial match, stops before non-item
+    auto [res5, pos5] = test_parse(p, "1,2,x");
+    ASSERT_TRUE(res5.has_value());
+    EXPECT_EQ(*res5, std::vector<char>({'1', '2'}));
+    EXPECT_EQ(pos5, 4);
+
+    // Test case 6: Failure on empty input
+    auto [res6, pos6] = test_parse(p, "");
+    ASSERT_FALSE(res6.has_value());
+    EXPECT_EQ(pos6, 0);
+
+    // Test case 7: Failure on non-matching input
+    auto [res7, pos7] = test_parse(p, "abc");
+    ASSERT_FALSE(res7.has_value());
+    EXPECT_EQ(pos7, 0);
+
+    // Test case 8: Failure on leading separator
+    auto [res8, pos8] = test_parse(p, ",1,2");
+    ASSERT_FALSE(res8.has_value());
+    EXPECT_EQ(pos8, 0);
+}
+
 TEST(ParsecTest, LazyParserForRecursion) {
     // We'll parse a simple recursive grammar:
     // expr := '(' expr ')' | 'x'
@@ -330,6 +381,4 @@ TEST(ParsecTest, RunFunction) {
     auto res4 = run(p, "ab");
     ASSERT_TRUE(res4.has_value());
     EXPECT_EQ(*res4, std::make_tuple('a', 'b'));
-
-    std::cerr << "All tests passed!" << std::endl;
 }

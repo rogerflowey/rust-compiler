@@ -1,215 +1,166 @@
-#include <gtest/gtest.h>
-#include "../../src/parser/pattern_parse.hpp" 
+ #include <gtest/gtest.h>
+ #include <sstream>
+ 
+ #include "src/lexer/lexer.hpp"
+ #include "src/parser/expr_parse.hpp"
+ #include "src/parser/path_parse.hpp"
+ #include "src/parser/pattern_parse.hpp"
+ #include "src/parser/ast/pattern.hpp"
+ #include "src/parser/ast/expr.hpp"
+ #include "src/parser/utils.hpp"
+ 
+ using namespace parsec;
+ 
+ // Helper: build a Pattern parser that also consumes EOF so we can use run(...)
+ static auto make_full_pattern_parser() {
+	 ExprGrammar exprg;
+	 PathGrammar pathg;
+	 PatternGrammar pattg(exprg.get_literal_parser(), pathg.get_parser());
+	 auto p = pattg.get_parser();
+	 // Ensure the whole token stream is consumed (including the EOF token)
+	 return p < equal(Token{TOKEN_EOF, ""});
+ }
+ 
+ // Helper: parse a pattern from source and return the AST
+ static PatternPtr parse_pattern(const std::string &src) {
+	 std::stringstream ss(src);
+	 Lexer lex(ss);
+	 const auto &tokens = lex.tokenize();
+	 auto full = make_full_pattern_parser();
+	 auto result = run(full, tokens);
+	 if (!result) {
+		 throw std::runtime_error("Pattern parse failed for: " + src);
+	 }
+	 return std::move(*result);
+ }
+ 
+ class PatternParserTest : public ::testing::Test {};
+ 
+ TEST_F(PatternParserTest, ParsesStringLiteralPattern) {
+	 auto pat = parse_pattern(R"("hello")");
+	 auto lit = dynamic_cast<LiteralPattern*>(pat.get());
+	 ASSERT_NE(lit, nullptr);
+	 ASSERT_NE(lit->literal, nullptr);
+	 auto str = dynamic_cast<StringLiteralExpr*>(lit->literal.get());
+	 ASSERT_NE(str, nullptr);
+	 EXPECT_EQ(str->value, "hello");
+	 EXPECT_FALSE(lit->is_negative);
+ }
+ 
+ TEST_F(PatternParserTest, ParsesCharLiteralPattern) {
+	 auto pat = parse_pattern("'a'");
+	 auto lit = dynamic_cast<LiteralPattern*>(pat.get());
+	 ASSERT_NE(lit, nullptr);
+	 ASSERT_NE(lit->literal, nullptr);
+	 auto ch = dynamic_cast<CharLiteralExpr*>(lit->literal.get());
+	 ASSERT_NE(ch, nullptr);
+	 EXPECT_EQ(ch->value, 'a');
+ }
+ 
+ TEST_F(PatternParserTest, ParsesIdentifierPatternRefMut) {
+	 auto pat = parse_pattern("ref mut x");
+	 auto id = dynamic_cast<IdentifierPattern*>(pat.get());
+	 ASSERT_NE(id, nullptr);
+	 EXPECT_TRUE(id->is_ref);
+	 EXPECT_TRUE(id->is_mut);
+	 ASSERT_NE(id->name, nullptr);
+	 EXPECT_EQ(id->name->getName(), "x");
+	 EXPECT_EQ(id->subpattern, nullptr);
+ }
+ 
+ TEST_F(PatternParserTest, ParsesIdentifierAtSubpattern) {
+	 auto pat = parse_pattern("val @ _");
+	 auto id = dynamic_cast<IdentifierPattern*>(pat.get());
+	 ASSERT_NE(id, nullptr);
+	 ASSERT_NE(id->name, nullptr);
+	 EXPECT_EQ(id->name->getName(), "val");
+	 ASSERT_NE(id->subpattern, nullptr);
+	 auto wc = dynamic_cast<WildcardPattern*>(id->subpattern.get());
+	 ASSERT_NE(wc, nullptr);
+ }
+ 
+ TEST_F(PatternParserTest, ParsesWildcardPattern) {
+	 auto pat = parse_pattern("_");
+	 auto wc = dynamic_cast<WildcardPattern*>(pat.get());
+	 ASSERT_NE(wc, nullptr);
+ }
+ 
+ TEST_F(PatternParserTest, ParsesRefPatternSingleAmp) {
+	 auto pat = parse_pattern("& mut x");
+	 auto refp = dynamic_cast<ReferencePattern*>(pat.get());
+	 ASSERT_NE(refp, nullptr);
+	 EXPECT_EQ(refp->ref_level, 1);
+	 EXPECT_TRUE(refp->is_mut);
+	 ASSERT_NE(refp->subpattern, nullptr);
+	 auto inner = dynamic_cast<IdentifierPattern*>(refp->subpattern.get());
+	 ASSERT_NE(inner, nullptr);
+	 ASSERT_NE(inner->name, nullptr);
+	 EXPECT_EQ(inner->name->getName(), "x");
+ }
+ 
+ TEST_F(PatternParserTest, ParsesRefPatternDoubleAmp) {
+	 auto pat = parse_pattern("&& y");
+	 auto refp = dynamic_cast<ReferencePattern*>(pat.get());
+	 ASSERT_NE(refp, nullptr);
+	 EXPECT_EQ(refp->ref_level, 2);
+	 EXPECT_FALSE(refp->is_mut);
+	 auto inner = dynamic_cast<IdentifierPattern*>(refp->subpattern.get());
+	 ASSERT_NE(inner, nullptr);
+	 ASSERT_NE(inner->name, nullptr);
+	 EXPECT_EQ(inner->name->getName(), "y");
+ }
+ 
+ TEST_F(PatternParserTest, ParsesTupleStructPattern) {
+	 auto pat = parse_pattern("Tuple('a', _)");
+	 auto tup = dynamic_cast<TupleStructPattern*>(pat.get());
+	 ASSERT_NE(tup, nullptr);
+	 ASSERT_NE(tup->path, nullptr);
+	 const auto &segs = tup->path->getSegments();
+	 ASSERT_EQ(segs.size(), 1u);
+	 ASSERT_TRUE(segs[0].id.has_value());
+	 EXPECT_EQ((*segs[0].id)->getName(), "Tuple");
+	 ASSERT_EQ(tup->elements.size(), 2u);
+	 // First element is a char literal
+	 auto lit = dynamic_cast<LiteralPattern*>(tup->elements[0].get());
+	 ASSERT_NE(lit, nullptr);
+	 auto ch = dynamic_cast<CharLiteralExpr*>(lit->literal.get());
+	 ASSERT_NE(ch, nullptr);
+	 EXPECT_EQ(ch->value, 'a');
+	 // Second is wildcard
+	 auto wc = dynamic_cast<WildcardPattern*>(tup->elements[1].get());
+	 ASSERT_NE(wc, nullptr);
+ }
+ 
+ TEST_F(PatternParserTest, ParsesPathPatternSelf) {
+	 auto pat = parse_pattern("Self");
+	 auto pathp = dynamic_cast<PathPattern*>(pat.get());
+	 ASSERT_NE(pathp, nullptr);
+	 ASSERT_NE(pathp->path, nullptr);
+	 const auto &segs = pathp->path->getSegments();
+	 ASSERT_EQ(segs.size(), 1u);
+	 EXPECT_EQ(segs[0].type, PathSegType::SELF);
+	 ASSERT_TRUE(segs[0].id.has_value());
+	 EXPECT_EQ((*segs[0].id)->getName(), "Self");
+ }
 
+  TEST_F(PatternParserTest, ParsesMultiSegmentPathPattern) {
+	  auto pat = parse_pattern("Enum::Variant");
+	  auto pathp = dynamic_cast<PathPattern*>(pat.get());
+	  ASSERT_NE(pathp, nullptr);
+	  ASSERT_NE(pathp->path, nullptr);
+	  const auto &segs = pathp->path->getSegments();
+	  ASSERT_EQ(segs.size(), 2u);
+	  ASSERT_TRUE(segs[0].id.has_value());
+	  ASSERT_TRUE(segs[1].id.has_value());
+	  EXPECT_EQ((*segs[0].id)->getName(), "Enum");
+	  EXPECT_EQ((*segs[1].id)->getName(), "Variant");
+  }
 
-static Token id_tok(const std::string& name) {
-    return {TOKEN_IDENTIFIER, name};
-}
-
-// Helper function to create a keyword token
-static Token kw_tok(const std::string& name) {
-    return {TOKEN_KEYWORD, name};
-}
-
-// Helper function to create a delimiter token
-static Token delim_tok(const std::string& val) {
-    return {TOKEN_DELIMITER, val};
-}
-
-// Helper function to create a separator token
-static Token sep_tok(const std::string& val) {
-    return {TOKEN_SEPARATOR, val};
-}
-
-// Test fixture for PatternGrammar tests
-class PatternGrammarTest : public ::testing::Test {
-protected:
-    PatternGrammar grammar;
-    // The parser type is defined in common.hpp, aliasing parsec::Parser
-    PatternParser parser;
-
-    PatternGrammarTest() {
-        // The parser is retrieved once for all tests in this fixture.
-        parser = grammar.get_parser();
-    }
-
-    // Helper to run the parser and check for full consumption of tokens.
-    // parsec::run returns std::optional, which is empty on failure or if input remains.
-    std::optional<PatternPtr> parse(const std::vector<Token>& tokens) {
-        return parsec::run(parser, tokens);
-    }
-};
-
-TEST_F(PatternGrammarTest, ParsesSimpleIdentifier) {
-    std::vector<Token> tokens = {id_tok("x")};
-    auto result = parse(tokens);
-
-    ASSERT_TRUE(result.has_value()) << "Parsing failed or did not consume all tokens.";
-
-    PatternPtr pattern = std::move(*result);
-    auto* id_pattern = dynamic_cast<IdentifierPattern*>(pattern.get());
-    ASSERT_NE(id_pattern, nullptr);
-
-    EXPECT_EQ(id_pattern->name->getName(), "x");
-    EXPECT_FALSE(id_pattern->is_mut);
-    EXPECT_FALSE(id_pattern->is_ref);
-}
-
-TEST_F(PatternGrammarTest, ParsesMutableIdentifier) {
-    std::vector<Token> tokens = {kw_tok("mut"), id_tok("y")};
-    auto result = parse(tokens);
-
-    ASSERT_TRUE(result.has_value());
-
-    PatternPtr pattern = std::move(*result);
-    auto* id_pattern = dynamic_cast<IdentifierPattern*>(pattern.get());
-    ASSERT_NE(id_pattern, nullptr);
-
-    EXPECT_EQ(id_pattern->name->getName(), "y");
-    EXPECT_TRUE(id_pattern->is_mut);
-    EXPECT_FALSE(id_pattern->is_ref);
-}
-
-TEST_F(PatternGrammarTest, ParsesReferenceIdentifier) {
-    std::vector<Token> tokens = {kw_tok("ref"), id_tok("z")};
-    auto result = parse(tokens);
-
-    ASSERT_TRUE(result.has_value());
-
-    PatternPtr pattern = std::move(*result);
-    auto* id_pattern = dynamic_cast<IdentifierPattern*>(pattern.get());
-    ASSERT_NE(id_pattern, nullptr);
-
-    EXPECT_EQ(id_pattern->name->getName(), "z");
-    EXPECT_FALSE(id_pattern->is_mut);
-    EXPECT_TRUE(id_pattern->is_ref);
-}
-
-TEST_F(PatternGrammarTest, ParsesMutableReferenceIdentifier) {
-    std::vector<Token> tokens = {kw_tok("ref"), kw_tok("mut"), id_tok("w")};
-    auto result = parse(tokens);
-
-    ASSERT_TRUE(result.has_value());
-
-    PatternPtr pattern = std::move(*result);
-    auto* id_pattern = dynamic_cast<IdentifierPattern*>(pattern.get());
-    ASSERT_NE(id_pattern, nullptr);
-
-    EXPECT_EQ(id_pattern->name->getName(), "w");
-    EXPECT_TRUE(id_pattern->is_mut);
-    EXPECT_TRUE(id_pattern->is_ref);
-}
-
-TEST_F(PatternGrammarTest, ParsesWildcardPattern) {
-    std::vector<Token> tokens = {delim_tok("_")};
-    auto result = parse(tokens);
-
-    ASSERT_TRUE(result.has_value());
-
-    PatternPtr pattern = std::move(*result);
-    auto* wildcard_pattern = dynamic_cast<WildcardPattern*>(pattern.get());
-    ASSERT_NE(wildcard_pattern, nullptr);
-}
-
-TEST_F(PatternGrammarTest, ParsesEmptyTuplePattern) {
-    std::vector<Token> tokens = {delim_tok("("), delim_tok(")")};
-    auto result = parse(tokens);
-
-    ASSERT_TRUE(result.has_value());
-
-    PatternPtr pattern = std::move(*result);
-    auto* tuple_pattern = dynamic_cast<TuplePattern*>(pattern.get());
-    ASSERT_NE(tuple_pattern, nullptr);
-    EXPECT_TRUE(tuple_pattern->elements.empty());
-}
-
-TEST_F(PatternGrammarTest, ParsesSingleElementTupleWithTrailingComma) {
-    std::vector<Token> tokens = {delim_tok("("), id_tok("a"), sep_tok(","), delim_tok(")")};
-    auto result = parse(tokens);
-
-    ASSERT_TRUE(result.has_value());
-
-    PatternPtr pattern = std::move(*result);
-    auto* tuple_pattern = dynamic_cast<TuplePattern*>(pattern.get());
-    ASSERT_NE(tuple_pattern, nullptr);
-    ASSERT_EQ(tuple_pattern->elements.size(), 1);
-
-    auto* elem1 = dynamic_cast<IdentifierPattern*>(tuple_pattern->elements[0].get());
-    ASSERT_NE(elem1, nullptr);
-    EXPECT_EQ(elem1->name->getName(), "a");
-}
-
-TEST_F(PatternGrammarTest, ParsesMultiElementTuplePattern) {
-    std::vector<Token> tokens = {
-        delim_tok("("),
-        id_tok("a"), sep_tok(","),
-        delim_tok("_"), sep_tok(","),
-        kw_tok("mut"), id_tok("b"),
-        delim_tok(")")
-    };
-    auto result = parse(tokens);
-
-    ASSERT_TRUE(result.has_value());
-
-    PatternPtr pattern = std::move(*result);
-    auto* tuple_pattern = dynamic_cast<TuplePattern*>(pattern.get());
-    ASSERT_NE(tuple_pattern, nullptr);
-    ASSERT_EQ(tuple_pattern->elements.size(), 3);
-
-    // Check elements
-    ASSERT_NE(dynamic_cast<IdentifierPattern*>(tuple_pattern->elements[0].get()), nullptr);
-    ASSERT_NE(dynamic_cast<WildcardPattern*>(tuple_pattern->elements[1].get()), nullptr);
-    auto* elem3 = dynamic_cast<IdentifierPattern*>(tuple_pattern->elements[2].get());
-    ASSERT_NE(elem3, nullptr);
-    EXPECT_EQ(elem3->name->getName(), "b");
-    EXPECT_TRUE(elem3->is_mut);
-}
-
-TEST_F(PatternGrammarTest, ParsesNestedTuplePattern) {
-    std::vector<Token> tokens = {
-        delim_tok("("),
-        id_tok("a"), sep_tok(","),
-        delim_tok("("),
-            kw_tok("ref"), id_tok("b"), sep_tok(","),
-            delim_tok("_"),
-        delim_tok(")"),
-        delim_tok(")")
-    };
-    auto result = parse(tokens);
-
-    ASSERT_TRUE(result.has_value());
-
-    PatternPtr pattern = std::move(*result);
-    auto* outer_tuple = dynamic_cast<TuplePattern*>(pattern.get());
-    ASSERT_NE(outer_tuple, nullptr);
-    ASSERT_EQ(outer_tuple->elements.size(), 2);
-
-    // Check inner tuple
-    auto* inner_tuple = dynamic_cast<TuplePattern*>(outer_tuple->elements[1].get());
-    ASSERT_NE(inner_tuple, nullptr);
-    ASSERT_EQ(inner_tuple->elements.size(), 2);
-}
-
-TEST_F(PatternGrammarTest, FailsOnInvalidStartToken) {
-    std::vector<Token> tokens = {{TOKEN_NUMBER, "123"}};
-    auto result = parse(tokens);
-    ASSERT_FALSE(result.has_value());
-}
-
-TEST_F(PatternGrammarTest, FailsOnParenthesizedIdentifierWithoutTrailingComma) {
-    std::vector<Token> tokens = {delim_tok("("), id_tok("a"), delim_tok(")")};
-    auto result = parse(tokens);
-    ASSERT_FALSE(result.has_value()) << "Parser incorrectly succeeded on a parenthesized identifier without a trailing comma.";
-}
-
-TEST_F(PatternGrammarTest, FailsOnIncompleteTuple) {
-    std::vector<Token> tokens = {delim_tok("("), id_tok("a")};
-    auto result = parse(tokens);
-    ASSERT_FALSE(result.has_value());
-}
-
-TEST_F(PatternGrammarTest, FailsOnTupleWithMissingComma) {
-    std::vector<Token> tokens = {delim_tok("("), id_tok("a"), id_tok("b"), delim_tok(")")};
-    auto result = parse(tokens);
-    ASSERT_FALSE(result.has_value());
-}
+  TEST_F(PatternParserTest, BareIdentifierPrefersIdentifierPatternOverPath) {
+	  auto pat = parse_pattern("x");
+	  auto idp = dynamic_cast<IdentifierPattern*>(pat.get());
+	  ASSERT_NE(idp, nullptr);
+	  ASSERT_NE(idp->name, nullptr);
+	  EXPECT_EQ(idp->name->getName(), "x");
+  }
+ 
