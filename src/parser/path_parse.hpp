@@ -13,6 +13,7 @@ public:
         init_path_parser();
     };
     void init_segment(){
+    // PathSegment: identifier | keyword(self | Self)
         p_segment = parsec::satisfy<Token>([](const Token &t) {
             return t.type == TokenType::TOKEN_IDENTIFIER ||
                    (t.type == TokenType::TOKEN_KEYWORD &&
@@ -31,6 +32,7 @@ public:
         });
     }
     void init_path_parser(){
+    // Path: segment ('::' segment)?
         p_path = p_segment.andThen((equal({TOKEN_SEPARATOR, "::"}) > p_segment).optional())
             .map([](std::tuple<PathSegment, std::optional<PathSegment>> &&segments) -> PathPtr {
                 std::vector<PathSegment> path_segments;

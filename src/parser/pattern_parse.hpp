@@ -70,6 +70,7 @@ inline void PatternParserBuilder::pre_init_patterns() {
 
 inline void
 PatternParserBuilder::init_literal_pattern(const ExprParser &p_literal) {
+  // Pattern: ('-')? literal
   p_literal_pattern =
       equal({TOKEN_OPERATOR, "-"})
           .optional()
@@ -85,6 +86,7 @@ PatternParserBuilder::init_literal_pattern(const ExprParser &p_literal) {
 
 inline void PatternParserBuilder::init_identifier_pattern() {
   // This parser captures `ref mut name`
+  // Pattern: ('ref')? ('mut')? IDENT ('@' pattern)?
   auto p_binding = (equal({TOKEN_KEYWORD, "ref"}).optional())
                        .andThen(equal({TOKEN_KEYWORD, "mut"}).optional())
                        .andThen(p_identifier);
@@ -109,6 +111,7 @@ inline void PatternParserBuilder::init_identifier_pattern() {
 }
 
 inline void PatternParserBuilder::init_wildcard_pattern() {
+  // Pattern: _
   p_wildcard_pattern =
       equal({TOKEN_IDENTIFIER, "_"}).map([](Token) -> PatternPtr {
         return std::make_unique<WildcardPattern>();
@@ -116,6 +119,7 @@ inline void PatternParserBuilder::init_wildcard_pattern() {
 }
 
 inline void PatternParserBuilder::init_ref_pattern() {
+  // Pattern: ('&' | '&&') ('mut')? pattern
   p_ref_pattern =
       ((equal({TOKEN_OPERATOR, "&"}).map([](Token) { return 1; }) |
         equal({TOKEN_OPERATOR, "&&"}).map([](Token) { return 2; })) >>
@@ -129,6 +133,7 @@ inline void PatternParserBuilder::init_ref_pattern() {
 }
 
 inline void PatternParserBuilder::init_tuplestruct_pattern(const PathParser &p_path) {
+  // Pattern: Path '(' pattern (',' pattern)* ')'
   p_tuplestruct_pattern =
       (p_path >> (equal({TOKEN_DELIMITER, "("}) >
                   p_pattern.tuple(equal({TOKEN_SEPARATOR, ","})) <
@@ -140,6 +145,7 @@ inline void PatternParserBuilder::init_tuplestruct_pattern(const PathParser &p_p
 }
 
 inline void PatternParserBuilder::init_path_pattern(const PathParser &p_path) {
+  // Pattern: Path  (but not single IDENT segment)
   p_path_pattern = PatternParser([p_path](parsec::ParseContext<Token> &ctx) -> std::optional<PatternPtr> {
     auto original = ctx.position;
     auto pathRes = p_path.parse(ctx);

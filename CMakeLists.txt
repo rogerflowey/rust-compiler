@@ -45,7 +45,8 @@ if(BUILD_TESTING)
     add_executable(compiler_tests
         test/parser/test_pattern_parser.cpp
         test/lexer/test_lexer.cpp
-    test/parser/test_type_parser.cpp
+        test/parser/test_type_parser.cpp
+    test/parser/test_expr_parser.cpp
         # Add other compiler test files here as you create them
     )
 

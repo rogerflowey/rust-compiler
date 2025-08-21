@@ -31,17 +31,9 @@ class TypeParserBuilder {
   void final_init();
 
 public:
-  // Default ctor: initialize parts that don't require external dependencies.
   TypeParserBuilder();
-
-  // Construct with the expression parser (for array size) and path parser
-  // for one-shot, fully-wired setup.
   TypeParserBuilder(const ExprParser &p_expr, const PathParser &p_path);
 
-  // Exposed wiring steps to break cycles:
-  // - array parsing needs Expr (for sizes)
-  // - path types need Path
-  // - final_init must be called after wiring to close recursion
   void wire_array_expr_parser(const ExprParser &p_expr) { init_array_parser(p_expr); }
   void wire_path_parser(const PathParser &p_path) { init_path_type_parser(p_path); }
   void finalize() { final_init(); }
@@ -77,6 +69,7 @@ inline void TypeParserBuilder::pre_init() {
 }
 
 inline void TypeParserBuilder::init_primitive_parser() {
+  // PrimitiveType: i32 | u32 | usize | bool | char | String
   static const std::unordered_map<std::string, PrimitiveType::Kind> kmap = {
       {"i32", PrimitiveType::I32},   {"u32", PrimitiveType::U32},
       {"usize", PrimitiveType::USIZE}, {"bool", PrimitiveType::BOOL},
@@ -94,6 +87,7 @@ inline void TypeParserBuilder::init_primitive_parser() {
 }
 
 inline void TypeParserBuilder::init_reference_parser() {
+  // & mut? Type
   p_reference =
       (equal({TOKEN_OPERATOR, "&"}) >>
        equal({TOKEN_KEYWORD, "mut"}).optional() >> p_type)
@@ -129,6 +123,7 @@ inline void TypeParserBuilder::init_slice_parser() {
 }
 
 inline void TypeParserBuilder::init_tuple_parser() {
+  // (Type ("," Type)*)
   p_tuple =
       (equal({TOKEN_DELIMITER, "("}) >
        p_type.list(equal({TOKEN_SEPARATOR, ","})) <
@@ -139,6 +134,7 @@ inline void TypeParserBuilder::init_tuple_parser() {
 }
 
 inline void TypeParserBuilder::init_path_type_parser(const PathParser &p_path) {
+  // Path
   p_path_type = p_path.map([](PathPtr &&p) -> TypePtr {
     return std::make_unique<PathType>(std::move(p));
   });
