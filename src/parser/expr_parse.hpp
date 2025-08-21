@@ -1,9 +1,9 @@
 #pragma once
 
+#include "ast/common.hpp"
 #include "ast/expr.hpp"
 #include "common.hpp"
 #include "src/lexer/lexer.hpp"
-#include "src/parser/ast/common.hpp"
 #include "src/utils/helpers.hpp"
 #include "utils.hpp"
 #include "stmt_parse.hpp"

@@ -6,8 +6,8 @@
 #include "src/parser/expr_parse.hpp"
 #include "src/parser/path_parse.hpp"
 #include "src/parser/type_parse.hpp"
-#include "src/parser/ast/type.hpp"
-#include "src/parser/ast/expr.hpp"
+#include "src/ast/type.hpp"
+#include "src/ast/expr.hpp"
 
 using namespace parsec;
 

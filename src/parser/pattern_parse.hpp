@@ -1,9 +1,10 @@
 #pragma once
 
+
+#include "ast/common.hpp"
 #include "ast/pattern.hpp"
 #include "common.hpp"
 #include "src/lexer/lexer.hpp"
-#include "src/parser/ast/common.hpp"
 #include "utils.hpp"
 
 using namespace parsec;

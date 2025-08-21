@@ -1,7 +1,7 @@
 #pragma once
 
 #include "lib/parsecpp/include/parsec.hpp"
-#include "parser/ast/common.hpp"
+#include "ast/common.hpp"
 #include "parser/common.hpp"
 #include "parser/utils.hpp"
 class PathParserBuilder{

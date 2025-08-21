@@ -7,8 +7,8 @@
 #include "src/parser/path_parse.hpp"
 #include "src/parser/pattern_parse.hpp"
 #include "src/parser/stmt_parse.hpp"
-#include "src/parser/ast/expr.hpp"
-#include "src/parser/ast/type.hpp"
+#include "src/ast/expr.hpp"
+#include "src/ast/type.hpp"
 #include "src/parser/utils.hpp"
 
 using namespace parsec;
