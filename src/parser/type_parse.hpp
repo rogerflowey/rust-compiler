@@ -10,7 +10,7 @@
 using namespace parsec;
 
 
-class TypeGrammar {
+class TypeParserBuilder {
   TypeParser p_type;
   std::function<void(TypeParser)> p_type_setter;
 
@@ -31,12 +31,34 @@ class TypeGrammar {
   void final_init();
 
 public:
+  // Default ctor: initialize parts that don't require external dependencies.
+  TypeParserBuilder();
+
   // Construct with the expression parser (for array size) and path parser
-  TypeGrammar(const ExprParser &p_expr, const PathParser &p_path);
+  // for one-shot, fully-wired setup.
+  TypeParserBuilder(const ExprParser &p_expr, const PathParser &p_path);
+
+  // Exposed wiring steps to break cycles:
+  // - array parsing needs Expr (for sizes)
+  // - path types need Path
+  // - final_init must be called after wiring to close recursion
+  void wire_array_expr_parser(const ExprParser &p_expr) { init_array_parser(p_expr); }
+  void wire_path_parser(const PathParser &p_path) { init_path_type_parser(p_path); }
+  void finalize() { final_init(); }
+
   TypeParser get_parser() { return p_type; }
 };
 
-inline TypeGrammar::TypeGrammar(const ExprParser &p_expr,
+inline TypeParserBuilder::TypeParserBuilder() {
+  pre_init();
+  init_primitive_parser();
+  init_slice_parser();
+  init_reference_parser();
+  init_tuple_parser();
+  // Deps: call wire_array_expr_parser and wire_path_parser externally, then finalize().
+}
+
+inline TypeParserBuilder::TypeParserBuilder(const ExprParser &p_expr,
                                 const PathParser &p_path) {
   pre_init();
   init_primitive_parser();
@@ -48,13 +70,13 @@ inline TypeGrammar::TypeGrammar(const ExprParser &p_expr,
   final_init();
 }
 
-inline void TypeGrammar::pre_init() {
+inline void TypeParserBuilder::pre_init() {
   auto [parser, setter] = lazy<TypePtr, Token>();
   this->p_type = std::move(parser);
   this->p_type_setter = std::move(setter);
 }
 
-inline void TypeGrammar::init_primitive_parser() {
+inline void TypeParserBuilder::init_primitive_parser() {
   static const std::unordered_map<std::string, PrimitiveType::Kind> kmap = {
       {"i32", PrimitiveType::I32},   {"u32", PrimitiveType::U32},
       {"usize", PrimitiveType::USIZE}, {"bool", PrimitiveType::BOOL},
@@ -71,7 +93,7 @@ inline void TypeGrammar::init_primitive_parser() {
                 });
 }
 
-inline void TypeGrammar::init_reference_parser() {
+inline void TypeParserBuilder::init_reference_parser() {
   p_reference =
       (equal({TOKEN_OPERATOR, "&"}) >>
        equal({TOKEN_KEYWORD, "mut"}).optional() >> p_type)
@@ -84,7 +106,7 @@ inline void TypeGrammar::init_reference_parser() {
           });
 }
 
-inline void TypeGrammar::init_array_parser(const ExprParser &p_expr) {
+inline void TypeParserBuilder::init_array_parser(const ExprParser &p_expr) {
   // [Type; Expr]
   p_array =
       (equal({TOKEN_DELIMITER, "["}) > p_type)
@@ -97,7 +119,7 @@ inline void TypeGrammar::init_array_parser(const ExprParser &p_expr) {
           });
 }
 
-inline void TypeGrammar::init_slice_parser() {
+inline void TypeParserBuilder::init_slice_parser() {
   // [Type]
   p_slice =
       (equal({TOKEN_DELIMITER, "["}) > p_type < equal({TOKEN_DELIMITER, "]"}))
@@ -106,7 +128,7 @@ inline void TypeGrammar::init_slice_parser() {
           });
 }
 
-inline void TypeGrammar::init_tuple_parser() {
+inline void TypeParserBuilder::init_tuple_parser() {
   p_tuple =
       (equal({TOKEN_DELIMITER, "("}) >
        p_type.list(equal({TOKEN_SEPARATOR, ","})) <
@@ -116,13 +138,13 @@ inline void TypeGrammar::init_tuple_parser() {
           });
 }
 
-inline void TypeGrammar::init_path_type_parser(const PathParser &p_path) {
+inline void TypeParserBuilder::init_path_type_parser(const PathParser &p_path) {
   p_path_type = p_path.map([](PathPtr &&p) -> TypePtr {
     return std::make_unique<PathType>(std::move(p));
   });
 }
 
-inline void TypeGrammar::final_init() {
+inline void TypeParserBuilder::final_init() {
   auto bracketed = (p_array | p_slice);
 
   auto core = p_reference | bracketed | p_tuple | p_primitive | p_path_type;

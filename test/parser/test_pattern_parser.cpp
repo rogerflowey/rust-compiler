@@ -13,9 +13,9 @@
  
  // Helper: build a Pattern parser that also consumes EOF so we can use run(...)
  static auto make_full_pattern_parser() {
-	 ExprGrammar exprg;
-	 PathGrammar pathg;
-	 PatternGrammar pattg(exprg.get_literal_parser(), pathg.get_parser());
+	 ExprParserBuilder exprg;
+	 PathParserBuilder pathg;
+	 PatternParserBuilder pattg(exprg.get_literal_parser(), pathg.get_parser());
 	 auto p = pattg.get_parser();
 	 // Ensure the whole token stream is consumed (including the EOF token)
 	 return p < equal(Token{TOKEN_EOF, ""});

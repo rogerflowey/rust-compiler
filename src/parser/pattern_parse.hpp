@@ -8,7 +8,7 @@
 
 using namespace parsec;
 
-class PatternGrammar {
+class PatternParserBuilder {
   PatternParser p_pattern;
   std::function<void(PatternParser)> p_pattern_setter;
 
@@ -30,11 +30,28 @@ class PatternGrammar {
   void final_init();
 
 public:
-  PatternGrammar(const ExprParser &p_expr,const PathParser &p_path);
+  // Two-phase builder: default ctor wires non-dependent parts. Call wire_* then finalize().
+  PatternParserBuilder();
+  PatternParserBuilder(const ExprParser &p_expr,const PathParser &p_path);
+  // Exposed wiring steps to break cycles
+  void wire_literal_from_expr(const ExprParser &p_expr) { init_literal_pattern(p_expr); }
+  void wire_paths(const PathParser &p_path) {
+    init_tuplestruct_pattern(p_path);
+    init_path_pattern(p_path);
+  }
+  void finalize() { final_init(); }
   PatternParser get_parser() { return p_pattern; }
 };
 
-inline PatternGrammar::PatternGrammar(const ExprParser &p_expr,const PathParser &p_path) {
+inline PatternParserBuilder::PatternParserBuilder() {
+  pre_init_patterns();
+  init_identifier_pattern();
+  init_wildcard_pattern();
+  init_ref_pattern();
+  // literal and path-based patterns are wired later via wire_*; call finalize() after wiring
+}
+
+inline PatternParserBuilder::PatternParserBuilder(const ExprParser &p_expr,const PathParser &p_path) {
   pre_init_patterns();
   init_literal_pattern(p_expr);
   init_identifier_pattern();
@@ -45,14 +62,14 @@ inline PatternGrammar::PatternGrammar(const ExprParser &p_expr,const PathParser 
   final_init();
 }
 
-inline void PatternGrammar::pre_init_patterns() {
+inline void PatternParserBuilder::pre_init_patterns() {
   auto [parser, setter] = lazy<PatternPtr, Token>();
   this->p_pattern = std::move(parser);
   this->p_pattern_setter = std::move(setter);
 }
 
 inline void
-PatternGrammar::init_literal_pattern(const ExprParser &p_literal) {
+PatternParserBuilder::init_literal_pattern(const ExprParser &p_literal) {
   p_literal_pattern =
       equal({TOKEN_OPERATOR, "-"})
           .optional()
@@ -66,7 +83,7 @@ PatternGrammar::init_literal_pattern(const ExprParser &p_literal) {
 }
 
 
-inline void PatternGrammar::init_identifier_pattern() {
+inline void PatternParserBuilder::init_identifier_pattern() {
   // This parser captures `ref mut name`
   auto p_binding = (equal({TOKEN_KEYWORD, "ref"}).optional())
                        .andThen(equal({TOKEN_KEYWORD, "mut"}).optional())
@@ -91,14 +108,14 @@ inline void PatternGrammar::init_identifier_pattern() {
           });
 }
 
-inline void PatternGrammar::init_wildcard_pattern() {
+inline void PatternParserBuilder::init_wildcard_pattern() {
   p_wildcard_pattern =
       equal({TOKEN_IDENTIFIER, "_"}).map([](Token) -> PatternPtr {
         return std::make_unique<WildcardPattern>();
       });
 }
 
-inline void PatternGrammar::init_ref_pattern() {
+inline void PatternParserBuilder::init_ref_pattern() {
   p_ref_pattern =
       ((equal({TOKEN_OPERATOR, "&"}).map([](Token) { return 1; }) |
         equal({TOKEN_OPERATOR, "&&"}).map([](Token) { return 2; })) >>
@@ -111,7 +128,7 @@ inline void PatternGrammar::init_ref_pattern() {
           });
 }
 
-inline void PatternGrammar::init_tuplestruct_pattern(const PathParser &p_path) {
+inline void PatternParserBuilder::init_tuplestruct_pattern(const PathParser &p_path) {
   p_tuplestruct_pattern =
       (p_path >> (equal({TOKEN_DELIMITER, "("}) >
                   p_pattern.tuple(equal({TOKEN_SEPARATOR, ","})) <
@@ -122,7 +139,7 @@ inline void PatternGrammar::init_tuplestruct_pattern(const PathParser &p_path) {
           });
 }
 
-inline void PatternGrammar::init_path_pattern(const PathParser &p_path) {
+inline void PatternParserBuilder::init_path_pattern(const PathParser &p_path) {
   p_path_pattern = PatternParser([p_path](parsec::ParseContext<Token> &ctx) -> std::optional<PatternPtr> {
     auto original = ctx.position;
     auto pathRes = p_path.parse(ctx);
@@ -138,7 +155,7 @@ inline void PatternGrammar::init_path_pattern(const PathParser &p_path) {
   });
 }
 
-inline void PatternGrammar::final_init() {
+inline void PatternParserBuilder::final_init() {
   p_single_pattern = p_ref_pattern
                  | p_literal_pattern
                  | p_tuplestruct_pattern

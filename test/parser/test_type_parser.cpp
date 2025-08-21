@@ -13,9 +13,9 @@ using namespace parsec;
 
 // Build a Type parser that also requires EOF to ensure full consumption
 static auto make_full_type_parser() {
-	ExprGrammar exprg;                // for array size expressions
-	PathGrammar pathg;                // for path-based types
-	TypeGrammar typeg(exprg.get_literal_parser(), pathg.get_parser());
+	ExprParserBuilder exprg;                // for array size expressions
+	PathParserBuilder pathg;                // for path-based types
+	TypeParserBuilder typeg(exprg.get_literal_parser(), pathg.get_parser());
 	auto p = typeg.get_parser();
 	return p < equal(Token{TOKEN_EOF, ""});
 }

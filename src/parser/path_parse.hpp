@@ -4,11 +4,11 @@
 #include "parser/ast/common.hpp"
 #include "parser/common.hpp"
 #include "parser/utils.hpp"
-class PathGrammar{
+class PathParserBuilder{
     PathParser p_path;
     parsec::Parser<PathSegment,Token> p_segment;
 public:
-    PathGrammar(){
+    PathParserBuilder(){
         init_segment();
         init_path_parser();
     };
