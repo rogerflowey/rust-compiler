@@ -10,7 +10,7 @@ public:
 
 class PrimitiveType : public Type {
 public:
-    enum Kind { I32, U32, STRING, USIZE, BOOL, CHAR };
+    enum Kind { I32, U32, ISIZE, USIZE, BOOL, CHAR, STRING };
     Kind kind;
     PrimitiveType(Kind kind) : kind(kind) {}
 };
@@ -23,12 +23,6 @@ public:
         : element_type(std::move(element_type)), size(std::move(size)) {}
 };
 
-class TupleType : public Type {
-public:
-    std::vector<TypePtr> elements;
-    TupleType(std::vector<TypePtr> elements) : elements(std::move(elements)) {}
-};
-
 class ReferenceType : public Type {
 public:
     TypePtr referenced_type;
@@ -37,8 +31,8 @@ public:
         : referenced_type(std::move(referenced_type)), is_mutable(is_mutable) {}
 };
 
-class SliceType : public Type {
+// Unit type '()'
+class UnitType : public Type {
 public:
-    TypePtr element_type;
-    SliceType(TypePtr element_type) : element_type(std::move(element_type)) {}
+    UnitType() = default;
 };

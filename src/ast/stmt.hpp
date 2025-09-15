@@ -18,3 +18,14 @@ public:
     ExprPtr expr;
     ExprStmt(ExprPtr expr) : expr(std::move(expr)) {}
 };
+
+class EmptyStmt : public Statement {
+public:
+    // Represents an empty statement ';'
+};
+
+class ItemStmt : public Statement {
+public:
+    ItemPtr item;
+    explicit ItemStmt(ItemPtr item) : item(std::move(item)) {}
+};

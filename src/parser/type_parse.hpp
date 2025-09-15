@@ -1,149 +1,74 @@
 #pragma once
 
-#include "ast/common.hpp"
-#include "ast/type.hpp"
+#include "../ast/common.hpp"
+#include "../ast/type.hpp"
 #include "common.hpp"
-#include "src/lexer/lexer.hpp"
 #include "utils.hpp"
 #include <unordered_map>
+#include <vector>
+#include <string>
 
+struct ParserRegistry;
 using namespace parsec;
 
-
 class TypeParserBuilder {
-  TypeParser p_type;
-  std::function<void(TypeParser)> p_type_setter;
-
-  TypeParser p_primitive;
-  TypeParser p_reference;
-  TypeParser p_array;
-  TypeParser p_slice;
-  TypeParser p_tuple;
-  TypeParser p_path_type;
-
-  void pre_init();
-  void init_primitive_parser();
-  void init_reference_parser();
-  void init_array_parser(const ExprParser &p_expr);
-  void init_slice_parser();
-  void init_tuple_parser();
-  void init_path_type_parser(const PathParser &p_path);
-  void final_init();
-
 public:
-  TypeParserBuilder();
-  TypeParserBuilder(const ExprParser &p_expr, const PathParser &p_path);
+    TypeParserBuilder() = default;
 
-  void wire_array_expr_parser(const ExprParser &p_expr) { init_array_parser(p_expr); }
-  void wire_path_parser(const PathParser &p_path) { init_path_type_parser(p_path); }
-  void finalize() { final_init(); }
+    void finalize(const ParserRegistry& registry, std::function<void(TypeParser)> set_type_parser) {
+        // Pull dependencies from the registry
+        const auto& exprParser = registry.expr;
+        const auto& pathParser = registry.path;
+        const auto& selfParser = registry.type; // For recursion
 
-  TypeParser get_parser() { return p_type; }
+        // Build sub-parsers
+        auto primitiveParser = buildPrimitiveParser();
+        auto unitParser = buildUnitParser();
+        auto pathTypeParser = buildPathTypeParser(pathParser);
+        auto arrayParser = buildArrayParser(selfParser, exprParser);
+        auto referenceParser = buildReferenceParser(selfParser);
+
+        auto core = referenceParser | arrayParser | unitParser | primitiveParser | pathTypeParser;
+        set_type_parser(core);
+    }
+
+private:
+    TypeParser buildPrimitiveParser() const {
+        static const std::unordered_map<std::string, PrimitiveType::Kind> kmap = {
+            {"i32", PrimitiveType::I32},   {"u32", PrimitiveType::U32},
+            {"usize", PrimitiveType::USIZE}, {"bool", PrimitiveType::BOOL},
+            {"char", PrimitiveType::CHAR}, {"str", PrimitiveType::STRING},
+        };
+        return satisfy<Token>([&](const Token &t) {
+            return t.type == TokenType::TOKEN_IDENTIFIER && kmap.count(t.value);
+        }, "a primitive type").map([&](Token t) -> TypePtr {
+            return std::make_unique<PrimitiveType>(kmap.at(t.value));
+        });
+    }
+
+    TypeParser buildUnitParser() const {
+        return (equal({TOKEN_DELIMITER, "("}) > equal({TOKEN_DELIMITER, ")"}))
+            .map([](auto &&) -> TypePtr { return std::make_unique<UnitType>(); });
+    }
+
+    TypeParser buildPathTypeParser(const PathParser& pathParser) const {
+        return pathParser.map([](PathPtr&& p) -> TypePtr {
+            return std::make_unique<PathType>(std::move(p));
+        });
+    }
+
+    TypeParser buildArrayParser(const TypeParser& self, const ExprParser& exprParser) const {
+        return (equal({TOKEN_DELIMITER, "["}) > self)
+            .andThen(equal({TOKEN_SEPARATOR, ";"}) > exprParser < equal({TOKEN_DELIMITER, "]"}))
+            .map([](auto&& pair) -> TypePtr {
+                return std::make_unique<ArrayType>(std::move(std::get<0>(pair)), std::move(std::get<1>(pair)));
+            });
+    }
+
+    TypeParser buildReferenceParser(const TypeParser& self) const {
+        return (equal({TOKEN_OPERATOR, "&"}) >> equal({TOKEN_KEYWORD, "mut"}).optional() >> self)
+            .map([](std::tuple<Token, std::optional<Token>, TypePtr>&& res) -> TypePtr {
+                return std::make_unique<ReferenceType>(std::move(std::get<2>(res)), std::get<1>(res).has_value());
+            });
+    }
 };
-
-inline TypeParserBuilder::TypeParserBuilder() {
-  pre_init();
-  init_primitive_parser();
-  init_slice_parser();
-  init_reference_parser();
-  init_tuple_parser();
-  // Deps: call wire_array_expr_parser and wire_path_parser externally, then finalize().
-}
-
-inline TypeParserBuilder::TypeParserBuilder(const ExprParser &p_expr,
-                                const PathParser &p_path) {
-  pre_init();
-  init_primitive_parser();
-  init_slice_parser();
-  init_array_parser(p_expr);
-  init_reference_parser();
-  init_tuple_parser();
-  init_path_type_parser(p_path);
-  final_init();
-}
-
-inline void TypeParserBuilder::pre_init() {
-  auto [parser, setter] = lazy<TypePtr, Token>();
-  this->p_type = std::move(parser);
-  this->p_type_setter = std::move(setter);
-}
-
-inline void TypeParserBuilder::init_primitive_parser() {
-  // PrimitiveType: i32 | u32 | usize | bool | char | String
-  static const std::unordered_map<std::string, PrimitiveType::Kind> kmap = {
-      {"i32", PrimitiveType::I32},   {"u32", PrimitiveType::U32},
-      {"usize", PrimitiveType::USIZE}, {"bool", PrimitiveType::BOOL},
-      {"char", PrimitiveType::CHAR}, {"String", PrimitiveType::STRING},
-  };
-
-  p_primitive = satisfy<Token>([&](const Token &t) {
-                  if (t.type != TokenType::TOKEN_IDENTIFIER) return false;
-                  return kmap.find(t.value) != kmap.end();
-                })
-                .map([&](Token t) -> TypePtr {
-                  auto kind = kmap.at(t.value);
-                  return std::make_unique<PrimitiveType>(kind);
-                });
-}
-
-inline void TypeParserBuilder::init_reference_parser() {
-  // & mut? Type
-  p_reference =
-      (equal({TOKEN_OPERATOR, "&"}) >>
-       equal({TOKEN_KEYWORD, "mut"}).optional() >> p_type)
-          .map([](std::tuple<Token, std::optional<Token>, TypePtr> &&res)
-                   -> TypePtr {
-            auto &[amp, mut_tok, inner] = res;
-            (void)amp;
-            return std::make_unique<ReferenceType>(std::move(inner),
-                                                   mut_tok.has_value());
-          });
-}
-
-inline void TypeParserBuilder::init_array_parser(const ExprParser &p_expr) {
-  // [Type; Expr]
-  p_array =
-      (equal({TOKEN_DELIMITER, "["}) > p_type)
-          .andThen(equal({TOKEN_SEPARATOR, ";"}) > p_expr <
-                   equal({TOKEN_DELIMITER, "]"}))
-          .map([](auto &&pair) -> TypePtr {
-            auto ty = std::move(std::get<0>(pair));
-            auto ex = std::move(std::get<1>(pair));
-            return std::make_unique<ArrayType>(std::move(ty), std::move(ex));
-          });
-}
-
-inline void TypeParserBuilder::init_slice_parser() {
-  // [Type]
-  p_slice =
-      (equal({TOKEN_DELIMITER, "["}) > p_type < equal({TOKEN_DELIMITER, "]"}))
-          .map([](TypePtr &&elem) -> TypePtr {
-            return std::make_unique<SliceType>(std::move(elem));
-          });
-}
-
-inline void TypeParserBuilder::init_tuple_parser() {
-  // (Type ("," Type)*)
-  p_tuple =
-      (equal({TOKEN_DELIMITER, "("}) >
-       p_type.list(equal({TOKEN_SEPARATOR, ","})) <
-       equal({TOKEN_DELIMITER, ")"}))
-          .map([](std::vector<TypePtr> &&types) -> TypePtr {
-            return std::make_unique<TupleType>(std::move(types));
-          });
-}
-
-inline void TypeParserBuilder::init_path_type_parser(const PathParser &p_path) {
-  // Path
-  p_path_type = p_path.map([](PathPtr &&p) -> TypePtr {
-    return std::make_unique<PathType>(std::move(p));
-  });
-}
-
-inline void TypeParserBuilder::final_init() {
-  auto bracketed = (p_array | p_slice);
-
-  auto core = p_reference | bracketed | p_tuple | p_primitive | p_path_type;
-
-  p_type_setter(core);
-}

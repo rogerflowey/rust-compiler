@@ -16,8 +16,9 @@ public:
     IdPtr name;
     bool is_ref = false;
     bool is_mut = false;
-    PatternPtr subpattern;
     IdentifierPattern(IdPtr name) : name(std::move(name)) {}
+    IdentifierPattern(IdPtr name, bool is_ref, bool is_mut)
+        : name(std::move(name)), is_ref(is_ref), is_mut(is_mut) {}
 };
 
 class WildcardPattern : public Pattern {};
@@ -29,14 +30,6 @@ public:
     bool is_mut = false;
     ReferencePattern(PatternPtr subpattern, int ref_level, bool is_mut)
         : subpattern(std::move(subpattern)), ref_level(ref_level), is_mut(is_mut) {}
-};
-
-class TupleStructPattern : public Pattern {
-public:
-    PathPtr path;
-    std::vector<PatternPtr> elements;
-    TupleStructPattern(PathPtr path, std::vector<PatternPtr> elements)
-        : path(std::move(path)), elements(std::move(elements)) {}
 };
 
 class PathPattern : public Pattern {

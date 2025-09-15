@@ -37,6 +37,14 @@ public:
     virtual ~Expr() = default;
 };
 
+class BlockExpr : public Expr {
+public:
+    std::vector<StmtPtr> statements;
+    std::optional<ExprPtr> final_expr;
+    BlockExpr(std::vector<StmtPtr> statements, std::optional<ExprPtr> final_expr)
+        : statements(std::move(statements)), final_expr(std::move(final_expr)) {}
+};
+
 class Statement {
 public:
     virtual ~Statement() = default;
@@ -70,6 +78,19 @@ class Path {
 public:
     Path(std::vector<PathSegment> segments) : segments(std::move(segments)) {}
     const std::vector<PathSegment>& getSegments() const { return segments; }
+    const std::vector<std::string> getSegmentNames() const {
+        std::vector<std::string> names;
+        for (const auto& seg : segments) {
+            if (seg.id) {
+                names.push_back((*seg.id)->getName());
+            } else if (seg.type == SELF) {
+                names.push_back("Self");
+            } else if (seg.type == self) {
+                names.push_back("self");
+            }
+        }
+        return names;
+    }
 };
 
 class Pattern {

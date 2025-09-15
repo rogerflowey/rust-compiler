@@ -1,5 +1,5 @@
-#include "pratt.hpp"
-#include "parsec.hpp"
+#include "../include/pratt.hpp"
+#include "../include/parsec.hpp"
 #include <gtest/gtest.h>
 #include <cctype>
 #include <string>
@@ -28,17 +28,9 @@ namespace {
 PrattParserBuilder<int, char> make_builder() {
     PrattParserBuilder<int, char> builder;
 
-    auto is_digit = satisfy<char>([](char c) { return static_cast<bool>(std::isdigit(static_cast<unsigned char>(c))); });
+    auto is_digit = satisfy<char>([](char c) { return static_cast<bool>(std::isdigit(static_cast<unsigned char>(c))); }, "a digit");
     // one or more digits
-    auto digits1 = (is_digit.andThen(is_digit.many()))
-        .map([](auto tup) {
-            auto [first, rest] = std::move(tup);
-            std::vector<char> out;
-            out.reserve(1 + rest.size());
-            out.push_back(first);
-            out.insert(out.end(), rest.begin(), rest.end());
-            return out;
-        })
+    auto digits1 = is_digit.many1()
         .map([](const std::vector<char>& ds) {
             int val = 0;
             for (char c : ds) val = val * 10 + (c - '0');
@@ -70,8 +62,8 @@ TEST(PrattTest, SingleNumber) {
     auto builder = make_builder();
     auto parser = builder.build();
     auto [res, pos] = test_parse(parser, "42");
-    ASSERT_TRUE(res.has_value());
-    EXPECT_EQ(*res, 42);
+    ASSERT_TRUE(std::holds_alternative<int>(res));
+    EXPECT_EQ(std::get<int>(res), 42);
     EXPECT_EQ(pos, 2);
 }
 
@@ -79,8 +71,8 @@ TEST(PrattTest, AddMulPrecedence) {
     auto builder = make_builder();
     auto parser = builder.build();
     auto [res, pos] = test_parse(parser, "1+2*3");
-    ASSERT_TRUE(res.has_value());
-    EXPECT_EQ(*res, 1 + 2 * 3); // 7
+    ASSERT_TRUE(std::holds_alternative<int>(res));
+    EXPECT_EQ(std::get<int>(res), 1 + 2 * 3); // 7
     EXPECT_EQ(pos, 5);
 }
 
@@ -88,8 +80,8 @@ TEST(PrattTest, LeftAssociativity) {
     auto builder = make_builder();
     auto parser = builder.build();
     auto [res, pos] = test_parse(parser, "10-3-4");
-    ASSERT_TRUE(res.has_value());
-    EXPECT_EQ(*res, (10 - 3) - 4); // 3
+    ASSERT_TRUE(std::holds_alternative<int>(res));
+    EXPECT_EQ(std::get<int>(res), (10 - 3) - 4); // 3
     EXPECT_EQ(pos, 6);
 }
 
@@ -97,8 +89,9 @@ TEST(PrattTest, RightAssociativityExponent) {
     auto builder = make_builder();
     auto parser = builder.build();
     auto [res, pos] = test_parse(parser, "2^3^2");
-    ASSERT_TRUE(res.has_value());
-    EXPECT_EQ(*res, 512);
+    ASSERT_TRUE(std::holds_alternative<int>(res));
+    // 2^(3^2) = 2^9 = 512
+    EXPECT_EQ(std::get<int>(res), 512);
     EXPECT_EQ(pos, 5);
 }
 
@@ -106,8 +99,8 @@ TEST(PrattTest, MixedExpression) {
     auto builder = make_builder();
     auto parser = builder.build();
     auto [res, pos] = test_parse(parser, "1+2*3-4/2");
-    ASSERT_TRUE(res.has_value());
-    EXPECT_EQ(*res, 1 + 2 * 3 - 4 / 2); // 1 + 6 - 2 = 5
+    ASSERT_TRUE(std::holds_alternative<int>(res));
+    EXPECT_EQ(std::get<int>(res), 1 + 2 * 3 - 4 / 2); // 1 + 6 - 2 = 5
     EXPECT_EQ(pos, 9);
 }
 
@@ -115,19 +108,20 @@ TEST(PrattTest, StopsBeforeUnknownOperator) {
     auto builder = make_builder();
     auto parser = builder.build();
     auto [res, pos] = test_parse(parser, "123?456");
-    ASSERT_TRUE(res.has_value());
-    EXPECT_EQ(*res, 123);
+    ASSERT_TRUE(std::holds_alternative<int>(res));
+    EXPECT_EQ(std::get<int>(res), 123);
     EXPECT_EQ(pos, 3); // should stop before '?'
 }
 
 TEST(PrattTest, RunConsumesAllOnSuccess) {
     auto builder = make_builder();
-    auto parser = builder.build();
-    auto res1 = run(parser, std::vector<char>{'2','*','3','+','4'});
-    ASSERT_TRUE(res1.has_value());
-    EXPECT_EQ(*res1, 2 * 3 + 4);
+    auto parser = builder.build().label("an expression");
+    auto res1 = run(parser, "2*3+4");
+    ASSERT_TRUE(std::holds_alternative<int>(res1));
+    EXPECT_EQ(std::get<int>(res1), 2 * 3 + 4);
 
     // Fails because not all input consumed (unknown op '?')
-    auto res2 = run(parser, std::vector<char>{'1','?','2'});
-    ASSERT_FALSE(res2.has_value());
+    auto res2 = run(parser, "1?2");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(res2));
+    auto err = std::get<ParseError>(res2);
 }

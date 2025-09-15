@@ -1,6 +1,6 @@
 # --- Main Compiler Project ---
 cmake_minimum_required(VERSION 3.16)
-project(MyCompilerProject CXX)
+project(RCompiler CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,30 +36,39 @@ add_subdirectory(lib/parsecpp)
 
 # --- Main Executable ---
 add_executable(compiler main.cpp)
+target_include_directories(compiler PRIVATE src)
 target_link_libraries(compiler PRIVATE parsecpp)
 
 
-# --- Compiler-Specific Tests ---
 if(BUILD_TESTING)
-    # Add an executable for the compiler's own unit tests.
-    add_executable(compiler_tests
-        test/parser/test_pattern_parser.cpp
-        test/lexer/test_lexer.cpp
-        test/parser/test_type_parser.cpp
-    test/parser/test_expr_parser.cpp
-        # Add other compiler test files here as you create them
+    add_library(compiler_tests_properties INTERFACE)
+
+    # This PCH will contain headers needed for testing, but not part of parsecpp
+    target_precompile_headers(compiler_tests_properties INTERFACE
+        <gtest/gtest.h>
     )
 
-    # Link the tests against the libraries they need:
-    # - parsecpp: because PatternGrammar uses it.
-    # - gtest_main: to get the main() function and GTest framework.
-    target_link_libraries(compiler_tests PRIVATE
-        parsecpp
-        gtest_main
-    )
+    # 3. Find all your test source files
+    file(GLOB COMPILER_TEST_SOURCES "test/parser/*.cpp" "test/lexer/*.cpp")
 
-    # Register this executable with CTest.
-    add_test(NAME compiler-pattern-grammar COMMAND compiler_tests)
+    # 4. Loop over each test source file
+    foreach(test_source_file ${COMPILER_TEST_SOURCES})
+        get_filename_component(test_name ${test_source_file} NAME_WE)
+
+        add_executable(${test_name} ${test_source_file})
+
+        # Set include directories for this specific test
+        target_include_directories(${test_name} PRIVATE src)
+
+        # Link against the necessary libraries AND our PCH interface library
+        target_link_libraries(${test_name} PRIVATE
+            parsecpp
+            gtest_main
+            compiler_tests_properties  # <-- This is the key part!
+        )
+
+        add_test(NAME ${test_name} COMMAND ${test_name})
+    endforeach()
 endif()
 
 

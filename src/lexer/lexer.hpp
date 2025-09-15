@@ -34,6 +34,7 @@ struct Token {
   }
 };
 
+const Token T_EOF = {TOKEN_EOF, "EOF"};
 
 
 class Lexer {
@@ -93,7 +94,7 @@ inline const std::vector<Token> &Lexer::tokenize() {
   while (!input.eof()) {
     parseNext();
   }
-  tokens.push_back({TOKEN_EOF, ""});
+  tokens.push_back(T_EOF);
   return tokens;
 }
 
@@ -427,5 +428,5 @@ inline const std::unordered_set<char> Lexer::delimiters = {'{', '}', '(',
 inline const std::unordered_set<std::string> Lexer::separators = {",", ";", ":", "::"};
 inline const std::unordered_set<std::string> Lexer::operators = {
     ">>=", "<<=", "==", "!=", "<=", ">=", "&&", "||", "..", "+=", "-=",
-    "*=",  "/=",  "%=", "&=", "|=", "^=", "<<", ">>", "+",  "-",  "*",
+    "*=",  "/=",  "%=", "&=", "|=", "^=", "<<", ">>", "->","+",  "-",  "*",
     "/",   "%",   "&",  "|",  "^",  "!",  "=",  "<",  ">",  ".", "@"};

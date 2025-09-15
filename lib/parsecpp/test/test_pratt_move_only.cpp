@@ -1,5 +1,5 @@
-#include "pratt.hpp"
-#include "parsec.hpp"
+#include "../include/pratt.hpp"
+#include "../include/parsec.hpp"
 #include <gtest/gtest.h>
 #include <cctype>
 #include <memory>
@@ -13,7 +13,7 @@ namespace {
 
 // Helper to parse single-digit numbers into unique_ptr<int>
 static Parser<std::unique_ptr<int>, char> number_ptr_parser() {
-    auto is_digit = satisfy<char>([](char c) { return static_cast<bool>(std::isdigit(static_cast<unsigned char>(c))); });
+    auto is_digit = satisfy<char>([](char c) { return static_cast<bool>(std::isdigit(static_cast<unsigned char>(c))); }, "a digit");
     return is_digit.map([](char c) {
         return std::make_unique<int>(static_cast<int>(c - '0'));
     });
@@ -40,11 +40,11 @@ TEST(PrattMoveOnlyTest, UniquePtrBinaryOps) {
         .build();
 
     // 2+3*4 = 14
-    std::vector<char> toks = {'2', '+', '3', '*', '4'};
-    auto res = run(parser, toks);
-    ASSERT_TRUE(res.has_value());
-    ASSERT_TRUE(*res);
-    EXPECT_EQ(**res, 14);
+    auto res = run(parser, "2+3*4");
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<int>>(res));
+    auto& ptr = std::get<std::unique_ptr<int>>(res);
+    ASSERT_TRUE(ptr);
+    EXPECT_EQ(*ptr, 14);
 }
 
 TEST(PrattMoveOnlyTest, StopsBeforeUnknownOperatorWithPtr) {
@@ -62,10 +62,11 @@ TEST(PrattMoveOnlyTest, StopsBeforeUnknownOperatorWithPtr) {
     std::vector<char> toks = {'7', '?', '1'};
     ParseContext<char> ctx{toks, 0};
     auto res = parser.parse(ctx);
-    ASSERT_TRUE(res.has_value());
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<int>>(res));
     EXPECT_EQ(ctx.position, 1); // stopped before '?'
-    ASSERT_TRUE(*res);
-    EXPECT_EQ(**res, 7);
+    auto& ptr = std::get<std::unique_ptr<int>>(res);
+    ASSERT_TRUE(ptr);
+    EXPECT_EQ(*ptr, 7);
 }
 
 } // namespace

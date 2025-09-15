@@ -22,13 +22,13 @@ class LexerTest : public ::testing::Test {};
 
 TEST_F(LexerTest, EmptyInput) {
     AssertTokens("", {
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
 TEST_F(LexerTest, WhitespaceOnly) {
     AssertTokens("  \t\n  \r\n ", {
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -39,7 +39,7 @@ TEST_F(LexerTest, IdentifiersAndKeywords) {
         {TOKEN_IDENTIFIER, "value"},
         {TOKEN_IDENTIFIER, "_another_var"},
         {TOKEN_IDENTIFIER, "_"}, // Correctly tokenizes '_' as an identifier
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -51,7 +51,7 @@ TEST_F(LexerTest, NumberLiterals) {
         {TOKEN_NUMBER, "42i32"}, // Suffix is part of the token
         {TOKEN_NUMBER, "99u64"},
         {TOKEN_NUMBER, "1234567i64"},
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -61,7 +61,7 @@ TEST_F(LexerTest, NumberLiteralVsNumberAndIdentifier) {
         {TOKEN_NUMBER, "100i32"},
         {TOKEN_NUMBER, "200"},
         {TOKEN_IDENTIFIER, "u32"},
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -84,7 +84,7 @@ TEST_F(LexerTest, OperatorsAndDelimiters) {
         {TOKEN_DELIMITER, ")"},
         {TOKEN_DELIMITER, "["},
         {TOKEN_DELIMITER, "]"},
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -98,7 +98,7 @@ TEST_F(LexerTest, SeparatorsAndMaximalMunch) {
         {TOKEN_OPERATOR, ">>="},
         {TOKEN_OPERATOR, ">>"},
         {TOKEN_OPERATOR, ">"},
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -107,7 +107,7 @@ TEST_F(LexerTest, StringLiterals) {
         {TOKEN_STRING, "hello world"},
         {TOKEN_STRING, "a\nb\t\"\\"}, // Escape sequences are processed
         {TOKEN_CSTRING, "c-style"},
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -115,7 +115,7 @@ TEST_F(LexerTest, RawStringLiterals) {
     AssertTokens(R"(r#"hello "world""# cr"raw string")", {
         {TOKEN_STRING, "hello \"world\""}, // Quotes inside are preserved
         {TOKEN_CSTRING, "raw string"},
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -125,7 +125,7 @@ TEST_F(LexerTest, CharLiterals) {
         {TOKEN_CHAR, "\n"},
         {TOKEN_CHAR, "'"},
         {TOKEN_CHAR, "\\"},
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -150,7 +150,7 @@ TEST_F(LexerTest, Comments) {
         {TOKEN_OPERATOR, "="},
         {TOKEN_NUMBER, "30"},
         {TOKEN_SEPARATOR, ";"},
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 
@@ -164,7 +164,7 @@ TEST_F(LexerTest, FullStatement) {
         {TOKEN_OPERATOR, "="},
         {TOKEN_NUMBER, "1000"}, // Literal without suffix
         {TOKEN_SEPARATOR, ";"},
-        {TOKEN_EOF, ""}
+        T_EOF
     });
 }
 

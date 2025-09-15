@@ -1,103 +1,82 @@
 #pragma once
 
 #include "common.hpp"
-#include <optional>
 
-
-
-struct Param {
-    bool is_ref;
-    bool is_mut_ref;
-    bool is_mut_binding;
-    IdPtr name;
-    TypePtr type;
+class SelfParam {
+public:
+    bool is_reference;
+    bool is_mutable;
+    explicit SelfParam(bool is_reference, bool is_mutable): is_reference(is_reference), is_mutable(is_mutable) {}
+    virtual ~SelfParam() = default;
 };
 
-class Function : public Item {
+using SelfParamPtr = std::unique_ptr<SelfParam>;
+
+
+class FunctionItem : public Item {
 public:
     IdPtr name;
-    std::vector<Param> params;
-    std::optional<TypePtr> return_type;
+    SelfParamPtr self_param; // may be nullptr
+    std::vector<std::pair<IdPtr, TypePtr>> params;
+    TypePtr return_type; // may be nullptr if no explicit return type
     BlockExprPtr body;
-    Function(IdPtr name, std::vector<Param> params, std::optional<TypePtr> return_type, BlockExprPtr body)
-        : name(std::move(name)), params(std::move(params)), return_type(std::move(return_type)), body(std::move(body)) {}
-};
 
-class FunctionSignature {
+    FunctionItem(IdPtr name, SelfParamPtr self_param, std::vector<std::pair<IdPtr, TypePtr>> params, TypePtr return_type, BlockExprPtr body)
+        : name(std::move(name)), self_param(std::move(self_param)), params(std::move(params)), return_type(std::move(return_type)), body(std::move(body)) {}
+};
+class StructItem : public Item {
 public:
     IdPtr name;
-    std::vector<Param> params;
-    std::optional<TypePtr> return_type;
-    FunctionSignature(IdPtr name, std::vector<Param> params, std::optional<TypePtr> return_type)
-        : name(std::move(name)), params(std::move(params)), return_type(std::move(return_type)) {}
-};
+    std::vector<std::pair<IdPtr, TypePtr>> fields;
 
-struct StructField {
-    IdPtr name;
-    TypePtr type;
+    StructItem(IdPtr name, std::vector<std::pair<IdPtr, TypePtr>> fields)
+        : name(std::move(name)), fields(std::move(fields)) {}
 };
-
-class StructDef : public Item {
+class EnumItem : public Item {
 public:
     IdPtr name;
-    std::vector<StructField> fields;
-    StructDef(IdPtr name, std::vector<StructField> fields) : name(std::move(name)), fields(std::move(fields)) {}
+    std::vector<IdPtr> variants;
+
+    EnumItem(IdPtr name, std::vector<IdPtr> variants)
+        : name(std::move(name)), variants(std::move(variants)) {}
 };
-
-struct EnumVariant {
-    IdPtr name;
-    std::optional<std::vector<TypePtr>> fields; 
-};
-
-class EnumDef : public Item {
-public:
-    IdPtr name;
-    std::vector<EnumVariant> variants;
-    EnumDef(IdPtr name, std::vector<EnumVariant> variants) : name(std::move(name)), variants(std::move(variants)) {}
-};
-
-
 class ConstItem : public Item {
 public:
     IdPtr name;
     TypePtr type;
     ExprPtr value;
+
     ConstItem(IdPtr name, TypePtr type, ExprPtr value)
         : name(std::move(name)), type(std::move(type)), value(std::move(value)) {}
 };
-
-class StaticItem : public Item {
+class TraitItem : public Item {
 public:
-    bool is_mutable;
-    IdPtr name;
-    TypePtr type;
-    ExprPtr value;
-    StaticItem(bool is_mutable, IdPtr name, TypePtr type, ExprPtr value)
-        : is_mutable(is_mutable), name(std::move(name)), type(std::move(type)), value(std::move(value)) {}
+  IdPtr name;
+  std::vector<ItemPtr> items;
+
+  TraitItem(IdPtr name, std::vector<ItemPtr> items) : name(std::move(name)), items(std::move(items)) {}
+};
+class ImplItem : public Item {
+public:
+  TypePtr for_type;
+  std::vector<ItemPtr> items;
+
+  ImplItem(TypePtr for_type, std::vector<ItemPtr> items)
+      : for_type(std::move(for_type)), items(std::move(items)) {}
+  
+  virtual ~ImplItem() = default;
 };
 
-class TraitDef : public Item {
+class TraitImplItem : public ImplItem {
 public:
-    IdPtr name;
-    std::vector<std::unique_ptr<FunctionSignature>> functions;
-    TraitDef(IdPtr name, std::vector<std::unique_ptr<FunctionSignature>> functions)
-        : name(std::move(name)), functions(std::move(functions)) {}
+  IdPtr trait_name;
+
+  TraitImplItem(IdPtr trait_name, TypePtr for_type, std::vector<ItemPtr> items)
+      : ImplItem(std::move(for_type), std::move(items)), trait_name(std::move(trait_name)) {}
 };
 
-
-class ImplBlock : public Item {
+class InherentImplItem : public ImplItem {
 public:
-    std::optional<TypePtr> trait_path;
-    TypePtr type;
-    std::vector<std::unique_ptr<Function>> functions;
-    ImplBlock(std::optional<TypePtr> trait_path, TypePtr type, std::vector<std::unique_ptr<Function>> functions)
-        : trait_path(std::move(trait_path)), type(std::move(type)), functions(std::move(functions)) {}
-};
-
-
-class TypeAlias : public Item {
-public:
-    IdPtr name;
-    TypePtr type;
-    TypeAlias(IdPtr name, TypePtr type) : name(std::move(name)), type(std::move(type)) {}
+    InherentImplItem(TypePtr for_type, std::vector<ItemPtr> items)
+        : ImplItem(std::move(for_type), std::move(items)) {}
 };

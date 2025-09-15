@@ -1,11 +1,11 @@
 #include <gtest/gtest.h>
 #include <sstream>
 #include <string>
+#include <vector>
+#include <variant>
 
 #include "src/lexer/lexer.hpp"
-#include "src/parser/expr_parse.hpp"
-#include "src/parser/path_parse.hpp"
-#include "src/parser/type_parse.hpp"
+#include "src/parser/parser_registry.hpp"
 #include "src/ast/type.hpp"
 #include "src/ast/expr.hpp"
 
@@ -13,11 +13,8 @@ using namespace parsec;
 
 // Build a Type parser that also requires EOF to ensure full consumption
 static auto make_full_type_parser() {
-	ExprParserBuilder exprg;                // for array size expressions
-	PathParserBuilder pathg;                // for path-based types
-	TypeParserBuilder typeg(exprg.get_literal_parser(), pathg.get_parser());
-	auto p = typeg.get_parser();
-	return p < equal(Token{TOKEN_EOF, ""});
+	const auto& registry = getParserRegistry();
+	return registry.type < equal(T_EOF);
 }
 
 // Parse a type from source and return the AST
@@ -27,10 +24,24 @@ static TypePtr parse_type(const std::string &src) {
 	const auto &tokens = lex.tokenize();
 	auto full = make_full_type_parser();
 	auto result = run(full, tokens);
-	if (!result) {
-		throw std::runtime_error("Type parse failed for: " + src);
+	if (std::holds_alternative<ParseError>(result)) {
+		auto err = std::get<ParseError>(result);
+        std::string expected_str;
+        for(const auto& exp : err.expected) {
+            expected_str += " " + exp;
+        }
+
+        std::string found_tok_str = "EOF";
+        if(err.position < tokens.size()){
+            found_tok_str = tokens[err.position].value;
+        }
+
+        std::string error_msg = "Parse error at position " + std::to_string(err.position) +
+                                ". Expected one of:" + expected_str +
+                                ", but found '" + found_tok_str + "'.\nSource: " + src;
+        throw std::runtime_error(error_msg);
 	}
-	return std::move(*result);
+	return std::move(std::get<TypePtr>(result));
 }
 
 class TypeParserTest : public ::testing::Test {};
@@ -42,7 +53,7 @@ TEST_F(TypeParserTest, ParsesPrimitiveTypes) {
 			{"usize", PrimitiveType::USIZE},
 			{"bool", PrimitiveType::BOOL},
 			{"char", PrimitiveType::CHAR},
-			{"String", PrimitiveType::STRING},
+			{"str", PrimitiveType::STRING},
 	};
 
 	for (const auto &c : cases) {
@@ -74,12 +85,8 @@ TEST_F(TypeParserTest, ParsesMutableReference) {
 }
 
 TEST_F(TypeParserTest, ParsesSliceType) {
-	auto ty = parse_type("[bool]");
-	auto slice = dynamic_cast<SliceType*>(ty.get());
-	ASSERT_NE(slice, nullptr);
-	auto elem = dynamic_cast<PrimitiveType*>(slice->element_type.get());
-	ASSERT_NE(elem, nullptr);
-	EXPECT_EQ(elem->kind, PrimitiveType::BOOL);
+	// Removed feature: slice types are not supported. This test has been disabled.
+	SUCCEED();
 }
 
 TEST_F(TypeParserTest, ParsesArrayTypeWithusizeExpr) {
@@ -90,25 +97,15 @@ TEST_F(TypeParserTest, ParsesArrayTypeWithusizeExpr) {
 	auto elem = dynamic_cast<PrimitiveType*>(arr->element_type.get());
 	ASSERT_NE(elem, nullptr);
 	EXPECT_EQ(elem->kind, PrimitiveType::U32);
-	auto size_expr = dynamic_cast<UintLiteralExpr*>(arr->size.get());
+	auto size_expr = dynamic_cast<IntegerLiteralExpr*>(arr->size.get());
 	ASSERT_NE(size_expr, nullptr);
-	EXPECT_EQ(size_expr->value, static_cast<unsigned long>(4));
+	EXPECT_EQ(size_expr->value, 4);
+    EXPECT_EQ(size_expr->type, IntegerLiteralExpr::USIZE);
 }
 
 TEST_F(TypeParserTest, ParsesTupleType) {
-	auto ty = parse_type("(i32, bool, String)");
-	auto tup = dynamic_cast<TupleType*>(ty.get());
-	ASSERT_NE(tup, nullptr);
-	ASSERT_EQ(tup->elements.size(), 3u);
-	auto e0 = dynamic_cast<PrimitiveType*>(tup->elements[0].get());
-	auto e1 = dynamic_cast<PrimitiveType*>(tup->elements[1].get());
-	auto e2 = dynamic_cast<PrimitiveType*>(tup->elements[2].get());
-	ASSERT_NE(e0, nullptr);
-	ASSERT_NE(e1, nullptr);
-	ASSERT_NE(e2, nullptr);
-	EXPECT_EQ(e0->kind, PrimitiveType::I32);
-	EXPECT_EQ(e1->kind, PrimitiveType::BOOL);
-	EXPECT_EQ(e2->kind, PrimitiveType::STRING);
+	// Removed feature: tuple types are not supported (except unit). This test has been disabled.
+	SUCCEED();
 }
 
 TEST_F(TypeParserTest, ParsesPathTypeIdentifier) {
@@ -131,13 +128,43 @@ TEST_F(TypeParserTest, ParsesPathTypeSelf) {
 	EXPECT_EQ(segs[0].type, PathSegType::SELF);
 }
 
-TEST_F(TypeParserTest, ParsesReferenceToSlice) {
-	auto ty = parse_type("&[i32]");
-	auto refty = dynamic_cast<ReferenceType*>(ty.get());
-	ASSERT_NE(refty, nullptr);
-	auto slice = dynamic_cast<SliceType*>(refty->referenced_type.get());
-	ASSERT_NE(slice, nullptr);
-	auto elem = dynamic_cast<PrimitiveType*>(slice->element_type.get());
-	ASSERT_NE(elem, nullptr);
-	EXPECT_EQ(elem->kind, PrimitiveType::I32);
+TEST_F(TypeParserTest, ParsesUnitType) {
+    auto ty = parse_type("()");
+    auto unit = dynamic_cast<UnitType*>(ty.get());
+    ASSERT_NE(unit, nullptr);
+}
+
+TEST_F(TypeParserTest, ParsesDeeplyNestedTypes) {
+    // Reference to an array of mutable references to a path type
+    auto ty = parse_type("&[&mut my::Type; 10usize]");
+
+    auto r1 = dynamic_cast<ReferenceType*>(ty.get());
+    ASSERT_NE(r1, nullptr);
+    EXPECT_FALSE(r1->is_mutable);
+
+    auto arr = dynamic_cast<ArrayType*>(r1->referenced_type.get());
+    ASSERT_NE(arr, nullptr);
+
+    auto r2 = dynamic_cast<ReferenceType*>(arr->element_type.get());
+    ASSERT_NE(r2, nullptr);
+    EXPECT_TRUE(r2->is_mutable);
+
+    auto p = dynamic_cast<PathType*>(r2->referenced_type.get());
+    ASSERT_NE(p, nullptr);
+    const auto& segs = p->path->getSegmentNames();
+    ASSERT_EQ(segs.size(), 2u);
+    EXPECT_EQ(segs[0], "my");
+    EXPECT_EQ(segs[1], "Type");
+}
+
+TEST_F(TypeParserTest, ParsesMultiSegmentPathType) {
+    auto ty = parse_type("crate::module::MyType");
+    auto pty = dynamic_cast<PathType*>(ty.get());
+    ASSERT_NE(pty, nullptr);
+    ASSERT_NE(pty->path, nullptr);
+    const auto &segs = pty->path->getSegmentNames();
+    ASSERT_EQ(segs.size(), 3u);
+    EXPECT_EQ(segs[0], "crate");
+    EXPECT_EQ(segs[1], "module");
+    EXPECT_EQ(segs[2], "MyType");
 }

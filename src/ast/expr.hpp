@@ -5,15 +5,14 @@
 
 
 // ---- literals ------
-class IntLiteralExpr : public Expr {
+class IntegerLiteralExpr : public Expr {
 public:
-    int32_t value;
-    IntLiteralExpr(int32_t value) : value(value) {}
-};
-class UintLiteralExpr : public Expr {
-public:
-    uint32_t value;
-    UintLiteralExpr(uint32_t value) : value(value) {}
+    enum Type {
+        I32, U32, ISIZE, USIZE
+    };
+    int64_t value;
+    Type type;
+    IntegerLiteralExpr(int64_t value, Type type) : value(value), type(type) {}
 };
 
 class BoolLiteralExpr : public Expr {
@@ -41,13 +40,7 @@ public:
     PathExpr(PathPtr path) : path(std::move(path)) {}
 };
 
-class BlockExpr : public Expr {
-public:
-    std::vector<StmtPtr> statements;
-    std::optional<ExprPtr> final_expr;
-    BlockExpr(std::vector<StmtPtr> statements, std::optional<ExprPtr> final_expr)
-        : statements(std::move(statements)), final_expr(std::move(final_expr)) {}
-};
+
 
 
 // ----- Operators ------
