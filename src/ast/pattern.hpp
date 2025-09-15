@@ -2,36 +2,39 @@
 
 #include "common.hpp"
 
-class LiteralPattern : public Pattern {
-public:
-  ExprPtr literal;
+// --- Concrete Pattern Nodes ---
+struct LiteralPattern {
+  ExprPtr literal; // Depends on ExprPtr
   bool is_negative = false;
-  LiteralPattern(ExprPtr literal, bool is_negative)
-      : literal(std::move(literal)), is_negative(is_negative) {}
 };
 
-class IdentifierPattern : public Pattern {
-public:
+struct IdentifierPattern {
   IdPtr name;
   bool is_ref = false;
   bool is_mut = false;
-  IdentifierPattern(IdPtr name) : name(std::move(name)) {}
-  IdentifierPattern(IdPtr name, bool is_ref, bool is_mut)
-      : name(std::move(name)), is_ref(is_ref), is_mut(is_mut) {}
 };
 
-class WildcardPattern : public Pattern {};
+struct WildcardPattern {};
 
-class ReferencePattern : public Pattern {
-public:
+struct ReferencePattern {
   PatternPtr subpattern;
   bool is_mut = false;
-  ReferencePattern(PatternPtr subpattern, bool is_mut)
-      : subpattern(std::move(subpattern)), is_mut(is_mut) {}
 };
 
-class PathPattern : public Pattern {
-public:
+struct PathPattern {
   PathPtr path;
-  PathPattern(PathPtr path) : path(std::move(path)) {}
+};
+
+// --- Variant and Wrapper ---
+using PatternVariant = std::variant<
+    LiteralPattern,
+    IdentifierPattern,
+    WildcardPattern,
+    ReferencePattern,
+    PathPattern
+>;
+
+// Complete the forward-declared type from common.hpp
+struct Pattern {
+    PatternVariant value;
 };

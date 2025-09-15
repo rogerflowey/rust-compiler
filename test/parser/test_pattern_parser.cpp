@@ -12,6 +12,13 @@
 
 using namespace parsec;
 
+// Helper to safely get a pointer to the concrete node type from the variant wrapper
+template <typename T, typename VariantPtr>
+T* get_node(const VariantPtr& ptr) {
+    if (!ptr) return nullptr;
+    return std::get_if<T>(&(ptr->value));
+}
+
 static auto make_full_pattern_parser() {
     // The complex, manual setup is replaced by this single line.
 	const auto& registry = getParserRegistry();
@@ -49,10 +56,10 @@ class PatternParserTest : public ::testing::Test {};
 
 TEST_F(PatternParserTest, ParsesStringLiteralPattern) {
 	auto pat = parse_pattern(R"("hello")");
-	auto lit = dynamic_cast<LiteralPattern*>(pat.get());
+	auto lit = get_node<LiteralPattern>(pat);
 	ASSERT_NE(lit, nullptr);
 	ASSERT_NE(lit->literal, nullptr);
-	auto str = dynamic_cast<StringLiteralExpr*>(lit->literal.get());
+	auto str = get_node<StringLiteralExpr>(lit->literal);
 	ASSERT_NE(str, nullptr);
 	EXPECT_EQ(str->value, "hello");
 	EXPECT_FALSE(lit->is_negative);
@@ -60,17 +67,17 @@ TEST_F(PatternParserTest, ParsesStringLiteralPattern) {
 
 TEST_F(PatternParserTest, ParsesCharLiteralPattern) {
 	auto pat = parse_pattern("'a'");
-	auto lit = dynamic_cast<LiteralPattern*>(pat.get());
+	auto lit = get_node<LiteralPattern>(pat);
 	ASSERT_NE(lit, nullptr);
 	ASSERT_NE(lit->literal, nullptr);
-	auto ch = dynamic_cast<CharLiteralExpr*>(lit->literal.get());
+	auto ch = get_node<CharLiteralExpr>(lit->literal);
 	ASSERT_NE(ch, nullptr);
 	EXPECT_EQ(ch->value, 'a');
 }
 
 TEST_F(PatternParserTest, ParsesIdentifierPatternRefMut) {
 	auto pat = parse_pattern("ref mut x");
-	auto id = dynamic_cast<IdentifierPattern*>(pat.get());
+	auto id = get_node<IdentifierPattern>(pat);
 	ASSERT_NE(id, nullptr);
 	EXPECT_TRUE(id->is_ref);
 	EXPECT_TRUE(id->is_mut);
@@ -80,17 +87,17 @@ TEST_F(PatternParserTest, ParsesIdentifierPatternRefMut) {
 
 TEST_F(PatternParserTest, ParsesWildcardPattern) {
 	auto pat = parse_pattern("_");
-	auto wc = dynamic_cast<WildcardPattern*>(pat.get());
+	auto wc = get_node<WildcardPattern>(pat);
 	ASSERT_NE(wc, nullptr);
 }
 
 TEST_F(PatternParserTest, ParsesRefPatternSingleAmp) {
 	auto pat = parse_pattern("&x");
-	auto refp = dynamic_cast<ReferencePattern*>(pat.get());
+	auto refp = get_node<ReferencePattern>(pat);
 	ASSERT_NE(refp, nullptr);
 	EXPECT_FALSE(refp->is_mut);
 	ASSERT_NE(refp->subpattern, nullptr);
-	auto inner = dynamic_cast<IdentifierPattern*>(refp->subpattern.get());
+	auto inner = get_node<IdentifierPattern>(refp->subpattern);
 	ASSERT_NE(inner, nullptr);
 	ASSERT_NE(inner->name, nullptr);
 	EXPECT_EQ(inner->name->getName(), "x");
@@ -98,11 +105,11 @@ TEST_F(PatternParserTest, ParsesRefPatternSingleAmp) {
 
 TEST_F(PatternParserTest, ParsesRefPatternSingleAmpMut) {
 	auto pat = parse_pattern("& mut x");
-	auto refp = dynamic_cast<ReferencePattern*>(pat.get());
+	auto refp = get_node<ReferencePattern>(pat);
 	ASSERT_NE(refp, nullptr);
 	EXPECT_TRUE(refp->is_mut);
 	ASSERT_NE(refp->subpattern, nullptr);
-	auto inner = dynamic_cast<IdentifierPattern*>(refp->subpattern.get());
+	auto inner = get_node<IdentifierPattern>(refp->subpattern);
 	ASSERT_NE(inner, nullptr);
 	ASSERT_NE(inner->name, nullptr);
 	EXPECT_EQ(inner->name->getName(), "x");
@@ -110,15 +117,15 @@ TEST_F(PatternParserTest, ParsesRefPatternSingleAmpMut) {
 
 TEST_F(PatternParserTest, ParsesRefPatternDoubleAmp) {
 	auto pat = parse_pattern("&& y");
-	auto refp1 = dynamic_cast<ReferencePattern*>(pat.get());
+	auto refp1 = get_node<ReferencePattern>(pat);
 	ASSERT_NE(refp1, nullptr);
 	EXPECT_FALSE(refp1->is_mut);
 
-	auto refp2 = dynamic_cast<ReferencePattern*>(refp1->subpattern.get());
+	auto refp2 = get_node<ReferencePattern>(refp1->subpattern);
 	ASSERT_NE(refp2, nullptr);
 	EXPECT_FALSE(refp2->is_mut);
 
-	auto inner = dynamic_cast<IdentifierPattern*>(refp2->subpattern.get());
+	auto inner = get_node<IdentifierPattern>(refp2->subpattern);
 	ASSERT_NE(inner, nullptr);
 	ASSERT_NE(inner->name, nullptr);
 	EXPECT_EQ(inner->name->getName(), "y");
@@ -126,7 +133,7 @@ TEST_F(PatternParserTest, ParsesRefPatternDoubleAmp) {
 
 TEST_F(PatternParserTest, ParsesPathPatternSelf) {
 	auto pat = parse_pattern("Self");
-	auto pathp = dynamic_cast<PathPattern*>(pat.get());
+	auto pathp = get_node<PathPattern>(pat);
 	ASSERT_NE(pathp, nullptr);
 	ASSERT_NE(pathp->path, nullptr);
 	const auto &segs = pathp->path->getSegments();
@@ -138,7 +145,7 @@ TEST_F(PatternParserTest, ParsesPathPatternSelf) {
 
 TEST_F(PatternParserTest, ParsesMultiSegmentPathPattern) {
 	auto pat = parse_pattern("Enum::Variant");
-	auto pathp = dynamic_cast<PathPattern*>(pat.get());
+	auto pathp = get_node<PathPattern>(pat);
 	ASSERT_NE(pathp, nullptr);
 	ASSERT_NE(pathp->path, nullptr);
 	const auto &segs = pathp->path->getSegments();
@@ -151,47 +158,47 @@ TEST_F(PatternParserTest, ParsesMultiSegmentPathPattern) {
 
 TEST_F(PatternParserTest, BareIdentifierPrefersIdentifierPatternOverPath) {
 	auto pat = parse_pattern("x");
-	auto idp = dynamic_cast<IdentifierPattern*>(pat.get());
+	auto idp = get_node<IdentifierPattern>(pat);
 	ASSERT_NE(idp, nullptr);
 	ASSERT_NE(idp->name, nullptr);
 	EXPECT_EQ(idp->name->getName(), "x");
 }
 TEST_F(PatternParserTest, ParsesDeeplyNestedReferencePattern) {
     auto pat = parse_pattern("&&&mut x");
-    auto r1 = dynamic_cast<ReferencePattern*>(pat.get());
+    auto r1 = get_node<ReferencePattern>(pat);
     ASSERT_NE(r1, nullptr);
     EXPECT_FALSE(r1->is_mut);
 
-    auto r2 = dynamic_cast<ReferencePattern*>(r1->subpattern.get());
+    auto r2 = get_node<ReferencePattern>(r1->subpattern);
     ASSERT_NE(r2, nullptr);
     EXPECT_FALSE(r2->is_mut);
 
-    auto r3 = dynamic_cast<ReferencePattern*>(r2->subpattern.get());
+    auto r3 = get_node<ReferencePattern>(r2->subpattern);
     ASSERT_NE(r3, nullptr);
     EXPECT_TRUE(r3->is_mut);
 
-    auto id = dynamic_cast<IdentifierPattern*>(r3->subpattern.get());
+    auto id = get_node<IdentifierPattern>(r3->subpattern);
     ASSERT_NE(id, nullptr);
     EXPECT_EQ(id->name->getName(), "x");
 }
 
 TEST_F(PatternParserTest, ParsesNegativeLiteralPattern) {
     auto pat = parse_pattern("-123i32");
-    auto lit = dynamic_cast<LiteralPattern*>(pat.get());
+    auto lit = get_node<LiteralPattern>(pat);
     ASSERT_NE(lit, nullptr);
     EXPECT_TRUE(lit->is_negative);
-    auto ilit = dynamic_cast<IntegerLiteralExpr*>(lit->literal.get());
+    auto ilit = get_node<IntegerLiteralExpr>(lit->literal);
     ASSERT_NE(ilit, nullptr);
     EXPECT_EQ(ilit->value, 123);
 }
 
 TEST_F(PatternParserTest, ParsesReferenceToPathPattern) {
     auto pat = parse_pattern("&MyEnum::Variant");
-    auto refp = dynamic_cast<ReferencePattern*>(pat.get());
+    auto refp = get_node<ReferencePattern>(pat);
     ASSERT_NE(refp, nullptr);
     EXPECT_FALSE(refp->is_mut);
 
-    auto pathp = dynamic_cast<PathPattern*>(refp->subpattern.get());
+    auto pathp = get_node<PathPattern>(refp->subpattern);
     ASSERT_NE(pathp, nullptr);
     const auto& segs = pathp->path->getSegmentNames();
     ASSERT_EQ(segs.size(), 2u);

@@ -25,10 +25,7 @@ The project uses CMake for building and testing.
 To build the compiler, use the following commands from the root of the project:
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-make
+mkdir -p build && cmake -S . -B build && make -C build
 ```
 
 The main executable will be located at `build/compiler`.

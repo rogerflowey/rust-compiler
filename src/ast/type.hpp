@@ -2,37 +2,38 @@
 
 #include "common.hpp"
 
-class PathType : public Type {
-public:
+// --- Concrete Type Nodes ---
+struct PathType {
     PathPtr path;
-    PathType(PathPtr path) : path(std::move(path)) {}
 };
 
-class PrimitiveType : public Type {
-public:
+struct PrimitiveType {
     enum Kind { I32, U32, ISIZE, USIZE, BOOL, CHAR, STRING };
     Kind kind;
-    PrimitiveType(Kind kind) : kind(kind) {}
 };
 
-class ArrayType : public Type {
-public:
+struct ArrayType {
     TypePtr element_type;
-    ExprPtr size;
-    ArrayType(TypePtr element_type, ExprPtr size)
-        : element_type(std::move(element_type)), size(std::move(size)) {}
+    ExprPtr size; // Depends on ExprPtr, which is fine due to common.hpp
 };
 
-class ReferenceType : public Type {
-public:
+struct ReferenceType {
     TypePtr referenced_type;
     bool is_mutable;
-    ReferenceType(TypePtr referenced_type, bool is_mutable)
-        : referenced_type(std::move(referenced_type)), is_mutable(is_mutable) {}
 };
 
-// Unit type '()'
-class UnitType : public Type {
-public:
-    UnitType() = default;
+struct UnitType {};
+
+// --- Variant and Wrapper ---
+using TypeVariant = std::variant<
+    PathType,
+    PrimitiveType,
+    ArrayType,
+    ReferenceType,
+    UnitType
+>;
+
+// Complete the forward-declared type from common.hpp
+struct Type {
+    TypeVariant value;
 };

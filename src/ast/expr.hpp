@@ -1,176 +1,80 @@
 #pragma once
 
 #include "common.hpp"
-#include <optional>
 
+// --- Concrete Expression Nodes ---
+struct BlockExpr {
+    std::vector<StmtPtr> statements;
+    std::optional<ExprPtr> final_expr;
+};
 
-// ---- literals ------
-class IntegerLiteralExpr : public Expr {
-public:
-    enum Type {
-        I32, U32, ISIZE, USIZE
-    };
+struct IntegerLiteralExpr {
+    enum Type { I32, U32, ISIZE, USIZE };
     int64_t value;
     Type type;
-    IntegerLiteralExpr(int64_t value, Type type) : value(value), type(type) {}
 };
 
-class BoolLiteralExpr : public Expr {
-public:
-    bool value;
-    BoolLiteralExpr(bool value) : value(value) {}
-};
+struct BoolLiteralExpr { bool value; };
+struct CharLiteralExpr { char value; };
+struct StringLiteralExpr { std::string value; bool is_cstyle = false; };
+struct PathExpr { PathPtr path; };
+struct GroupedExpr { ExprPtr expr; };
+struct ContinueExpr {};
 
-class CharLiteralExpr : public Expr {
-public:
-    char value;
-    CharLiteralExpr(char value) : value(value) {}
-};
-
-class StringLiteralExpr : public Expr {
-public:
-    std::string value;
-    bool is_cstyle = false;
-    StringLiteralExpr(std::string value) : value(std::move(value)) {}
-};
-
-class PathExpr : public Expr {
-public:
-    PathPtr path;
-    PathExpr(PathPtr path) : path(std::move(path)) {}
-};
-
-
-
-
-// ----- Operators ------
-class UnaryExpr : public Expr {
-public:
+struct UnaryExpr {
     enum Op { NOT, NEGATE, DEREFERENCE, REFERENCE, MUTABLE_REFERENCE };
     Op op;
     ExprPtr operand;
-    UnaryExpr(Op op, ExprPtr operand) : op(op), operand(std::move(operand)) {}
 };
 
-class BinaryExpr : public Expr {
-public:
+struct BinaryExpr {
     enum Op { ADD, SUB, MUL, DIV, REM, AND, OR, BIT_AND, EQ, NE, LT, GT, LE, GE };
     Op op;
     ExprPtr left, right;
-    BinaryExpr(ExprPtr left, Op op, ExprPtr right)
-        : op(op), left(std::move(left)), right(std::move(right)) {}
 };
 
-class AssignExpr : public Expr {
-public:
+struct AssignExpr {
     enum Op { ASSIGN, ADD_ASSIGN, SUB_ASSIGN };
     Op op;
-    ExprPtr left, right; // Left must be a "place expression"
-    AssignExpr(ExprPtr left, Op op, ExprPtr right)
-        : op(op), left(std::move(left)), right(std::move(right)) {}
+    ExprPtr left, right;
 };
 
-class CastExpr : public Expr {
-public:
-    ExprPtr expr;
-    TypePtr type;
-    CastExpr(ExprPtr expr, TypePtr type) : expr(std::move(expr)), type(std::move(type)) {}
-};
+struct CastExpr { ExprPtr expr; TypePtr type; };
+struct ArrayInitExpr { std::vector<ExprPtr> elements; };
+struct ArrayRepeatExpr { ExprPtr value; ExprPtr count; };
+struct IndexExpr { ExprPtr array; ExprPtr index; };
 
-
-class GroupedExpr : public Expr {
-public:
-    ExprPtr expr;
-    GroupedExpr(ExprPtr expr) : expr(std::move(expr)) {}
-};
-
-class ArrayInitExpr : public Expr {
-public:
-    std::vector<ExprPtr> elements;
-    ArrayInitExpr(std::vector<ExprPtr> elements) : elements(std::move(elements)) {}
-};
-
-class ArrayRepeatExpr : public Expr {
-public:
-    ExprPtr value;
-    ExprPtr count;
-    ArrayRepeatExpr(ExprPtr value, ExprPtr count) : value(std::move(value)), count(std::move(count)) {}
-};
-
-class IndexExpr : public Expr {
-public:
-    ExprPtr array;
-    ExprPtr index;
-    IndexExpr(ExprPtr array, ExprPtr index) : array(std::move(array)), index(std::move(index)) {}
-};
-
-class StructExpr : public Expr {
-public:
-    struct FieldInit {
-        IdPtr name;
-        ExprPtr value;
-    };
+struct StructExpr {
+    struct FieldInit { IdPtr name; ExprPtr value; };
     PathPtr path;
     std::vector<FieldInit> fields;
-    StructExpr(PathPtr path, std::vector<FieldInit> fields) : path(std::move(path)), fields(std::move(fields)) {}
 };
 
-class CallExpr : public Expr {
-public:
-    ExprPtr callee;
-    std::vector<ExprPtr> args;
-    CallExpr(ExprPtr callee, std::vector<ExprPtr> args) : callee(std::move(callee)), args(std::move(args)) {}
-};
+struct CallExpr { ExprPtr callee; std::vector<ExprPtr> args; };
+struct MethodCallExpr { ExprPtr receiver; IdPtr method_name; std::vector<ExprPtr> args; };
+struct FieldAccessExpr { ExprPtr object; IdPtr field_name; };
 
-class MethodCallExpr : public Expr {
-public:
-    ExprPtr receiver;
-    IdPtr method_name;
-    std::vector<ExprPtr> args;
-    MethodCallExpr(ExprPtr receiver, IdPtr method_name, std::vector<ExprPtr> args)
-        : receiver(std::move(receiver)), method_name(std::move(method_name)), args(std::move(args)) {}
-};
-
-class FieldAccessExpr : public Expr {
-public:
-    ExprPtr object;
-    IdPtr field_name;
-    FieldAccessExpr(ExprPtr object, IdPtr field_name) : object(std::move(object)), field_name(std::move(field_name)) {}
-};
-
-class IfExpr : public Expr {
-public:
+struct IfExpr {
     ExprPtr condition;
     BlockExprPtr then_branch;
     std::optional<ExprPtr> else_branch;
-    IfExpr(ExprPtr condition, BlockExprPtr then_branch, std::optional<ExprPtr> else_branch)
-        : condition(std::move(condition)), then_branch(std::move(then_branch)), else_branch(std::move(else_branch)) {}
 };
 
-class LoopExpr : public Expr {
-public:
-    BlockExprPtr body;
-    LoopExpr(BlockExprPtr body) : body(std::move(body)) {}
-};
+struct LoopExpr { BlockExprPtr body; };
+struct WhileExpr { ExprPtr condition; BlockExprPtr body; };
+struct ReturnExpr { std::optional<ExprPtr> value; };
+struct BreakExpr { std::optional<IdPtr> label; std::optional<ExprPtr> value; };
 
-class WhileExpr : public Expr {
-public:
-    ExprPtr condition;
-    BlockExprPtr body;
-    WhileExpr(ExprPtr condition, BlockExprPtr body) : condition(std::move(condition)), body(std::move(body)) {}
-};
+// --- Variant and Wrapper ---
+using ExprVariant = std::variant<
+    BlockExpr, IntegerLiteralExpr, BoolLiteralExpr, CharLiteralExpr,
+    StringLiteralExpr, PathExpr, UnaryExpr, BinaryExpr, AssignExpr, CastExpr,
+    GroupedExpr, ArrayInitExpr, ArrayRepeatExpr, IndexExpr, StructExpr,
+    CallExpr, MethodCallExpr, FieldAccessExpr, IfExpr, LoopExpr, WhileExpr,
+    ReturnExpr, BreakExpr, ContinueExpr
+>;
 
-class ReturnExpr : public Expr {
-public:
-    std::optional<ExprPtr> value;
-    ReturnExpr(std::optional<ExprPtr> value) : value(std::move(value)) {}
+// Complete the forward-declared type from common.hpp
+struct Expr {
+    ExprVariant value;
 };
-
-class BreakExpr : public Expr {
-public:
-    std::optional<IdPtr> label;
-    std::optional<ExprPtr> value; 
-    BreakExpr(std::optional<IdPtr> label, std::optional<ExprPtr> value) : label(std::move(label)), value(std::move(value)) {}
-};
-
-class ContinueExpr : public Expr {};

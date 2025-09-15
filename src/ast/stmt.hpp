@@ -1,31 +1,33 @@
 #pragma once
 
 #include "common.hpp"
-#include <optional>
 
-class LetStmt : public Statement {
-public:
+// --- Concrete Statement Nodes ---
+struct LetStmt {
     PatternPtr pattern;
     std::optional<TypePtr> type_annotation;
     std::optional<ExprPtr> initializer;
-
-    LetStmt(PatternPtr pattern, std::optional<TypePtr> type, std::optional<ExprPtr> initializer)
-        : pattern(std::move(pattern)), type_annotation(std::move(type)), initializer(std::move(initializer)) {}
 };
 
-class ExprStmt : public Statement {
-public:
+struct ExprStmt {
     ExprPtr expr;
-    ExprStmt(ExprPtr expr) : expr(std::move(expr)) {}
 };
 
-class EmptyStmt : public Statement {
-public:
-    // Represents an empty statement ';'
-};
+struct EmptyStmt {};
 
-class ItemStmt : public Statement {
-public:
+struct ItemStmt {
     ItemPtr item;
-    explicit ItemStmt(ItemPtr item) : item(std::move(item)) {}
+};
+
+// --- Variant and Wrapper ---
+using StmtVariant = std::variant<
+    LetStmt,
+    ExprStmt,
+    EmptyStmt,
+    ItemStmt
+>;
+
+// Complete the forward-declared type from common.hpp
+struct Statement {
+    StmtVariant value;
 };

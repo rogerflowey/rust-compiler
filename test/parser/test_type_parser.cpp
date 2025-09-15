@@ -11,6 +11,13 @@
 
 using namespace parsec;
 
+// Helper to safely get a pointer to the concrete node type from the variant wrapper
+template <typename T, typename VariantPtr>
+T* get_node(const VariantPtr& ptr) {
+    if (!ptr) return nullptr;
+    return std::get_if<T>(&(ptr->value));
+}
+
 // Build a Type parser that also requires EOF to ensure full consumption
 static auto make_full_type_parser() {
 	const auto& registry = getParserRegistry();
@@ -58,7 +65,7 @@ TEST_F(TypeParserTest, ParsesPrimitiveTypes) {
 
 	for (const auto &c : cases) {
 		auto ty = parse_type(c.src);
-		auto prim = dynamic_cast<PrimitiveType*>(ty.get());
+		auto prim = get_node<PrimitiveType>(ty);
 		ASSERT_NE(prim, nullptr) << "expected PrimitiveType for " << c.src;
 		EXPECT_EQ(prim->kind, c.kind);
 	}
@@ -66,20 +73,20 @@ TEST_F(TypeParserTest, ParsesPrimitiveTypes) {
 
 TEST_F(TypeParserTest, ParsesSharedReference) {
 	auto ty = parse_type("& i32");
-	auto refty = dynamic_cast<ReferenceType*>(ty.get());
+	auto refty = get_node<ReferenceType>(ty);
 	ASSERT_NE(refty, nullptr);
 	EXPECT_FALSE(refty->is_mutable);
-	auto inner = dynamic_cast<PrimitiveType*>(refty->referenced_type.get());
+	auto inner = get_node<PrimitiveType>(refty->referenced_type);
 	ASSERT_NE(inner, nullptr);
 	EXPECT_EQ(inner->kind, PrimitiveType::I32);
 }
 
 TEST_F(TypeParserTest, ParsesMutableReference) {
 	auto ty = parse_type("& mut u32");
-	auto refty = dynamic_cast<ReferenceType*>(ty.get());
+	auto refty = get_node<ReferenceType>(ty);
 	ASSERT_NE(refty, nullptr);
 	EXPECT_TRUE(refty->is_mutable);
-	auto inner = dynamic_cast<PrimitiveType*>(refty->referenced_type.get());
+	auto inner = get_node<PrimitiveType>(refty->referenced_type);
 	ASSERT_NE(inner, nullptr);
 	EXPECT_EQ(inner->kind, PrimitiveType::U32);
 }
@@ -92,12 +99,12 @@ TEST_F(TypeParserTest, ParsesSliceType) {
 TEST_F(TypeParserTest, ParsesArrayTypeWithusizeExpr) {
 	// Array size expression uses the literal expression parser; use a typed number
 	auto ty = parse_type("[u32; 4usize]");
-	auto arr = dynamic_cast<ArrayType*>(ty.get());
+	auto arr = get_node<ArrayType>(ty);
 	ASSERT_NE(arr, nullptr);
-	auto elem = dynamic_cast<PrimitiveType*>(arr->element_type.get());
+	auto elem = get_node<PrimitiveType>(arr->element_type);
 	ASSERT_NE(elem, nullptr);
 	EXPECT_EQ(elem->kind, PrimitiveType::U32);
-	auto size_expr = dynamic_cast<IntegerLiteralExpr*>(arr->size.get());
+	auto size_expr = get_node<IntegerLiteralExpr>(arr->size);
 	ASSERT_NE(size_expr, nullptr);
 	EXPECT_EQ(size_expr->value, 4);
     EXPECT_EQ(size_expr->type, IntegerLiteralExpr::USIZE);
@@ -110,7 +117,7 @@ TEST_F(TypeParserTest, ParsesTupleType) {
 
 TEST_F(TypeParserTest, ParsesPathTypeIdentifier) {
 	auto ty = parse_type("MyType");
-	auto pty = dynamic_cast<PathType*>(ty.get());
+	auto pty = get_node<PathType>(ty);
 	ASSERT_NE(pty, nullptr);
 	ASSERT_NE(pty->path, nullptr);
 	const auto &segs = pty->path->getSegments();
@@ -121,7 +128,7 @@ TEST_F(TypeParserTest, ParsesPathTypeIdentifier) {
 
 TEST_F(TypeParserTest, ParsesPathTypeSelf) {
 	auto ty = parse_type("Self");
-	auto pty = dynamic_cast<PathType*>(ty.get());
+	auto pty = get_node<PathType>(ty);
 	ASSERT_NE(pty, nullptr);
 	const auto &segs = pty->path->getSegments();
 	ASSERT_EQ(segs.size(), 1u);
@@ -130,7 +137,7 @@ TEST_F(TypeParserTest, ParsesPathTypeSelf) {
 
 TEST_F(TypeParserTest, ParsesUnitType) {
     auto ty = parse_type("()");
-    auto unit = dynamic_cast<UnitType*>(ty.get());
+    auto unit = get_node<UnitType>(ty);
     ASSERT_NE(unit, nullptr);
 }
 
@@ -138,18 +145,18 @@ TEST_F(TypeParserTest, ParsesDeeplyNestedTypes) {
     // Reference to an array of mutable references to a path type
     auto ty = parse_type("&[&mut my::Type; 10usize]");
 
-    auto r1 = dynamic_cast<ReferenceType*>(ty.get());
+    auto r1 = get_node<ReferenceType>(ty);
     ASSERT_NE(r1, nullptr);
     EXPECT_FALSE(r1->is_mutable);
 
-    auto arr = dynamic_cast<ArrayType*>(r1->referenced_type.get());
+    auto arr = get_node<ArrayType>(r1->referenced_type);
     ASSERT_NE(arr, nullptr);
 
-    auto r2 = dynamic_cast<ReferenceType*>(arr->element_type.get());
+    auto r2 = get_node<ReferenceType>(arr->element_type);
     ASSERT_NE(r2, nullptr);
     EXPECT_TRUE(r2->is_mutable);
 
-    auto p = dynamic_cast<PathType*>(r2->referenced_type.get());
+    auto p = get_node<PathType>(r2->referenced_type);
     ASSERT_NE(p, nullptr);
     const auto& segs = p->path->getSegmentNames();
     ASSERT_EQ(segs.size(), 2u);
