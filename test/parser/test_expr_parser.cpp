@@ -352,7 +352,7 @@ TEST_F(ExprParserTest, ParsesStructExpr) {
 TEST_F(ExprParserTest, ComplexPostfixChain) {
   // This tests the parser's ability to handle a left-to-right chain of
   // different postfix operators: call -> field access -> index -> method call
-  auto e = parse_expr("get_obj().field[0].process(true)");
+  auto e = parse_expr("get_obj().field[0i32].process(true)");
 
   // Outer-most is the method call
   auto mcall = dynamic_cast<MethodCallExpr*>(e.get());
@@ -361,11 +361,13 @@ TEST_F(ExprParserTest, ComplexPostfixChain) {
   ASSERT_EQ(mcall->args.size(), 1u);
 
   // Next is the index expression
-  auto idx = dynamic_cast<IndexExpr*>(mcall->object.get());
+  // CORRECTED: The AST uses `receiver` for MethodCallExpr, not `object`.
+  auto idx = dynamic_cast<IndexExpr*>(mcall->receiver.get());
   ASSERT_NE(idx, nullptr);
 
   // Next is the field access
-  auto fld = dynamic_cast<FieldAccessExpr*>(idx->object.get());
+  // CORRECTED: The AST uses `array` for IndexExpr, not `object`.
+  auto fld = dynamic_cast<FieldAccessExpr*>(idx->array.get());
   ASSERT_NE(fld, nullptr);
   EXPECT_EQ(fld->field_name->getName(), "field");
 
@@ -379,8 +381,9 @@ TEST_F(ExprParserTest, ComplexPostfixChain) {
 
 TEST_F(ExprParserTest, PrecedenceWithUnaryAndCast) {
   // Test interaction between unary, cast, and binary operators.
-  // Should parse as: `(-(1i32)) as i64 * 2i64`
-  auto e = parse_expr("-1i32 as i64 * 2i64");
+  // Should parse as: `(-(1i32)) as isize * 2isize`
+  // CORRECTED: Used `isize` as `i64` is not in the PrimitiveType enum.
+  auto e = parse_expr("-1i32 as isize * 2isize");
   auto mul = dynamic_cast<BinaryExpr*>(e.get());
   ASSERT_NE(mul, nullptr);
   EXPECT_EQ(mul->op, BinaryExpr::MUL);
@@ -389,7 +392,7 @@ TEST_F(ExprParserTest, PrecedenceWithUnaryAndCast) {
   ASSERT_NE(cast, nullptr);
   auto ty = dynamic_cast<PrimitiveType*>(cast->type.get());
   ASSERT_NE(ty, nullptr);
-  EXPECT_EQ(ty->kind, PrimitiveType::I64); // Assuming i64 is added or use another type
+  EXPECT_EQ(ty->kind, PrimitiveType::ISIZE);
 
   auto neg = dynamic_cast<UnaryExpr*>(cast->expr.get());
   ASSERT_NE(neg, nullptr);

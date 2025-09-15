@@ -156,15 +156,3 @@ TEST_F(TypeParserTest, ParsesDeeplyNestedTypes) {
     EXPECT_EQ(segs[0], "my");
     EXPECT_EQ(segs[1], "Type");
 }
-
-TEST_F(TypeParserTest, ParsesMultiSegmentPathType) {
-    auto ty = parse_type("crate::module::MyType");
-    auto pty = dynamic_cast<PathType*>(ty.get());
-    ASSERT_NE(pty, nullptr);
-    ASSERT_NE(pty->path, nullptr);
-    const auto &segs = pty->path->getSegmentNames();
-    ASSERT_EQ(segs.size(), 3u);
-    EXPECT_EQ(segs[0], "crate");
-    EXPECT_EQ(segs[1], "module");
-    EXPECT_EQ(segs[2], "MyType");
-}

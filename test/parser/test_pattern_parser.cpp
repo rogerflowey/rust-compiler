@@ -85,10 +85,21 @@ TEST_F(PatternParserTest, ParsesWildcardPattern) {
 }
 
 TEST_F(PatternParserTest, ParsesRefPatternSingleAmp) {
+	auto pat = parse_pattern("&x");
+	auto refp = dynamic_cast<ReferencePattern*>(pat.get());
+	ASSERT_NE(refp, nullptr);
+	EXPECT_FALSE(refp->is_mut);
+	ASSERT_NE(refp->subpattern, nullptr);
+	auto inner = dynamic_cast<IdentifierPattern*>(refp->subpattern.get());
+	ASSERT_NE(inner, nullptr);
+	ASSERT_NE(inner->name, nullptr);
+	EXPECT_EQ(inner->name->getName(), "x");
+}
+
+TEST_F(PatternParserTest, ParsesRefPatternSingleAmpMut) {
 	auto pat = parse_pattern("& mut x");
 	auto refp = dynamic_cast<ReferencePattern*>(pat.get());
 	ASSERT_NE(refp, nullptr);
-	EXPECT_EQ(refp->ref_level, 1);
 	EXPECT_TRUE(refp->is_mut);
 	ASSERT_NE(refp->subpattern, nullptr);
 	auto inner = dynamic_cast<IdentifierPattern*>(refp->subpattern.get());
@@ -99,11 +110,15 @@ TEST_F(PatternParserTest, ParsesRefPatternSingleAmp) {
 
 TEST_F(PatternParserTest, ParsesRefPatternDoubleAmp) {
 	auto pat = parse_pattern("&& y");
-	auto refp = dynamic_cast<ReferencePattern*>(pat.get());
-	ASSERT_NE(refp, nullptr);
-	EXPECT_EQ(refp->ref_level, 2);
-	EXPECT_FALSE(refp->is_mut);
-	auto inner = dynamic_cast<IdentifierPattern*>(refp->subpattern.get());
+	auto refp1 = dynamic_cast<ReferencePattern*>(pat.get());
+	ASSERT_NE(refp1, nullptr);
+	EXPECT_FALSE(refp1->is_mut);
+
+	auto refp2 = dynamic_cast<ReferencePattern*>(refp1->subpattern.get());
+	ASSERT_NE(refp2, nullptr);
+	EXPECT_FALSE(refp2->is_mut);
+
+	auto inner = dynamic_cast<IdentifierPattern*>(refp2->subpattern.get());
 	ASSERT_NE(inner, nullptr);
 	ASSERT_NE(inner->name, nullptr);
 	EXPECT_EQ(inner->name->getName(), "y");
@@ -145,17 +160,14 @@ TEST_F(PatternParserTest, ParsesDeeplyNestedReferencePattern) {
     auto pat = parse_pattern("&&&mut x");
     auto r1 = dynamic_cast<ReferencePattern*>(pat.get());
     ASSERT_NE(r1, nullptr);
-    EXPECT_EQ(r1->ref_level, 1);
     EXPECT_FALSE(r1->is_mut);
 
     auto r2 = dynamic_cast<ReferencePattern*>(r1->subpattern.get());
     ASSERT_NE(r2, nullptr);
-    EXPECT_EQ(r2->ref_level, 1);
     EXPECT_FALSE(r2->is_mut);
 
     auto r3 = dynamic_cast<ReferencePattern*>(r2->subpattern.get());
     ASSERT_NE(r3, nullptr);
-    EXPECT_EQ(r3->ref_level, 1);
     EXPECT_TRUE(r3->is_mut);
 
     auto id = dynamic_cast<IdentifierPattern*>(r3->subpattern.get());

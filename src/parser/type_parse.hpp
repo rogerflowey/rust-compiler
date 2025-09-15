@@ -36,8 +36,9 @@ private:
     TypeParser buildPrimitiveParser() const {
         static const std::unordered_map<std::string, PrimitiveType::Kind> kmap = {
             {"i32", PrimitiveType::I32},   {"u32", PrimitiveType::U32},
-            {"usize", PrimitiveType::USIZE}, {"bool", PrimitiveType::BOOL},
-            {"char", PrimitiveType::CHAR}, {"str", PrimitiveType::STRING},
+            {"isize", PrimitiveType::ISIZE}, {"usize", PrimitiveType::USIZE},
+            {"bool", PrimitiveType::BOOL}, {"char", PrimitiveType::CHAR},
+            {"str", PrimitiveType::STRING},
         };
         return satisfy<Token>([&](const Token &t) {
             return t.type == TokenType::TOKEN_IDENTIFIER && kmap.count(t.value);

@@ -84,12 +84,23 @@ private:
     }
     
     PatternParser buildRefPattern(const PatternParser& self) const {
-        auto p_ref_level = (equal({TOKEN_OPERATOR, "&&"}).map([](Token){ return 2; }) |
-                            equal({TOKEN_OPERATOR, "&"}).map([](Token){ return 1; }));
-        return (p_ref_level >> equal({TOKEN_KEYWORD, "mut"}).optional() >> self)
+        auto p_and = equal({TOKEN_OPERATOR, "&"});
+        auto p_andand = equal({TOKEN_OPERATOR, "&&"});
+
+        auto p_ref_inner = p_and.andThen(self).map([](auto&& result) -> PatternPtr {
+            return std::make_unique<ReferencePattern>(std::move(std::get<1>(result)), false);
+        });
+
+        auto p_ref_andand = p_andand.andThen(self).map([](auto&& result) -> PatternPtr {
+            auto inner_ref = std::make_unique<ReferencePattern>(std::move(std::get<1>(result)), false);
+            return std::make_unique<ReferencePattern>(std::move(inner_ref), false);
+        });
+
+        auto p_ref_mut = (p_and >> equal({TOKEN_KEYWORD, "mut"}) >> self)
             .map([](auto&& result) -> PatternPtr {
-                auto& [level, mut_tok, pattern] = result;
-                return std::make_unique<ReferencePattern>(std::move(pattern), level, mut_tok.has_value());
-            }).label("a reference pattern");
+                return std::make_unique<ReferencePattern>(std::move(std::get<2>(result)), true);
+            });
+        
+        return (p_ref_mut | p_ref_andand | p_ref_inner).label("a reference pattern");
     }
 };

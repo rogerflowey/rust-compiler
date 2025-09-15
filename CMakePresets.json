@@ -3,19 +3,42 @@
     "configurePresets": [
         {
             "name": "default",
-            "displayName": "Default Config",
-            "description": "Default build settings",
-            "binaryDir": "${sourceDir}/build",
+            "displayName": "Default Config (Makefiles)",
+            "description": "Default build settings using the default generator",
+            "binaryDir": "${sourceDir}/build/default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "BUILD_TESTING": "ON"
+            }
+        },
+        {
+            "name": "ninja-debug",
+            "displayName": "Ninja (Debug)",
+            "description": "Sets Ninja generator for fast builds",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/ninja-debug",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "BUILD_TESTING": "ON"
             }
         }
     ],
+    "buildPresets": [
+        {
+            "name": "default",
+            "displayName": "Build with Makefiles",
+            "configurePreset": "default"
+        },
+        {
+            "name": "ninja-debug",
+            "displayName": "Build with Ninja",
+            "configurePreset": "ninja-debug"
+        }
+    ],
     "testPresets": [
         {
-            "name": "default-test",
-            "displayName": "Default Test (Output on Failure)",
+            "name": "default",
+            "displayName": "Test (Makefile build)",
             "description": "Run tests, showing output only for failures",
             "configurePreset": "default",
             "output": {
@@ -23,12 +46,12 @@
             }
         },
         {
-            "name": "verbose-test",
-            "displayName": "Verbose Test Output",
-            "description": "Run tests and show all output",
-            "configurePreset": "default",
+            "name": "ninja-debug",
+            "displayName": "Test (Ninja build)",
+            "description": "Run tests on the Ninja build",
+            "configurePreset": "ninja-debug",
             "output": {
-                "verbosity": "verbose"
+                "outputOnFailure": true
             }
         }
     ]
