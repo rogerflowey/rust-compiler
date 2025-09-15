@@ -43,15 +43,14 @@ public:
             Parser<ResultType, Token> operator()(int min_precedence) const {
                 auto st = this->st; // capture for lambdas
                 auto self = *this;   // copyable for recursion
-                auto parse_fn = [st, self, min_precedence](ParseContext<Token>& context) -> std::optional<ResultType> {
-                    auto left_opt = st->atom.parse(context);
-                    if (!left_opt) {
-                        return std::nullopt;
+                auto parse_fn = [st, self, min_precedence](ParseContext<Token>& context) -> ParseResult<ResultType> {
+                    auto left_res = st->atom.parse(context);
+                    if (std::holds_alternative<ParseError>(left_res)) {
+                        return left_res;
                     }
-                    ResultType left = std::move(*left_opt);
+                    ResultType left = std::move(std::get<ResultType>(left_res));
 
                     while (true) {
-                        auto loop_start_pos = context.position;
                         if (context.isEOF()) {
                             break;
                         }
@@ -68,12 +67,11 @@ public:
                         int next_min_precedence = op_info.is_left_assoc ? op_info.precedence + 1 : op_info.precedence;
 
                         auto rhs_parser = self(next_min_precedence);
-                        auto right_opt = rhs_parser.parse(context);
-                        if (!right_opt) {
-                            context.position = loop_start_pos;
-                            break;
+                        auto right_res = rhs_parser.parse(context);
+                        if (std::holds_alternative<ParseError>(right_res)) {
+                            return right_res;
                         }
-                        left = op_info.op_func(std::move(left), std::move(*right_opt));
+                        left = op_info.op_func(std::move(left), std::move(std::get<ResultType>(right_res)));
                     }
 
                     return left;

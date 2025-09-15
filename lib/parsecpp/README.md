@@ -1,229 +1,201 @@
-Of course. Here is a comprehensive README document for the `parsecpp` and `pratt` libraries. It explains the core concepts, provides a detailed API reference, and shows how to use them together.
+## ParsecCpp: A C++ Header-Only Parser Combinator Library
+
+This document explains how to use the provided C++ header-only parser combinator library (`parsec.hpp`) and its extension for Pratt parsing (`pratt.h`).
+
+### Table of Contents
+1.  **Part 1: The `parsec` Library - Core Concepts**
+    *   What is a Parser Combinator?
+    *   The `Parser<R, T>` Object
+    *   Basic Parsers: Building Blocks
+    *   Core Combinators: Combining Parsers
+    *   Handling Recursion with `lazy()`
+    *   Running a Parser
+    *   Example 1: Parsing a list of identifiers
+
+2.  **Part 2: The `pratt` Library - Expression Parsing**
+    *   Why Pratt Parsing?
+    *   The `PrattParserBuilder`
+    *   Building an Expression Parser Step-by-Step
+    *   Example 2: A Simple Arithmetic Calculator
 
 ---
 
-# Parsecpp & Pratt: A Modern C++ Parsing Toolkit
+## Part 1: The `parsec` Library - Core Concepts
 
-Welcome to Parsecpp & Pratt, a powerful, header-only parsing toolkit for modern C++. This toolkit provides two complementary libraries:
+The `parsec` library provides tools to build complex parsers by combining simpler ones. This approach makes parsers modular, readable, and easy to maintain.
 
-1.  **`parsecpp.h`**: A parser combinator library with a fluent, method-chaining API. It's designed for performance and expressiveness, featuring automatic memoization (Packrat) and direct left-recursion handling.
-2.  **`pratt.h`**: A generic, configurable Pratt parser (Top-Down Operator Precedence parser). It's the perfect tool for parsing expressions with operator precedence and associativity, like mathematical formulas or programming language expressions.
+### What is a Parser Combinator?
 
-Together, they provide a complete solution for building robust, efficient, and maintainable parsers in C++.
+A **parser** is an object that takes a stream of tokens as input and attempts to produce a structured result. If it succeeds, it consumes the tokens it used and returns the result. If it fails, it consumes no tokens.
 
-## Features
+A **parser combinator** is a function or operator that takes one or more parsers and returns a new, more complex parser. For example, the `orElse` combinator takes two parsers and creates a new one that tries the first, and if it fails, tries the second.
 
-*   **Fluent, Expressive API**: Define complex grammars by chaining methods like `.map()`, `.then()`, and `.many()`.
-*   **High Performance**: Automatic memoization (Packrat parsing) guarantees linear-time performance for any well-formed PEG grammar, avoiding exponential complexity on ambiguous inputs.
-*   **Direct Left-Recursion**: Write natural, left-recursive grammars (`expr = expr + term`) without manual refactoring. The engine handles it automatically.
-*   **Generic & Reusable Pratt Parser**: Define expression grammars declaratively by specifying operator precedence, associativity, and parsing functions.
-*   **Type-Safe & Modern C++**: Built with C++17 features like `std::optional`, `std::string_view`, and smart pointers for a safe and clean API.
-*   **Header-Only**: Simply drop `parsecpp.h` and `pratt.h` into your project. No build system configuration required.
-*   **Zero Dependencies**: Relies only on the C++ Standard Library.
+### The `Parser<R, T>` Object
 
-## Quick Start
+This is the central class in the library.
+*   `Parser<ReturnType, Token>`: A parser that attempts to parse a stream of `Token` types and, if successful, produces a value of type `ReturnType`.
+*   For text parsing, `Token` will typically be `char`. For more complex languages, you would first use a lexer to turn source code into a `std::vector<Token>` where `Token` is a custom struct/enum.
 
-Let's parse a simple mathematical expression like `2 * (3 + 5)` into an Abstract Syntax Tree (AST).
+### Basic Parsers: Building Blocks
 
-### 1. Include the Libraries
+These are the fundamental parsers you'll use to start building.
 
-Save `parsecpp.h`, `pratt.h`, and your `AST.h` definition in your project directory.
-
-```cpp
-// main.cpp
-#include <iostream>
-#include "parsecpp.h"
-#include "pratt.h"
-#include "AST.h" // Your AST definitions (see examples for a sample)
-```
-
-### 2. Define the Grammar for Pratt Parsing
-
-The Pratt parser needs to know how to handle tokens like numbers, parentheses, and operators. We define this using a configuration object, leveraging `parsecpp` to create the token parsers.
-
-```cpp
-pratt::PrattParserConfig<Expr> create_math_grammar_config() {
-    using namespace parsecpp;
-    using namespace pratt;
-
-    PrattParserConfig<Expr> config;
-
-    // Token Parsers (using the fluent parsecpp API)
-    auto p_number_token = satisfy(isdigit).many1().map(/* ... */);
-    auto p_op_token = [](char c) { return character(c).map(/* ... */); };
-
-    // --- Prefix Rules (for numbers, unary operators, parentheses) ---
-    config.prefix_rules.push_back({
-        .token_parser = p_number_token,
-        .nud = [](auto token, auto&) { /* return Literal node */ }
-    });
-    config.prefix_rules.push_back({
-        .token_parser = p_op_token('('),
-        .nud = [](auto, auto& parser) { /* recursively call parser.parse_expr(0) */ }
-    });
-    // ... more prefix rules ...
-
-    // --- Infix Rules (for binary operators) ---
-    auto binary_led = [](Expr left, auto token, Expr right) { /* return BinaryOp node */ };
-    config.infix_rules.push_back({p_op_token('+'), binary_led, 10});
-    config.infix_rules.push_back({p_op_token('*'), binary_led, 20});
-    // ... more infix rules ...
-
-    return config;
-}
-```
-
-### 3. Run the Parser
-
-Create the grammar config, instantiate the `PrattParser`, and call `.parse()`.
-
-```cpp
-int main() {
-    // 1. Create the grammar configuration once.
-    auto math_grammar = create_math_grammar_config();
-
-    std::string input = "2 * (3 + 5)";
-
-    try {
-        // 2. Create a new parser instance for the input.
-        pratt::PrattParser<Expr> parser(math_grammar, input);
-        
-        // 3. Parse the input to get the AST.
-        Expr ast = parser.parse();
-        
-        std::cout << "Parse successful!\n";
-        print_ast(ast); // Your function to display the AST
-
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << '\n';
-    }
-}
-```
-
-## How It Works: Core Concepts
-
-### `parsecpp.h`: The Combinator Engine
-
-A parser is fundamentally a function that takes an input string and returns either:
-*   A **successful** result, containing the parsed value and the *remaining* unparsed string.
-*   A **failure**.
-
-`parsecpp` provides a `Parser<T>` class that wraps this logic. You build complex parsers by starting with simple ones and "combining" them using methods.
-
-**Memoization & Left-Recursion:** The magic happens inside the `Parser`'s call operator `()`. It automatically caches the result of every parse attempt at every position. If it encounters a left-recursive loop (e.g., `p_expr` calls itself without consuming input), it uses a sophisticated algorithm to "grow" the parse, finding the longest possible match. This makes the library both fast and powerful.
-
-### `pratt.h`: The Expression Engine
-
-Pratt parsing is a highly elegant algorithm for parsing expressions. Instead of complex grammar rules, you assign properties to tokens:
-
-*   **`nud` (Null Denotation):** How a token behaves when it appears at the start of an expression. For example, a number `5` produces a literal value, while a minus sign `-` consumes the expression to its right (its operand).
-*   **`led` (Left Denotation):** How a token behaves when it appears after a sub-expression. For example, a plus sign `+` consumes the expression to its left (which has already been parsed) and the expression to its right.
-*   **Precedence:** A number that determines the binding power of an infix operator. `*` has a higher precedence than `+`, so `3 + 4 * 2` is parsed as `3 + (4 * 2)`.
-
-The `pratt.h` library provides a generic engine that you configure with these `nud` and `led` rules. It orchestrates the main parsing loop, correctly applying precedence and associativity to produce a well-formed AST.
-
-## API Reference: `parsecpp.h`
-
-All parsers are created from the factory functions and then chained together using methods.
-
-### Factory Functions
-
-`parsecpp::Parser<T>` objects are created with these functions:
-
-| Function | Description |
-|---|---|
-| `satisfy(pred)` | Creates a `Parser<char>` that succeeds if the first character matches the predicate `bool(char)`. |
-| `character(char c)` | Creates a `Parser<char>` that matches a specific character `c`. |
-| `string_p(string s)` | Creates a `Parser<string_view>` that matches a specific string `s`. |
-| `Parser<T>::choice(vec)` | Creates a `Parser<T>` that tries a `vector` of parsers in order. |
-| `Parser<T>::lazy(func)` | Creates a `Parser<T>` for recursive grammars. The `func` returns the actual parser. |
-
-### Fluent Methods
-
-These methods are called on a `Parser<T>` object and return a new `Parser`.
-
-| Method | Signature | Description |
-|---|---|---|
-| **map** | `.map(f)` | Transforms the parser's result `T` into a new type `B` using function `f: T -> B`. |
-| **then** | `.then(p2)` | Runs this parser, then parser `p2`. Discards this parser's result and yields `p2`'s result. |
-| **skip** | `.skip(p2)` | Runs this parser, then parser `p2`. Discards `p2`'s result and yields this parser's result. |
-| **or_else** | `.or_else(p2)` | Tries this parser. If it fails, tries parser `p2`. Both must produce the same type. |
-| **many** | `.many()` | Applies this parser zero or more times, returning a `vector<T>`. Never fails. |
-| **many1** | `.many1()` | Applies this parser one or more times, returning a `vector<T>`. Fails if it can't match once. |
-| **optional** | `.optional()`| Tries this parser, returning a `std::optional<T>`. Never fails. |
-| **sep_by** | `.sep_by(sep)`| Parses zero or more occurrences of this parser, separated by `sep`. |
-
-### Example of Fluent Chaining
-
-Parsing a comma-separated list of numbers into a `vector<double>`:
-
-```cpp
-using namespace parsecpp;
-
-// A parser for a single digit
-auto p_digit = satisfy(isdigit);
-
-// A parser for a floating-point number string
-auto p_number_str = p_digit.many1();
-
-// A parser that converts the string to a double
-auto p_double = p_number_str.map([](const auto& chars) {
-    return std::stod(std::string(chars.begin(), chars.end()));
-});
-
-// A parser for a comma, consuming trailing whitespace
-auto p_comma = character(',').skip(satisfy(isspace).many());
-
-// The final parser for a list of doubles
-auto p_double_list = p_double.sep_by(p_comma);
-
-// Run it!
-auto result = run(p_double_list, "1.1, 2, 3.5");
-// result will contain a std::vector<double> with {1.1, 2.0, 3.5}
-```
-
-## API Reference: `pratt.h`
-
-The Pratt parser is a class configured with your grammar rules.
-
-### Configuration Structs
-
-| Struct | Description |
-|---|---|
-| `pratt::PrefixRule<T>` | Defines a prefix token. Contains a `parsecpp::Parser` and a `nud` function. |
-| `pratt::InfixRule<T>` | Defines an infix token. Contains a `parsecpp::Parser`, a `led` function, a `precedence`, and an `Associativity`. |
-| `pratt::PrattParserConfig<T>` | A container for `vector`s of prefix and infix rules. |
-
-### The `nud` and `led` Signatures
-
-*   **`nud` (Null Denotation)**:
+*   **`satisfy<Token>(predicate)`**: The most basic parser. It consumes and returns a single token if that token satisfies the given predicate function (`std::function<bool(const Token&)>`).
     ```cpp
-    std::function<TResult(std::any token, PrattParser<TResult>& parser)>
+    // A parser that accepts any single digit character
+    auto digit = parsec::satisfy<char>([](char c) { return isdigit(c); });
     ```
-    - `token`: The value produced by the rule's `token_parser`.
-    - `parser`: A reference to the main `PrattParser`. Use this to call `parser.parse_expr(precedence)` for parsing operands.
 
-*   **`led` (Left Denotation)**:
+*   **`token<Token>(value)`**: A convenient shorthand for `satisfy`. It succeeds if the next token is equal to the given `value`.
     ```cpp
-    std::function<TResult(TResult left, std::any token, TResult right)>
+    // A parser for the character ','
+    auto comma = parsec::token(',');
+    // A parser for the keyword "let" (assuming Token is std::string)
+    auto let_keyword = parsec::token<std::string>("let");
     ```
-    - `left`: The `TResult` already parsed to the left of the operator.
-    - `token`: The operator token itself.
-    - `right`: The `TResult` parsed to the right of the operator.
 
-### The `PrattParser` Class
+*   **`succeed<R, T>(value)`**: A parser that always succeeds without consuming any input, returning the given `value`. This is useful for injecting values into a parsing chain.
 
-*   **Constructor**: `PrattParser(config, input)`
-    - Takes the grammar configuration and the `string_view` to parse.
+### Core Combinators: Combining Parsers
 
-*   **Main Method**: `parse()`
-    - Executes the parser and returns the final `TResult`. Throws `std::runtime_error` on failure.
+You combine basic parsers using methods and overloaded operators. Let `p1` and `p2` be parsers.
 
-*   **Recursive Method**: `parse_expr(min_precedence)`
-    - The core parsing loop. Called by `nud` functions to parse sub-expressions.
+#### 1. Transformation: `map`
 
-*   **Utility**: `consume_char(c)`
-    - Helper for rules like parentheses to consume expected characters.
+-   `p1.map(f)`: If `p1` succeeds, it applies the function `f` to its result, creating a new parser with the transformed result.
+
+    ```cpp
+    // Parses a digit char '5' and maps it to the integer 5
+    auto digit_val = parsec::satisfy<char>(isdigit).map([](char c) { return c - '0'; });
+    ```
+
+#### 2. Sequencing: `andThen`, `keepLeft`, `keepRight`
+
+-   `p1.andThen(p2)` or `p1 >> p2`: Runs `p1`, then runs `p2`. If both succeed, it combines their results into a `std::tuple`. This is the primary way to parse sequential patterns.
+-   `p1.keepLeft(p2)` or `p1 < p2`: Runs `p1` then `p2`, but discards the result of `p2`, keeping only `p1`'s result.
+-   `p1.keepRight(p2)` or `p1 > p2`: Runs `p1` then `p2`, but discards the result of `p1`, keeping only `p2`'s result. This is very common for parsing past keywords or punctuation.
+
+    ```cpp
+    // Parses an integer surrounded by parentheses, e.g., "(123)"
+    auto integer = parsec::satisfy<char>(isdigit).many().map(
+        [](std::vector<char> chars) {
+            return std::stoi(std::string(chars.begin(), chars.end()));
+        }
+    );
+
+    auto lparen = parsec::token('(');
+    auto rparen = parsec::token(')');
+
+    // keepRight discards '(', keepLeft discards ')'
+    auto parenthesized_int = lparen > integer < rparen;
+    ```
+
+#### 3. Choice: `orElse`
+
+-   `p1.orElse(p2)` or `p1 | p2`: Tries to run `p1`. If `p1` fails, it backtracks and tries to run `p2`. Both parsers must have the same return type.
+
+    ```cpp
+    // A parser for either a '+' or '-' character
+    auto plus_or_minus = parsec::token('+') | parsec::token('-');
+    ```
+
+#### 4. Repetition: `many`, `optional`, `list`, `list1`
+
+-   `p1.many()`: Applies `p1` zero or more times and collects the results into a `std::vector`. This parser never fails (it can return an empty vector).
+-   `p1.optional()`: Tries to apply `p1`. If it succeeds, it returns `std::optional<Result>`. If it fails, it succeeds with `std::nullopt`.
+-   `p1.list(separator)`: Parses zero or more occurrences of `p1` separated by `separator`.
+-   `p1.list1(separator)`: Parses **one** or more occurrences of `p1` separated by `separator`.
+
+    ```cpp
+    // Parses a comma-separated list of integers: "1,2,3"
+    auto comma = parsec::token(',');
+    auto csv_parser = integer.list(comma);
+    ```
+
+### Handling Recursion with `lazy()`
+
+Grammars are often recursive (e.g., an expression can contain other expressions). You can't define a recursive parser directly because the variable would be used during its own initialization. The `lazy()` function solves this.
+
+`lazy()` returns a `std::pair` containing:
+1.  A "placeholder" parser that can be used immediately.
+2.  A "setter" function to be called later with the real parser definition.
+
+```cpp
+// Example: A parser for a nested list like "[1, [2], 3]"
+
+// 1. Create the lazy placeholder for the list parser
+auto [list_parser, set_list_parser] =
+    parsec::lazy<std::vector<int>, char>(); // Assuming result is vector<int>
+
+// 2. Define what an element can be: an integer OR another list
+//    We can use list_parser here even though it's not fully defined yet.
+auto integer_parser = ...; // (defined earlier)
+auto element_parser = integer_parser | list_parser; // Fails to compile, types mismatch
+
+// Corrected version: We need a common result type, e.g., std::variant or a custom AST node.
+// For simplicity, let's assume a grammar where elements are only integers.
+auto [recursive_list_parser, set_list_parser] =
+    parsec::lazy<std::vector<int>, char>();
+
+auto integer_parser = ...;
+
+// 3. Define the full list parser using the placeholder for recursion
+auto list_def = parsec::token('[') >
+                integer_parser.list(parsec::token(',')) < // Simplified for example
+                parsec::token(']');
+
+// 4. Set the implementation for the lazy parser
+set_list_parser(list_def);
+
+// Now, recursive_list_parser can be used to parse nested structures.
+```
+
+### Running a Parser
+
+-   `run(parser, tokens)`: The main entry point. It runs your top-level `parser` on a `std::vector<Token>`. It only returns a result if the parser succeeds **and** consumes the entire input stream. This ensures there's no trailing garbage.
+-   `run(parser, "some string")`: A convenience overload for `char` tokens.
+
 
 ---
-This document should provide a solid foundation for anyone looking to use your libraries. It explains the "why" behind the design and gives clear, actionable examples and API references.
+
+## Part 2: The `pratt` Library - Expression Parsing
+
+Parsing expressions with infix operators (`+`, `*`, etc.) is tricky with standard combinators because you need to handle operator precedence (`*` before `+`) and associativity (`a - b - c` is `(a - b) - c`). A Pratt parser (or "precedence climbing" parser) is an elegant algorithm for this.
+
+### Why Pratt Parsing?
+
+Instead of defining a complex, recursive grammar for expressions, a Pratt parser separates the logic into:
+1.  Parsing "atoms" (the simplest parts, like numbers, variables, or parenthesized sub-expressions).
+2.  Parsing infix operators based on their precedence levels.
+
+### The `PrattParserBuilder`
+
+This builder class simplifies the creation of a Pratt parser.
+
+-   `PrattParserBuilder<ResultType, Token>`: You specify the final result type (e.g., `double` for a calculator, or an AST node) and the `Token` type.
+
+The process is:
+1.  Create a `PrattParserBuilder`.
+2.  Define and set an **atom parser** using `.withAtomParser()`. This is mandatory.
+3.  Add infix operators using `.addInfixLeft()` or `.addInfixRight()`.
+4.  Call `.build()` to get the final expression parser.
+
+### Building an Expression Parser Step-by-Step
+
+#### Step 1: `withAtomParser(p)`
+The atom parser `p` is responsible for parsing the "leaves" of your expression tree. This typically includes:
+*   Numbers (`123`)
+*   Identifiers (`x`)
+*   Parenthesized expressions (`(1 + 2)`). Note that this part is **recursive**, so you will need `lazy()`!
+
+#### Step 2: `addInfixLeft(op_token, precedence, func)`
+Adds a **left-associative** operator.
+*   `op_token`: The token representing the operator (e.g., `Token{Type::Plus}`).
+*   `precedence`: An integer. Higher numbers mean higher precedence (bind more tightly).
+*   `func`: A function `ResultType(ResultType lhs, ResultType rhs)` that combines the left-hand and right-hand side results.
+
+#### Step 3: `addInfixRight(op_token, precedence, func)`
+Adds a **right-associative** operator (e.g., for exponentiation `^`).
+
+#### Step 4: `build()`
+Returns a `Parser<ResultType, Token>` that you can use with `run()`.
