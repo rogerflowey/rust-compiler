@@ -5,7 +5,7 @@
 #include <variant>
 
 #include "src/lexer/lexer.hpp"
-#include "src/parser/parser_registry.hpp"
+#include "src/parser/parser.hpp"
 #include "src/ast/item.hpp"
 #include "src/ast/expr.hpp"
 #include "src/ast/type.hpp"

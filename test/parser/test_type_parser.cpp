@@ -5,9 +5,10 @@
 #include <variant>
 
 #include "src/lexer/lexer.hpp"
-#include "src/parser/parser_registry.hpp"
 #include "src/ast/type.hpp"
 #include "src/ast/expr.hpp"
+
+#include "src/parser/parser.hpp"
 
 using namespace parsec;
 

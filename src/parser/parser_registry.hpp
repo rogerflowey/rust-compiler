@@ -1,4 +1,3 @@
-
 #pragma once
 #include "common.hpp"
 
@@ -11,8 +10,7 @@
 
 #include <stdexcept>
 
-// Phase 1: The DI Container
-
+using namespace parsec;
 /**
  * @struct ParserSuite
  * @brief Manages the lifecycle of all parser builders and the registry.
@@ -32,13 +30,10 @@ struct ParserSuite {
 
     bool initialized = false;
 
-    // Phase 3: The new, simplified initialization logic
     void init() {
         if (initialized) return;
 
         // === PASS 1: Create and Register all Lazy Parsers ===
-        // Each builder creates a lazy pair and puts the parser half into the registry.
-        // The setter half is kept to be used in Pass 2.
         auto [path_p, set_path] = lazy<PathPtr, Token>();
         registry.path = path_p;
 
@@ -64,8 +59,6 @@ struct ParserSuite {
         registry.item = item_p;
 
         // === PASS 2: Finalize All Builders ===
-        // The order here DOES NOT MATTER for correctness. Each builder pulls its
-        // dependencies from the registry and uses its setter to define its parser.
         pathB.finalize(registry, set_path);
         typeB.finalize(registry, set_type);
         patternB.finalize(registry, set_pattern);

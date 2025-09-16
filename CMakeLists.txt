@@ -15,6 +15,8 @@ endif()
 
 # Include source and header directories.
 # The "." allows includes like "src/parser/..." and "test/parser/..."
+# NOTE: While this works, using target_include_directories is the modern approach.
+# We will rely on that for our new library.
 include_directories(. src)
 
 # --- Testing Setup ---
@@ -35,21 +37,27 @@ endif()
 
 # --- Dependencies ---
 # Add the parsecpp library from the subdirectory.
-# Its CMakeLists.txt will create the 'parsecpp' library target
-# and, if testing is enabled, the 'parsecpp_tests' target.
 add_subdirectory(lib/parsecpp)
+
+# --- Project Modules ---
+# Add our new parser library. This will execute src/parser/CMakeLists.txt
+# and create the 'parser' target.
+add_subdirectory(src/parser) # <<< ADD THIS LINE
 
 
 # --- Main Executable ---
 add_executable(compiler main.cpp)
 target_include_directories(compiler PRIVATE src)
-target_link_libraries(compiler PRIVATE parsecpp)
+
+# Link the main executable against our new parser library.
+# Because 'parser' has a PUBLIC dependency on 'parsecpp', we no longer
+# need to link parsecpp directly here.
+target_link_libraries(compiler PRIVATE parser) # <<< MODIFY THIS LINE
 
 
 if(BUILD_TESTING)
     add_library(compiler_tests_properties INTERFACE)
 
-    # This PCH will contain headers needed for testing, but not part of parsecpp
     target_precompile_headers(compiler_tests_properties INTERFACE
         <gtest/gtest.h>
     )
@@ -62,15 +70,13 @@ if(BUILD_TESTING)
         get_filename_component(test_name ${test_source_file} NAME_WE)
 
         add_executable(${test_name} ${test_source_file})
-
-        # Set include directories for this specific test
         target_include_directories(${test_name} PRIVATE src)
 
-        # Link against the necessary libraries AND our PCH interface library
+        # Link tests against the parser library.
         target_link_libraries(${test_name} PRIVATE
-            parsecpp
+            parser # <<< MODIFY THIS LINE (replaces parsecpp)
             gtest_main
-            compiler_tests_properties  # <-- This is the key part!
+            compiler_tests_properties
         )
 
         add_test(NAME ${test_name} COMMAND ${test_name})

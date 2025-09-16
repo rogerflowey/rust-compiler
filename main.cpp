@@ -1,18 +1,26 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
-#include "lib/parsecpp/include/parsec.hpp"
 #include "src/lexer/lexer.hpp"
-#include "src/parser/parser_registry.hpp"
+#include "src/parser/parser.hpp"
 #include "src/ast/pretty_print/pretty_print.hpp"
-#include "src/ast/item.hpp"
-#include "src/ast/common.hpp"
-#include "src/parser/utils.hpp"
+#include "src/ast/ast.hpp"
 
 int main() {
-    std::string code;
-    std::cin >> std::noskipws >> code;
+    std::string code = R"(/*
+        Test Package: Semantic-1
+        Test Target: array
+        Author: Wenxin Zheng
+        Time: 2025-08-07
+        Verdict: Success
+        Comment: array test, basic array declaration
+        */
 
+        fn main() {
+            let numbers: [i32; 3] = [10, 20, 30];
+            exit(0);
+        }
+            )";
     std::stringstream code_stream(code);
     Lexer lexer(code_stream);
     const auto& tokens = lexer.tokenize();

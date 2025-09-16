@@ -576,12 +576,77 @@ struct DebugPatternVisitor {
 };
 
 
-// --- AstDebugPrinter Method Implementations ---
-// Now we can define the methods that depend on the visitors.
-// Mark them inline to prevent ODR violations.
-
 inline void AstDebugPrinter::print(const Item& item) { std::visit(DebugItemVisitor{*this}, item.value); }
 inline void AstDebugPrinter::print(const Statement& stmt) { std::visit(DebugStmtVisitor{*this}, stmt.value); }
 inline void AstDebugPrinter::print(const Expr& expr) { std::visit(DebugExprVisitor{*this}, expr.value); }
 inline void AstDebugPrinter::print(const Type& type) { std::visit(DebugTypeVisitor{*this}, type.value); }
 inline void AstDebugPrinter::print(const Pattern& pattern) { std::visit(DebugPatternVisitor{*this}, pattern.value); }
+
+
+inline std::ostream& operator<<(std::ostream& os, const std::vector<ItemPtr>& program) {
+    AstDebugPrinter(os).print_program(program);
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const Item& item) {
+    AstDebugPrinter(os).print(item);
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const Statement& stmt) {
+    AstDebugPrinter(os).print(stmt);
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const Expr& expr) {
+    AstDebugPrinter(os).print(expr);
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const Type& type) {
+    AstDebugPrinter(os).print(type);
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const Pattern& pattern) {
+    AstDebugPrinter(os).print(pattern);
+    return os;
+}
+
+// Overloads for common non-variant helper types
+inline std::ostream& operator<<(std::ostream& os, const Identifier& id) {
+    AstDebugPrinter(os).print(id);
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const Path& path) {
+    AstDebugPrinter(os).print(path);
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const FunctionItem::SelfParam& param) {
+    AstDebugPrinter(os).print(param);
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const BlockExpr& block) {
+    AstDebugPrinter(os).print(block);
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const StructExpr::FieldInit& field_init) {
+    AstDebugPrinter(os).print(field_init);
+    return os;
+}
+
+// Generic overload for unique_ptr to any AST node
+template<typename T>
+inline std::ostream& operator<<(std::ostream& os, const std::unique_ptr<T>& ptr) {
+    if (ptr) {
+        // Recursively call operator<< for the dereferenced object
+        os << *ptr;
+    } else {
+        os << "nullptr";
+    }
+    return os;
+}
