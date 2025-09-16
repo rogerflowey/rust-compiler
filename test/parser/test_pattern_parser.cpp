@@ -82,7 +82,7 @@ TEST_F(PatternParserTest, ParsesIdentifierPatternRefMut) {
 	EXPECT_TRUE(id->is_ref);
 	EXPECT_TRUE(id->is_mut);
 	ASSERT_NE(id->name, nullptr);
-	EXPECT_EQ(id->name->getName(), "x");
+	EXPECT_EQ(id->name->name, "x");
 }
 
 TEST_F(PatternParserTest, ParsesWildcardPattern) {
@@ -100,7 +100,7 @@ TEST_F(PatternParserTest, ParsesRefPatternSingleAmp) {
 	auto inner = get_node<IdentifierPattern>(refp->subpattern);
 	ASSERT_NE(inner, nullptr);
 	ASSERT_NE(inner->name, nullptr);
-	EXPECT_EQ(inner->name->getName(), "x");
+	EXPECT_EQ(inner->name->name, "x");
 }
 
 TEST_F(PatternParserTest, ParsesRefPatternSingleAmpMut) {
@@ -112,7 +112,7 @@ TEST_F(PatternParserTest, ParsesRefPatternSingleAmpMut) {
 	auto inner = get_node<IdentifierPattern>(refp->subpattern);
 	ASSERT_NE(inner, nullptr);
 	ASSERT_NE(inner->name, nullptr);
-	EXPECT_EQ(inner->name->getName(), "x");
+	EXPECT_EQ(inner->name->name, "x");
 }
 
 TEST_F(PatternParserTest, ParsesRefPatternDoubleAmp) {
@@ -128,7 +128,7 @@ TEST_F(PatternParserTest, ParsesRefPatternDoubleAmp) {
 	auto inner = get_node<IdentifierPattern>(refp2->subpattern);
 	ASSERT_NE(inner, nullptr);
 	ASSERT_NE(inner->name, nullptr);
-	EXPECT_EQ(inner->name->getName(), "y");
+	EXPECT_EQ(inner->name->name, "y");
 }
 
 TEST_F(PatternParserTest, ParsesPathPatternSelf) {
@@ -136,11 +136,11 @@ TEST_F(PatternParserTest, ParsesPathPatternSelf) {
 	auto pathp = get_node<PathPattern>(pat);
 	ASSERT_NE(pathp, nullptr);
 	ASSERT_NE(pathp->path, nullptr);
-	const auto &segs = pathp->path->getSegments();
+	const auto &segs = pathp->path->segments;
 	ASSERT_EQ(segs.size(), 1u);
 	EXPECT_EQ(segs[0].type, PathSegType::SELF);
 	ASSERT_TRUE(segs[0].id.has_value());
-	EXPECT_EQ((*segs[0].id)->getName(), "Self");
+	EXPECT_EQ((*segs[0].id)->name, "Self");
 }
 
 TEST_F(PatternParserTest, ParsesMultiSegmentPathPattern) {
@@ -148,12 +148,12 @@ TEST_F(PatternParserTest, ParsesMultiSegmentPathPattern) {
 	auto pathp = get_node<PathPattern>(pat);
 	ASSERT_NE(pathp, nullptr);
 	ASSERT_NE(pathp->path, nullptr);
-	const auto &segs = pathp->path->getSegments();
+	const auto &segs = pathp->path->segments;
 	ASSERT_EQ(segs.size(), 2u);
 	ASSERT_TRUE(segs[0].id.has_value());
 	ASSERT_TRUE(segs[1].id.has_value());
-	EXPECT_EQ((*segs[0].id)->getName(), "Enum");
-	EXPECT_EQ((*segs[1].id)->getName(), "Variant");
+	EXPECT_EQ((*segs[0].id)->name, "Enum");
+	EXPECT_EQ((*segs[1].id)->name, "Variant");
 }
 
 TEST_F(PatternParserTest, BareIdentifierPrefersIdentifierPatternOverPath) {
@@ -161,7 +161,7 @@ TEST_F(PatternParserTest, BareIdentifierPrefersIdentifierPatternOverPath) {
 	auto idp = get_node<IdentifierPattern>(pat);
 	ASSERT_NE(idp, nullptr);
 	ASSERT_NE(idp->name, nullptr);
-	EXPECT_EQ(idp->name->getName(), "x");
+	EXPECT_EQ(idp->name->name, "x");
 }
 TEST_F(PatternParserTest, ParsesDeeplyNestedReferencePattern) {
     auto pat = parse_pattern("&&&mut x");
@@ -179,7 +179,7 @@ TEST_F(PatternParserTest, ParsesDeeplyNestedReferencePattern) {
 
     auto id = get_node<IdentifierPattern>(r3->subpattern);
     ASSERT_NE(id, nullptr);
-    EXPECT_EQ(id->name->getName(), "x");
+    EXPECT_EQ(id->name->name, "x");
 }
 
 TEST_F(PatternParserTest, ParsesNegativeLiteralPattern) {
@@ -200,7 +200,12 @@ TEST_F(PatternParserTest, ParsesReferenceToPathPattern) {
 
     auto pathp = get_node<PathPattern>(refp->subpattern);
     ASSERT_NE(pathp, nullptr);
-    const auto& segs = pathp->path->getSegmentNames();
+    std::vector<std::string> segs;
+    for(const auto& seg : pathp->path->segments) {
+        if(seg.id.has_value()) {
+            segs.push_back(seg.id.value()->name);
+        }
+    }
     ASSERT_EQ(segs.size(), 2u);
     EXPECT_EQ(segs[0], "MyEnum");
     EXPECT_EQ(segs[1], "Variant");

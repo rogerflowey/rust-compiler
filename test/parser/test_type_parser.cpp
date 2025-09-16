@@ -120,17 +120,17 @@ TEST_F(TypeParserTest, ParsesPathTypeIdentifier) {
 	auto pty = get_node<PathType>(ty);
 	ASSERT_NE(pty, nullptr);
 	ASSERT_NE(pty->path, nullptr);
-	const auto &segs = pty->path->getSegments();
+	const auto &segs = pty->path->segments;
 	ASSERT_EQ(segs.size(), 1u);
 	ASSERT_TRUE(segs[0].id.has_value());
-	EXPECT_EQ((*segs[0].id)->getName(), "MyType");
+	EXPECT_EQ((*segs[0].id)->name, "MyType");
 }
 
 TEST_F(TypeParserTest, ParsesPathTypeSelf) {
 	auto ty = parse_type("Self");
 	auto pty = get_node<PathType>(ty);
 	ASSERT_NE(pty, nullptr);
-	const auto &segs = pty->path->getSegments();
+	const auto &segs = pty->path->segments;
 	ASSERT_EQ(segs.size(), 1u);
 	EXPECT_EQ(segs[0].type, PathSegType::SELF);
 }
@@ -158,7 +158,12 @@ TEST_F(TypeParserTest, ParsesDeeplyNestedTypes) {
 
     auto p = get_node<PathType>(r2->referenced_type);
     ASSERT_NE(p, nullptr);
-    const auto& segs = p->path->getSegmentNames();
+    std::vector<std::string> segs;
+    for(const auto& seg : p->path->segments) {
+        if(seg.id.has_value()) {
+            segs.push_back(seg.id.value()->name);
+        }
+    }
     ASSERT_EQ(segs.size(), 2u);
     EXPECT_EQ(segs[0], "my");
     EXPECT_EQ(segs[1], "Type");

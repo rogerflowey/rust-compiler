@@ -73,15 +73,15 @@ private:
             .map([](Token t) -> ExprPtr { return make_expr<BoolLiteralExpr>(t.value == "true"); });
         auto p_number = satisfy<Token>([](const Token& t) ->bool { return t.type == TOKEN_NUMBER; }, "number literal")
             .map([](Token t) -> ExprPtr {
-                // ... (number parsing logic is unchanged)
                 std::string num_part; std::string suffix; size_t i = 0;
                 while (i < t.value.length() && std::isdigit(t.value[i])) { num_part += t.value[i]; i++; }
                 suffix = t.value.substr(i);
                 auto value = std::stoll(num_part);
+                if (suffix == "i32") return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::I32);
                 if (suffix == "u32") return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::U32);
                 if (suffix == "isize") return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::ISIZE);
                 if (suffix == "usize") return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::USIZE);
-                return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::I32);
+                return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::NOT_SPECIFIED);
             });
         return (p_string | p_char | p_bool | p_number).label("a literal expression");
     }

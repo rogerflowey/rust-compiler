@@ -4,6 +4,14 @@
 
 // --- Concrete Item Nodes ---
 struct FunctionItem {
+    struct SelfParam {
+        bool is_reference;
+        bool is_mutable;
+        explicit SelfParam(bool is_reference, bool is_mutable)
+            : is_reference(is_reference), is_mutable(is_mutable) {}
+    };
+    using SelfParamPtr = std::unique_ptr<SelfParam>;
+    
     IdPtr name;
     SelfParamPtr self_param;
     std::vector<std::pair<IdPtr, TypePtr>> params;

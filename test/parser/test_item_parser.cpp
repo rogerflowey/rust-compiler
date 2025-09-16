@@ -56,7 +56,7 @@ TEST_F(ItemParserTest, ParsesFunctionNoReturnType) {
     auto it = parse_item("fn add(a: i32, b: i32) { a + b }");
     auto fn = get_node<FunctionItem>(it);
     ASSERT_NE(fn, nullptr);
-    EXPECT_EQ(fn->name->getName(), "add");
+    EXPECT_EQ(fn->name->name, "add"); // FIXED
     ASSERT_EQ(fn->params.size(), 2u);
     auto p0ty = get_node<PrimitiveType>(fn->params[0].second);
     auto p1ty = get_node<PrimitiveType>(fn->params[1].second);
@@ -82,7 +82,7 @@ TEST_F(ItemParserTest, ParsesFunctionNoParameters) {
     auto it = parse_item("fn answer() -> i32 { 42i32 }");
     auto fn = get_node<FunctionItem>(it);
     ASSERT_NE(fn, nullptr);
-    EXPECT_EQ(fn->name->getName(), "answer");
+    EXPECT_EQ(fn->name->name, "answer"); // FIXED
     ASSERT_EQ(fn->params.size(), 0u);
     ASSERT_NE(fn->return_type, nullptr);
     auto rty = get_node<PrimitiveType>(fn->return_type);
@@ -96,7 +96,7 @@ TEST_F(ItemParserTest, ParsesFunctionEmptyBody) {
     auto it = parse_item("fn do_nothing(a: i32) {}");
     auto fn = get_node<FunctionItem>(it);
     ASSERT_NE(fn, nullptr);
-    EXPECT_EQ(fn->name->getName(), "do_nothing");
+    EXPECT_EQ(fn->name->name, "do_nothing"); // FIXED
     ASSERT_EQ(fn->params.size(), 1u);
     EXPECT_EQ(fn->return_type, nullptr);
     ASSERT_NE(fn->body, nullptr);
@@ -108,7 +108,7 @@ TEST_F(ItemParserTest, ParsesStruct) {
     auto it = parse_item("struct Point { x: i32, y: i32 }");
     auto st = get_node<StructItem>(it);
     ASSERT_NE(st, nullptr);
-    EXPECT_EQ(st->name->getName(), "Point");
+    EXPECT_EQ(st->name->name, "Point"); // FIXED
     ASSERT_EQ(st->fields.size(), 2u);
     auto fx = get_node<PrimitiveType>(st->fields[0].second);
     auto fy = get_node<PrimitiveType>(st->fields[1].second);
@@ -119,7 +119,7 @@ TEST_F(ItemParserTest, ParsesUnitLikeStruct) {
     auto it = parse_item("struct Unit;");
     auto st = get_node<StructItem>(it);
     ASSERT_NE(st, nullptr);
-    EXPECT_EQ(st->name->getName(), "Unit");
+    EXPECT_EQ(st->name->name, "Unit"); // FIXED
     ASSERT_TRUE(st->fields.empty());
 }
 
@@ -127,7 +127,7 @@ TEST_F(ItemParserTest, ParsesEmptyStruct) {
     auto it = parse_item("struct Empty {}");
     auto st = get_node<StructItem>(it);
     ASSERT_NE(st, nullptr);
-    EXPECT_EQ(st->name->getName(), "Empty");
+    EXPECT_EQ(st->name->name, "Empty"); // FIXED
     ASSERT_TRUE(st->fields.empty());
 }
 
@@ -135,35 +135,35 @@ TEST_F(ItemParserTest, ParsesEnum) {
     auto it = parse_item("enum Color { Red, Green, Blue }");
     auto en = get_node<EnumItem>(it);
     ASSERT_NE(en, nullptr);
-    EXPECT_EQ(en->name->getName(), "Color");
+    EXPECT_EQ(en->name->name, "Color"); // FIXED
     ASSERT_EQ(en->variants.size(), 3u);
-    EXPECT_EQ(en->variants[0]->getName(), "Red");
+    EXPECT_EQ(en->variants[0]->name, "Red"); // FIXED
 }
 
 TEST_F(ItemParserTest, ParsesEnumWithTrailingComma) {
     auto it = parse_item("enum Color { Red, Green, Blue, }");
     auto en = get_node<EnumItem>(it);
     ASSERT_NE(en, nullptr);
-    EXPECT_EQ(en->name->getName(), "Color");
+    EXPECT_EQ(en->name->name, "Color"); // FIXED
     ASSERT_EQ(en->variants.size(), 3u);
-    EXPECT_EQ(en->variants[0]->getName(), "Red");
-    EXPECT_EQ(en->variants[2]->getName(), "Blue");
+    EXPECT_EQ(en->variants[0]->name, "Red"); // FIXED
+    EXPECT_EQ(en->variants[2]->name, "Blue"); // FIXED
 }
 
 TEST_F(ItemParserTest, ParsesEnumWithOneVariant) {
     auto it = parse_item("enum Singleton { Only }");
     auto en = get_node<EnumItem>(it);
     ASSERT_NE(en, nullptr);
-    EXPECT_EQ(en->name->getName(), "Singleton");
+    EXPECT_EQ(en->name->name, "Singleton"); // FIXED
     ASSERT_EQ(en->variants.size(), 1u);
-    EXPECT_EQ(en->variants[0]->getName(), "Only");
+    EXPECT_EQ(en->variants[0]->name, "Only"); // FIXED
 }
 
 TEST_F(ItemParserTest, ParsesEmptyEnum) {
     auto it = parse_item("enum Empty {}");
     auto en = get_node<EnumItem>(it);
     ASSERT_NE(en, nullptr);
-    EXPECT_EQ(en->name->getName(), "Empty");
+    EXPECT_EQ(en->name->name, "Empty"); // FIXED
     ASSERT_TRUE(en->variants.empty());
 }
 
@@ -171,7 +171,7 @@ TEST_F(ItemParserTest, ParsesConstItem) {
     auto it = parse_item("const MAX: i32 = 10i32;");
     auto ci = get_node<ConstItem>(it);
     ASSERT_NE(ci, nullptr);
-    EXPECT_EQ(ci->name->getName(), "MAX");
+    EXPECT_EQ(ci->name->name, "MAX"); // FIXED
     auto cty = get_node<PrimitiveType>(ci->type);
     ASSERT_NE(cty, nullptr);
     auto lit = get_node<IntegerLiteralExpr>(ci->value);
@@ -183,7 +183,7 @@ TEST_F(ItemParserTest, ParsesConstItemBool) {
     auto it = parse_item("const ENABLED: bool = true;");
     auto ci = get_node<ConstItem>(it);
     ASSERT_NE(ci, nullptr);
-    EXPECT_EQ(ci->name->getName(), "ENABLED");
+    EXPECT_EQ(ci->name->name, "ENABLED"); // FIXED
     auto cty = get_node<PrimitiveType>(ci->type);
     ASSERT_NE(cty, nullptr);
     EXPECT_EQ(cty->kind, PrimitiveType::BOOL);
@@ -196,7 +196,7 @@ TEST_F(ItemParserTest, ParsesConstItemString) {
     auto it = parse_item("const MSG: &str = \"hello\";");
     auto ci = get_node<ConstItem>(it);
     ASSERT_NE(ci, nullptr);
-    EXPECT_EQ(ci->name->getName(), "MSG");
+    EXPECT_EQ(ci->name->name, "MSG"); // FIXED
     auto cty = get_node<ReferenceType>(ci->type);
     ASSERT_NE(cty, nullptr);
     ASSERT_FALSE(cty->is_mutable);
@@ -219,11 +219,11 @@ TEST_F(ItemParserTest, ParsesTraitWithFunction) {
     auto it = parse_item("trait Printable { fn print(&self); }");
     auto tr = get_node<TraitItem>(it);
     ASSERT_NE(tr, nullptr);
-    EXPECT_EQ(tr->name->getName(), "Printable");
+    EXPECT_EQ(tr->name->name, "Printable"); // FIXED
     ASSERT_EQ(tr->items.size(), 1u);
     auto fn = get_node<FunctionItem>(tr->items[0]);
     ASSERT_NE(fn, nullptr);
-    EXPECT_EQ(fn->name->getName(), "print");
+    EXPECT_EQ(fn->name->name, "print"); // FIXED
     ASSERT_EQ(fn->params.size(), 0u);
     ASSERT_NE(fn->self_param, nullptr);
     EXPECT_FALSE(fn->self_param->is_mutable);
@@ -240,7 +240,7 @@ TEST_F(ItemParserTest, ParsesInherentImplWithFunction) {
     ASSERT_EQ(im->items.size(), 1u);
     auto fn = get_node<FunctionItem>(im->items[0]);
     ASSERT_NE(fn, nullptr);
-    EXPECT_EQ(fn->name->getName(), "zero");
+    EXPECT_EQ(fn->name->name, "zero"); // FIXED
 }
 
 TEST_F(ItemParserTest, ParsesInherentImplWithMultipleFunctions) {
@@ -249,14 +249,14 @@ TEST_F(ItemParserTest, ParsesInherentImplWithMultipleFunctions) {
     ASSERT_NE(im, nullptr);
     auto for_path = get_node<PathType>(im->for_type);
     ASSERT_NE(for_path, nullptr);
-    EXPECT_EQ(for_path->path->getSegmentNames()[0], "Point");
+    EXPECT_EQ((*for_path->path->segments[0].id)->name, "Point"); // FIXED
     ASSERT_EQ(im->items.size(), 2u);
     auto fn1 = get_node<FunctionItem>(im->items[0]);
     ASSERT_NE(fn1, nullptr);
-    EXPECT_EQ(fn1->name->getName(), "new");
+    EXPECT_EQ(fn1->name->name, "new"); // FIXED
     auto fn2 = get_node<FunctionItem>(im->items[1]);
     ASSERT_NE(fn2, nullptr);
-    EXPECT_EQ(fn2->name->getName(), "x");
+    EXPECT_EQ(fn2->name->name, "x"); // FIXED
 }
 
 TEST_F(ItemParserTest, ParsesTraitImpl) {
@@ -264,7 +264,7 @@ TEST_F(ItemParserTest, ParsesTraitImpl) {
     auto im = get_node<TraitImplItem>(it);
     ASSERT_NE(im, nullptr);
     ASSERT_NE(im->trait_name, nullptr);
-    EXPECT_EQ(im->trait_name->getName(), "Display");
+    EXPECT_EQ(im->trait_name->name, "Display"); // FIXED
     auto for_prim = get_node<PrimitiveType>(im->for_type);
     ASSERT_NE(for_prim, nullptr);
     EXPECT_EQ(for_prim->kind, PrimitiveType::I32);
@@ -358,17 +358,17 @@ TEST_F(ItemParserTest, StructWithComplexFieldsAndTrailingComma) {
     auto it = parse_item("struct Node { next: &Node, val: i32, }");
     auto st = get_node<StructItem>(it);
     ASSERT_NE(st, nullptr);
-    EXPECT_EQ(st->name->getName(), "Node");
+    EXPECT_EQ(st->name->name, "Node"); // FIXED
     ASSERT_EQ(st->fields.size(), 2u);
 
-    EXPECT_EQ(st->fields[0].first->getName(), "next");
+    EXPECT_EQ(st->fields[0].first->name, "next"); // FIXED
     auto f0_ty = get_node<ReferenceType>(st->fields[0].second);
     ASSERT_NE(f0_ty, nullptr);
     auto inner_path = get_node<PathType>(f0_ty->referenced_type);
     ASSERT_NE(inner_path, nullptr);
-    EXPECT_EQ(inner_path->path->getSegmentNames()[0], "Node");
+    EXPECT_EQ((*inner_path->path->segments[0].id)->name, "Node"); // FIXED
 
-    EXPECT_EQ(st->fields[1].first->getName(), "val");
+    EXPECT_EQ(st->fields[1].first->name, "val"); // FIXED
     auto f1_ty = get_node<PrimitiveType>(st->fields[1].second);
     ASSERT_NE(f1_ty, nullptr);
     EXPECT_EQ(f1_ty->kind, PrimitiveType::I32);
@@ -390,9 +390,9 @@ TEST_F(ItemParserTest, ImplWithAssociatedConst) {
 
     auto ci = get_node<ConstItem>(im->items[0]);
     ASSERT_NE(ci, nullptr);
-    EXPECT_EQ(ci->name->getName(), "ORIGIN");
+    EXPECT_EQ(ci->name->name, "ORIGIN"); // FIXED
 
     auto fn = get_node<FunctionItem>(im->items[1]);
     ASSERT_NE(fn, nullptr);
-    EXPECT_EQ(fn->name->getName(), "is_origin");
+    EXPECT_EQ(fn->name->name, "is_origin"); // FIXED
 }

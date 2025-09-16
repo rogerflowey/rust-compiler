@@ -43,10 +43,3 @@ struct Path {
 };
 using PathPtr = std::unique_ptr<Path>;
 
-struct SelfParam {
-    bool is_reference;
-    bool is_mutable;
-    explicit SelfParam(bool is_reference, bool is_mutable)
-        : is_reference(is_reference), is_mutable(is_mutable) {}
-};
-using SelfParamPtr = std::unique_ptr<SelfParam>;

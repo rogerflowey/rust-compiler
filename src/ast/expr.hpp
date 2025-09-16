@@ -9,7 +9,7 @@ struct BlockExpr {
 };
 
 struct IntegerLiteralExpr {
-    enum Type { I32, U32, ISIZE, USIZE };
+    enum Type { I32, U32, ISIZE, USIZE, NOT_SPECIFIED };
     int64_t value;
     Type type;
 };

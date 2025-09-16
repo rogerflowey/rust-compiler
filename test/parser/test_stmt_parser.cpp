@@ -110,7 +110,7 @@ TEST_F(StmtParserTest, ParsesItemAsStatement) {
         ASSERT_NE(is, nullptr);
         auto fn = get_node<FunctionItem>(is->item);
         ASSERT_NE(fn, nullptr);
-        EXPECT_EQ(fn->name->getName(), "helper");
+        EXPECT_EQ(fn->name->name, "helper");
     }
     {
         auto s = parse_stmt("struct Point { x: i32, y: i32 }");
@@ -118,7 +118,7 @@ TEST_F(StmtParserTest, ParsesItemAsStatement) {
         ASSERT_NE(is, nullptr);
         auto st = get_node<StructItem>(is->item);
         ASSERT_NE(st, nullptr);
-        EXPECT_EQ(st->name->getName(), "Point");
+        EXPECT_EQ(st->name->name, "Point");
     }
 }
 
@@ -132,7 +132,7 @@ TEST_F(StmtParserTest, ParsesLetWithComplexPattern) {
     ASSERT_NE(refp, nullptr);
     auto idp = get_node<IdentifierPattern>(refp->subpattern);
     ASSERT_NE(idp, nullptr);
-    EXPECT_EQ(idp->name->getName(), "x");
+    EXPECT_EQ(idp->name->name, "x");
 
     ASSERT_TRUE(let->type_annotation.has_value());
     ASSERT_TRUE(let->initializer.has_value());

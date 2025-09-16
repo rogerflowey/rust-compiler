@@ -7,7 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
 
-set(CMAKE_CXX_COMPILER_LAUNCHER ccache)
+find_program(CCACHE_FOUND ccache)
+if(CCACHE_FOUND)
+    set(CMAKE_CXX_COMPILER_LAUNCHER ccache)
+endif()
 
 
 # Include source and header directories.
@@ -52,7 +55,7 @@ if(BUILD_TESTING)
     )
 
     # 3. Find all your test source files
-    file(GLOB COMPILER_TEST_SOURCES "test/parser/*.cpp" "test/lexer/*.cpp")
+    file(GLOB_RECURSE COMPILER_TEST_SOURCES "test/*.cpp")
 
     # 4. Loop over each test source file
     foreach(test_source_file ${COMPILER_TEST_SOURCES})

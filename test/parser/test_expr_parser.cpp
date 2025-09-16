@@ -92,7 +92,7 @@ TEST_F(ExprParserTest, ParsesIntAndUintLiterals) {
     auto i = get_node<IntegerLiteralExpr>(e);
     ASSERT_NE(i, nullptr);
     EXPECT_EQ(i->value, 7);
-    EXPECT_EQ(i->type, IntegerLiteralExpr::I32);
+    EXPECT_EQ(i->type, IntegerLiteralExpr::NOT_SPECIFIED);
   }
 }
 
@@ -176,10 +176,10 @@ TEST_F(ExprParserTest, ParsesPostfixCallIndexFieldMethod) {
     auto e = parse_expr("a.b.c");
     auto f1 = get_node<FieldAccessExpr>(e);
     ASSERT_NE(f1, nullptr);
-    EXPECT_EQ(f1->field_name->getName(), "c");
+    EXPECT_EQ(f1->field_name->name, "c"); // FIXED
     auto f2 = get_node<FieldAccessExpr>(f1->object);
     ASSERT_NE(f2, nullptr);
-    EXPECT_EQ(f2->field_name->getName(), "b");
+    EXPECT_EQ(f2->field_name->name, "b"); // FIXED
     auto p = get_node<PathExpr>(f2->object);
     ASSERT_NE(p, nullptr);
   }
@@ -313,8 +313,8 @@ TEST_F(ExprParserTest, ParsesStructExpr) {
     ASSERT_NE(s, nullptr);
     auto p = s->path.get();
     ASSERT_NE(p, nullptr);
-    ASSERT_EQ(p->getSegments().size(), 1u);
-    EXPECT_EQ(p->getSegmentNames()[0], "MyStruct");
+    ASSERT_EQ(p->segments.size(), 1u); // FIXED
+    EXPECT_EQ((*p->segments[0].id)->name, "MyStruct"); // FIXED
     EXPECT_EQ(s->fields.size(), 0u);
   }
   {
@@ -322,7 +322,7 @@ TEST_F(ExprParserTest, ParsesStructExpr) {
     auto s = get_node<StructExpr>(e);
     ASSERT_NE(s, nullptr);
     ASSERT_EQ(s->fields.size(), 1u);
-    EXPECT_EQ(s->fields[0].name->getName(), "field1");
+    EXPECT_EQ(s->fields[0].name->name, "field1"); // FIXED
     auto i = get_node<IntegerLiteralExpr>(s->fields[0].value);
     ASSERT_NE(i, nullptr);
     EXPECT_EQ(i->value, 1);
@@ -332,8 +332,8 @@ TEST_F(ExprParserTest, ParsesStructExpr) {
     auto s = get_node<StructExpr>(e);
     ASSERT_NE(s, nullptr);
     ASSERT_EQ(s->fields.size(), 2u);
-    EXPECT_EQ(s->fields[0].name->getName(), "field1");
-    EXPECT_EQ(s->fields[1].name->getName(), "field2");
+    EXPECT_EQ(s->fields[0].name->name, "field1"); // FIXED
+    EXPECT_EQ(s->fields[1].name->name, "field2"); // FIXED
     auto i = get_node<IntegerLiteralExpr>(s->fields[0].value);
     ASSERT_NE(i, nullptr);
     EXPECT_EQ(i->value, 1);
@@ -346,25 +346,23 @@ TEST_F(ExprParserTest, ParsesStructExpr) {
       auto outer = get_node<StructExpr>(e);
       ASSERT_NE(outer, nullptr);
       ASSERT_EQ(outer->fields.size(), 1u);
-      EXPECT_EQ(outer->fields[0].name->getName(), "inner");
+      EXPECT_EQ(outer->fields[0].name->name, "inner"); // FIXED
       auto inner = get_node<StructExpr>(outer->fields[0].value);
       ASSERT_NE(inner, nullptr);
       ASSERT_EQ(inner->fields.size(), 1u);
-      EXPECT_EQ(inner->fields[0].name->getName(), "x");
+      EXPECT_EQ(inner->fields[0].name->name, "x"); // FIXED
       auto x = get_node<IntegerLiteralExpr>(inner->fields[0].value);
       ASSERT_NE(x, nullptr);
       EXPECT_EQ(x->value, 1);
   }
 }
 TEST_F(ExprParserTest, ComplexPostfixChain) {
-  // This tests the parser's ability to handle a left-to-right chain of
-  // different postfix operators: call -> field access -> index -> method call
   auto e = parse_expr("get_obj().field[0i32].process(true)");
 
   // Outer-most is the method call
   auto mcall = get_node<MethodCallExpr>(e);
   ASSERT_NE(mcall, nullptr);
-  EXPECT_EQ(mcall->method_name->getName(), "process");
+  EXPECT_EQ(mcall->method_name->name, "process"); // FIXED
   ASSERT_EQ(mcall->args.size(), 1u);
 
   // Next is the index expression
@@ -374,19 +372,17 @@ TEST_F(ExprParserTest, ComplexPostfixChain) {
   // Next is the field access
   auto fld = get_node<FieldAccessExpr>(idx->array);
   ASSERT_NE(fld, nullptr);
-  EXPECT_EQ(fld->field_name->getName(), "field");
+  EXPECT_EQ(fld->field_name->name, "field"); // FIXED
 
   // Innermost is the initial function call
   auto call = get_node<CallExpr>(fld->object);
   ASSERT_NE(call, nullptr);
   auto callee = get_node<PathExpr>(call->callee);
   ASSERT_NE(callee, nullptr);
-  EXPECT_EQ(callee->path->getSegmentNames()[0], "get_obj");
+  EXPECT_EQ((*callee->path->segments[0].id)->name, "get_obj"); // FIXED
 }
 
 TEST_F(ExprParserTest, PrecedenceWithUnaryAndCast) {
-  // Test interaction between unary, cast, and binary operators.
-  // Should parse as: `(-(1i32)) as isize * 2isize`
   auto e = parse_expr("-1i32 as isize * 2isize");
   auto mul = get_node<BinaryExpr>(e);
   ASSERT_NE(mul, nullptr);
@@ -404,7 +400,6 @@ TEST_F(ExprParserTest, PrecedenceWithUnaryAndCast) {
 }
 
 TEST_F(ExprParserTest, TrailingCommasInLiterals) {
-  // Trailing commas are common corner cases in list-like structures.
   {
     auto e = parse_expr("[1i32, 2i32, ]");
     auto a = get_node<ArrayInitExpr>(e);
@@ -443,4 +438,177 @@ TEST_F(ExprParserTest, BlockAsExpressionValue) {
         auto cond_block = get_node<BlockExpr>(i->condition);
         ASSERT_NE(cond_block, nullptr);
     }
+}
+
+TEST_F(ExprParserTest, PrecedenceInteractions) {
+  {
+    auto e = parse_expr("!visited[i]");
+
+    // The root of the AST should be the Unary NOT operator.
+    auto unary_not = get_node<UnaryExpr>(e);
+    ASSERT_NE(unary_not, nullptr);
+    EXPECT_EQ(unary_not->op, UnaryExpr::NOT);
+
+    // Its operand should be the Index expression `visited[i]`.
+    auto index_expr = get_node<IndexExpr>(unary_not->operand);
+    ASSERT_NE(index_expr, nullptr);
+
+    // The array part of the index should be the path "visited".
+    auto array_path = get_node<PathExpr>(index_expr->array);
+    ASSERT_NE(array_path, nullptr);
+    ASSERT_EQ(array_path->path->segments.size(), 1u);
+    EXPECT_EQ((*array_path->path->segments[0].id)->name, "visited");
+
+    // The index part of the index should be the path "i".
+    auto index_path = get_node<PathExpr>(index_expr->index);
+    ASSERT_NE(index_path, nullptr);
+    ASSERT_EQ(index_path->path->segments.size(), 1u);
+    EXPECT_EQ((*index_path->path->segments[0].id)->name, "i");
+  }
+  {
+    auto e = parse_expr("foo.bar + 1i32");
+    auto bin_add = get_node<BinaryExpr>(e);
+    ASSERT_NE(bin_add, nullptr);
+    EXPECT_EQ(bin_add->op, BinaryExpr::ADD);
+
+    // The left-hand side should be the field access.
+    auto field_access = get_node<FieldAccessExpr>(bin_add->left);
+    ASSERT_NE(field_access, nullptr);
+    EXPECT_EQ(field_access->field_name->name, "bar");
+
+    // The right-hand side should be the integer literal.
+    auto literal = get_node<IntegerLiteralExpr>(bin_add->right);
+    ASSERT_NE(literal, nullptr);
+    EXPECT_EQ(literal->value, 1);
+  }
+  {
+    auto e = parse_expr("-x * y");
+    auto bin_mul = get_node<BinaryExpr>(e);
+    ASSERT_NE(bin_mul, nullptr);
+    EXPECT_EQ(bin_mul->op, BinaryExpr::MUL);
+
+    // The left-hand side should be the unary negation.
+    auto unary_neg = get_node<UnaryExpr>(bin_mul->left);
+    ASSERT_NE(unary_neg, nullptr);
+    EXPECT_EQ(unary_neg->op, UnaryExpr::NEGATE);
+
+    // The right-hand side should be the path "y".
+    auto path_y = get_node<PathExpr>(bin_mul->right);
+    ASSERT_NE(path_y, nullptr);
+  }
+}TEST_F(ExprParserTest, CastAndOperatorPrecedence) {
+  auto e = parse_expr("*ptr as &mut u32 > 0u32");
+
+  // The root should be the binary Greater Than operator.
+  auto bin_gt = get_node<BinaryExpr>(e);
+  ASSERT_NE(bin_gt, nullptr);
+  EXPECT_EQ(bin_gt->op, BinaryExpr::GT);
+
+  // The right side is the simple literal.
+  auto literal_zero = get_node<IntegerLiteralExpr>(bin_gt->right);
+  ASSERT_NE(literal_zero, nullptr);
+  EXPECT_EQ(literal_zero->value, 0);
+
+  auto cast_expr = get_node<CastExpr>(bin_gt->left);
+  ASSERT_NE(cast_expr, nullptr);
+
+  // The expression *being cast* is the UnaryExpr `*ptr`.
+  auto unary_deref = get_node<UnaryExpr>(cast_expr->expr);
+  ASSERT_NE(unary_deref, nullptr);
+  EXPECT_EQ(unary_deref->op, UnaryExpr::DEREFERENCE);
+
+  // The operand of the dereference is the path "ptr".
+  auto path_ptr = get_node<PathExpr>(unary_deref->operand);
+  ASSERT_NE(path_ptr, nullptr);
+  
+  // The type being cast to is `&mut u32`.
+  auto ref_type = get_node<ReferenceType>(cast_expr->type);
+  ASSERT_NE(ref_type, nullptr);
+  EXPECT_TRUE(ref_type->is_mutable);
+  auto referenced_primitive = get_node<PrimitiveType>(ref_type->referenced_type);
+  ASSERT_NE(referenced_primitive, nullptr);
+  EXPECT_EQ(referenced_primitive->kind, PrimitiveType::U32);
+}
+
+TEST_F(ExprParserTest, FullPrecedenceChain) {
+  auto e = parse_expr("x && *&obj.calculate(y)[0] as i32 < 100i32");
+
+  // 1. The lowest precedence operator is `&&`.
+  auto logical_and = get_node<BinaryExpr>(e);
+  ASSERT_NE(logical_and, nullptr);
+  EXPECT_EQ(logical_and->op, BinaryExpr::AND);
+  auto path_x = get_node<PathExpr>(logical_and->left);
+  ASSERT_NE(path_x, nullptr);
+
+  // 2. The next lowest is `<`.
+  auto less_than = get_node<BinaryExpr>(logical_and->right);
+  ASSERT_NE(less_than, nullptr);
+  EXPECT_EQ(less_than->op, BinaryExpr::LT);
+  auto literal_100 = get_node<IntegerLiteralExpr>(less_than->right);
+  ASSERT_NE(literal_100, nullptr);
+
+  // 3. Next is the `as` cast.
+  auto cast_expr = get_node<CastExpr>(less_than->left);
+  ASSERT_NE(cast_expr, nullptr);
+  auto type_i32 = get_node<PrimitiveType>(cast_expr->type);
+  ASSERT_NE(type_i32, nullptr);
+  EXPECT_EQ(type_i32->kind, PrimitiveType::I32);
+
+  // 4. Next is the prefix `*` (dereference).
+  auto deref_op = get_node<UnaryExpr>(cast_expr->expr);
+  ASSERT_NE(deref_op, nullptr);
+  EXPECT_EQ(deref_op->op, UnaryExpr::DEREFERENCE);
+
+  // 5. Next is the prefix `&` (reference).
+  auto ref_op = get_node<UnaryExpr>(deref_op->operand);
+  ASSERT_NE(ref_op, nullptr);
+  EXPECT_EQ(ref_op->op, UnaryExpr::REFERENCE);
+
+  // 6. Next is the postfix `[]` (index).
+  auto index_op = get_node<IndexExpr>(ref_op->operand);
+  ASSERT_NE(index_op, nullptr);
+  e = parse_expr("x && *&obj.calculate(y)[0i32] as i32 < 100i32");
+  logical_and = get_node<BinaryExpr>(e);
+  less_than = get_node<BinaryExpr>(logical_and->right);
+  cast_expr = get_node<CastExpr>(less_than->left);
+  deref_op = get_node<UnaryExpr>(cast_expr->expr);
+  ref_op = get_node<UnaryExpr>(deref_op->operand);
+  index_op = get_node<IndexExpr>(ref_op->operand);
+  ASSERT_NE(index_op, nullptr);
+  auto literal_0_i32 = get_node<IntegerLiteralExpr>(index_op->index);
+  ASSERT_NE(literal_0_i32, nullptr);
+  EXPECT_EQ(literal_0_i32->value, 0);
+
+  auto method_call = get_node<MethodCallExpr>(index_op->array);
+  ASSERT_NE(method_call, nullptr);
+  EXPECT_EQ(method_call->method_name->name, "calculate");
+  ASSERT_EQ(method_call->args.size(), 1u);
+
+  auto path_obj = get_node<PathExpr>(method_call->receiver);
+  ASSERT_NE(path_obj, nullptr);
+  EXPECT_EQ((*path_obj->path->segments[0].id)->name, "obj");
+}
+
+TEST_F(ExprParserTest, LogicalVsComparisonPrecedence) {
+  auto e = parse_expr("a > b && c < d");
+
+  auto logical_and = get_node<BinaryExpr>(e);
+  ASSERT_NE(logical_and, nullptr);
+  EXPECT_EQ(logical_and->op, BinaryExpr::AND);
+
+  auto gt_expr = get_node<BinaryExpr>(logical_and->left);
+  ASSERT_NE(gt_expr, nullptr);
+  EXPECT_EQ(gt_expr->op, BinaryExpr::GT);
+  auto path_a = get_node<PathExpr>(gt_expr->left);
+  auto path_b = get_node<PathExpr>(gt_expr->right);
+  ASSERT_NE(path_a, nullptr);
+  ASSERT_NE(path_b, nullptr);
+
+  auto lt_expr = get_node<BinaryExpr>(logical_and->right);
+  ASSERT_NE(lt_expr, nullptr);
+  EXPECT_EQ(lt_expr->op, BinaryExpr::LT);
+  auto path_c = get_node<PathExpr>(lt_expr->left);
+  auto path_d = get_node<PathExpr>(lt_expr->right);
+  ASSERT_NE(path_c, nullptr);
+  ASSERT_NE(path_d, nullptr);
 }

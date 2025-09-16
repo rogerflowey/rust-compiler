@@ -55,8 +55,8 @@ private:
     auto p_self_tok = equal({TOKEN_KEYWORD, "self"});
     auto p_amp = equal({TOKEN_OPERATOR, "&"}).optional();
     auto p_comma = equal({TOKEN_SEPARATOR, ","});
-    auto selfParam = p_amp.andThen(p_mut).andThen(p_self_tok).map([](auto &&t) -> SelfParamPtr {
-        auto &[amp, mut, _] = t; return std::make_unique<SelfParam>(amp.has_value(), mut.has_value());
+    auto selfParam = p_amp.andThen(p_mut).andThen(p_self_tok).map([](auto &&t) -> FunctionItem::SelfParamPtr {
+        auto &[amp, mut, _] = t; return std::make_unique<FunctionItem::SelfParam>(amp.has_value(), mut.has_value());
     });
     auto funcParam = (p_identifier.andThen(equal({TOKEN_SEPARATOR, ":"}) > typeParser)).map([](auto &&p) {
         return std::pair<IdPtr, TypePtr>(std::move(std::get<0>(p)), std::move(std::get<1>(p)));
@@ -68,14 +68,14 @@ private:
     auto p_self_prefix = (selfParam < p_comma).optional();
     auto p_with_regular_params = p_self_prefix.andThen(p_func_param_list).keepLeft(p_comma.optional()).map([](auto &&t) {
         auto &[opt_self, params] = t;
-        SelfParamPtr self = opt_self ? std::move(*opt_self) : nullptr;
+        FunctionItem::SelfParamPtr self = opt_self ? std::move(*opt_self) : nullptr;
         return std::make_pair(std::move(self), std::move(params));
     });
     auto params_content = p_with_regular_params | p_only_self;
     auto params = (equal({TOKEN_DELIMITER, "("}) > params_content.optional() < equal({TOKEN_DELIMITER, ")"}))
         .map([](auto &&mv) {
             if (mv) return std::move(*mv);
-            return std::make_pair(SelfParamPtr(nullptr), std::vector<std::pair<IdPtr, TypePtr>>{});
+            return std::make_pair(FunctionItem::SelfParamPtr(nullptr), std::vector<std::pair<IdPtr, TypePtr>>{});
         });
     auto retTy = (equal({TOKEN_OPERATOR, "->"}) > typeParser).optional();
     auto body = blockParser.map([](auto &&b) -> BlockExprPtr { return std::move(b); });
