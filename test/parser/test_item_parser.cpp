@@ -104,6 +104,23 @@ TEST_F(ItemParserTest, ParsesFunctionEmptyBody) {
     EXPECT_FALSE(fn->body->final_expr.has_value());
 }
 
+TEST_F(ItemParserTest, ParsesFunctionWithMutableParameter) {
+    auto it = parse_item("fn foo(mut a: i32) {}");
+    auto fn = get_node<FunctionItem>(it);
+    ASSERT_NE(fn, nullptr);
+    EXPECT_EQ(fn->name->name, "foo");
+    ASSERT_EQ(fn->params.size(), 1u);
+
+    auto pat = get_node<IdentifierPattern>(fn->params[0].first);
+    ASSERT_NE(pat, nullptr);
+    EXPECT_EQ(pat->name->name, "a");
+    EXPECT_TRUE(pat->is_mut);
+
+    auto pty = get_node<PrimitiveType>(fn->params[0].second);
+    ASSERT_NE(pty, nullptr);
+    EXPECT_EQ(pty->kind, PrimitiveType::I32);
+}
+
 TEST_F(ItemParserTest, ParsesStruct) {
     auto it = parse_item("struct Point { x: i32, y: i32 }");
     auto st = get_node<StructItem>(it);

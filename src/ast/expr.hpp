@@ -28,13 +28,13 @@ struct UnaryExpr {
 };
 
 struct BinaryExpr {
-    enum Op { ADD, SUB, MUL, DIV, REM, AND, OR, BIT_AND, EQ, NE, LT, GT, LE, GE };
+    enum Op { ADD, SUB, MUL, DIV, REM, AND, OR, BIT_AND, BIT_XOR, EQ, NE, LT, GT, LE, GE };
     Op op;
     ExprPtr left, right;
 };
 
 struct AssignExpr {
-    enum Op { ASSIGN, ADD_ASSIGN, SUB_ASSIGN };
+    enum Op { ASSIGN, ADD_ASSIGN, SUB_ASSIGN, XOR_ASSIGN };
     Op op;
     ExprPtr left, right;
 };

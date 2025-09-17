@@ -19,9 +19,15 @@ using ItemParser = parsec::Parser<ItemPtr, Token>;
  */
 struct ParserRegistry {
     PathParser path;
+
     ExprParser expr;
     ExprParser exprWithBlock;
     ExprParser literalExpr; // Specifically for PatternParser
+
+    ExprParser assignableExpr;
+    ExprParser valueableExpr;
+    ExprParser placeExpr;
+
     TypeParser type;
     PatternParser pattern;
     StmtParser stmt;

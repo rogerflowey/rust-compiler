@@ -14,7 +14,7 @@ struct FunctionItem {
     
     IdPtr name;
     SelfParamPtr self_param;
-    std::vector<std::pair<IdPtr, TypePtr>> params;
+    std::vector<std::pair<PatternPtr, TypePtr>> params;
     TypePtr return_type;
     BlockExprPtr body;
 };

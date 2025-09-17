@@ -248,6 +248,7 @@ inline const char* to_string(BinaryExpr::Op op) {
         case BinaryExpr::Op::MUL: return "MUL"; case BinaryExpr::Op::DIV: return "DIV";
         case BinaryExpr::Op::REM: return "REM"; case BinaryExpr::Op::AND: return "AND";
         case BinaryExpr::Op::OR: return "OR"; case BinaryExpr::Op::BIT_AND: return "BIT_AND";
+        case BinaryExpr::Op::BIT_XOR: return "BIT_XOR";
         case BinaryExpr::Op::EQ: return "EQ"; case BinaryExpr::Op::NE: return "NE";
         case BinaryExpr::Op::LT: return "LT"; case BinaryExpr::Op::GT: return "GT";
         case BinaryExpr::Op::LE: return "LE"; case BinaryExpr::Op::GE: return "GE";
@@ -260,6 +261,7 @@ inline const char* to_string(AssignExpr::Op op) {
         case AssignExpr::Op::ASSIGN: return "ASSIGN";
         case AssignExpr::Op::ADD_ASSIGN: return "ADD_ASSIGN";
         case AssignExpr::Op::SUB_ASSIGN: return "SUB_ASSIGN";
+        case AssignExpr::Op::XOR_ASSIGN: return "XOR_ASSIGN";
     }
     return "???";
 }

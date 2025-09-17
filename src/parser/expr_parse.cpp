@@ -229,6 +229,7 @@ void ExprParserBuilder::addInfixOperators(parsec::PrattParserBuilder<ExprPtr, To
     builder.addInfixLeft({TOKEN_OPERATOR, "+"}, 50, bin(BinaryExpr::ADD));
     builder.addInfixLeft({TOKEN_OPERATOR, "-"}, 50, bin(BinaryExpr::SUB));
     builder.addInfixLeft({TOKEN_OPERATOR, "&"}, 45, bin(BinaryExpr::BIT_AND));
+    builder.addInfixLeft({TOKEN_OPERATOR, "^"}, 42, bin(BinaryExpr::BIT_XOR));
     builder.addInfixLeft({TOKEN_OPERATOR, "=="}, 40, bin(BinaryExpr::EQ));
     builder.addInfixLeft({TOKEN_OPERATOR, "!="}, 40, bin(BinaryExpr::NE));
     builder.addInfixLeft({TOKEN_OPERATOR, "<"}, 40, bin(BinaryExpr::LT));
@@ -240,4 +241,5 @@ void ExprParserBuilder::addInfixOperators(parsec::PrattParserBuilder<ExprPtr, To
     builder.addInfixRight({TOKEN_OPERATOR, "="}, 10, assign(AssignExpr::ASSIGN));
     builder.addInfixRight({TOKEN_OPERATOR, "+="}, 10, assign(AssignExpr::ADD_ASSIGN));
     builder.addInfixRight({TOKEN_OPERATOR, "-="}, 10, assign(AssignExpr::SUB_ASSIGN));
+    builder.addInfixRight({TOKEN_OPERATOR, "^="}, 10, assign(AssignExpr::XOR_ASSIGN));
 }

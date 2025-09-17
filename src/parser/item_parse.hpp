@@ -22,6 +22,7 @@ private:
                    const ExprParser &exprParser) const;
   
   ItemParser buildFunctionParser(
+      const PatternParser &patternParser, 
       const TypeParser &typeParser,
       const parsec::Parser<BlockExprPtr, Token> &blockParser) const;
 

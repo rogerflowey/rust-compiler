@@ -612,3 +612,36 @@ TEST_F(ExprParserTest, LogicalVsComparisonPrecedence) {
   ASSERT_NE(path_c, nullptr);
   ASSERT_NE(path_d, nullptr);
 }
+
+TEST_F(ExprParserTest, BitwiseXorPrecedence) {
+  auto e = parse_expr("a & b ^ c || d");
+  auto or_op = get_node<BinaryExpr>(e);
+  ASSERT_NE(or_op, nullptr);
+  EXPECT_EQ(or_op->op, BinaryExpr::OR);
+
+  auto xor_op = get_node<BinaryExpr>(or_op->left);
+  ASSERT_NE(xor_op, nullptr);
+  EXPECT_EQ(xor_op->op, BinaryExpr::BIT_XOR);
+
+  auto and_op = get_node<BinaryExpr>(xor_op->left);
+  ASSERT_NE(and_op, nullptr);
+  EXPECT_EQ(and_op->op, BinaryExpr::BIT_AND);
+}
+
+TEST_F(ExprParserTest, BitwiseXorAssignment) {
+    auto e = parse_expr("a ^= b");
+    auto assign_op = get_node<AssignExpr>(e);
+    ASSERT_NE(assign_op, nullptr);
+    EXPECT_EQ(assign_op->op, AssignExpr::XOR_ASSIGN);
+}
+
+TEST_F(ExprParserTest, XorAssignmentIsRightAssociative) {
+  auto e = parse_expr("a ^= b ^= c");
+  auto outer_assign = get_node<AssignExpr>(e);
+  ASSERT_NE(outer_assign, nullptr);
+  EXPECT_EQ(outer_assign->op, AssignExpr::XOR_ASSIGN);
+
+  auto inner_assign = get_node<AssignExpr>(outer_assign->right);
+  ASSERT_NE(inner_assign, nullptr);
+  EXPECT_EQ(inner_assign->op, AssignExpr::XOR_ASSIGN);
+}
