@@ -1,29 +1,68 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <fstream>
 #include "src/lexer/lexer.hpp"
 #include "src/parser/parser.hpp"
 #include "src/ast/pretty_print/pretty_print.hpp"
 #include "src/ast/ast.hpp"
 
-int main() {
-    std::string code = R"(/*
-        Test Package: Semantic-1
-        Test Target: array
-        Author: Wenxin Zheng
-        Time: 2025-08-07
-        Verdict: Success
-        Comment: array test, basic array declaration
-        */
+void print_error_context(const parsec::ParseError& error,
+                         const std::vector<Token>& tokens,
+                         const std::vector<Position>& positions, // Takes the positions vector
+                         const std::string& code) {
+    std::cerr << "--> Parsing failed" << std::endl;
 
-        fn main() {
-            let numbers: [i32; 3] = [10, 20, 30];
-            exit(0);
+    if (error.position >= tokens.size()) {
+        std::cerr << "Unexpected end of input." << std::endl;
+    } else {
+        const Token& error_token = tokens[error.position];
+        const Position& pos = positions[error.position]; // Get position from the parallel vector
+
+        std::cerr << "Unexpected token: '" << error_token.value << "' at " << pos.toString() << std::endl;
+
+        // Find the specific line in the source code
+        std::string line_content;
+        std::istringstream code_stream(code);
+        for (int i = 0; i < pos.row; ++i) {
+            std::getline(code_stream, line_content);
         }
-            )";
-    std::stringstream code_stream(code);
+
+        // Print the context
+        std::cerr << std::endl;
+        std::cerr << " " << pos.row << " | " << line_content << std::endl;
+        std::cerr << " " << std::string(std::to_string(pos.row).length(), ' ') << " | ";
+        std::cerr << std::string(pos.col - 1, ' ') << "^";
+        std::cerr << std::string(error_token.value.length() > 1 ? error_token.value.length() - 1 : 0, '^') << std::endl;
+    }
+
+    std::cerr << std::endl << "Expected one of: ";
+    for(size_t i = 0; i < error.expected.size(); ++i) {
+        std::cerr << "'" << error.expected[i] << "'" << (i == error.expected.size() - 1 ? "" : ", ");
+    }
+    std::cerr << std::endl;
+}
+
+
+int main(int argc, char* argv[]) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <file>" << std::endl;
+        return 1;
+    }
+
+    std::ifstream file_stream(argv[1]);
+    if (!file_stream) {
+        std::cerr << "Error: could not open file " << argv[1] << std::endl;
+        return 1;
+    }
+
+    std::stringstream code_stream;
+    code_stream << file_stream.rdbuf();
+    std::string code = code_stream.str();
+
     Lexer lexer(code_stream);
     const auto& tokens = lexer.tokenize();
+    const auto& positions = lexer.getTokenPositions(); // MODIFIED: Get the positions vector
 
     const auto &registry = getParserRegistry();
     auto file_parser = registry.item.many() < equal(T_EOF);
@@ -35,17 +74,8 @@ int main() {
         printer.print_program(items);
     } else {
         auto error = std::get<parsec::ParseError>(result);
-        std::cerr << "Parsing failed at position " << error.position << std::endl;
-        if (error.position < tokens.size()) {
-            std::cerr << "Unexpected token: " << tokens[error.position].value << std::endl;
-        } else {
-            std::cerr << "Unexpected end of input." << std::endl;
-        }
-        std::cerr << "Expected one of: ";
-        for(const auto& exp : error.expected) {
-            std::cerr << exp << ", ";
-        }
-        std::cerr << std::endl;
+        // MODIFIED: Pass the positions vector to the error printer
+        print_error_context(error, tokens, positions, code);
     }
 
     return 0;

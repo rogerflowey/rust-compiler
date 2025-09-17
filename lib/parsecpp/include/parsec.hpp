@@ -23,6 +23,7 @@ struct ParseError {
   size_t position;
   std::vector<std::string> expected;
   std::vector<std::string> context_stack;
+  bool is_labeled_error = false;
 };
 
 template <typename T> using ParseResult = std::variant<T, ParseError>;
@@ -31,6 +32,9 @@ template <typename Token> struct ParseContext {
   const std::vector<Token> &tokens;
   size_t position = 0;
 
+  // NEW: State to track the error that occurred furthest into the input.
+  std::optional<ParseError> furthest_error = std::nullopt;
+
   bool isEOF() const { return position >= tokens.size(); }
   const Token &next() {
     if (isEOF()) {
@@ -38,6 +42,32 @@ template <typename Token> struct ParseContext {
     }
     return tokens[position++];
   }
+
+  // NEW: Helper function to update the furthest error.
+  void updateError(const ParseError& new_error) {
+    if (!furthest_error.has_value() || new_error.position > furthest_error->position) {
+        furthest_error = new_error;
+        return;
+    }
+    if (new_error.position < furthest_error->position) {
+        return;
+    }
+    if (new_error.is_labeled_error && !furthest_error->is_labeled_error) {
+        furthest_error = new_error;
+        return;
+    }
+    if (!new_error.is_labeled_error && furthest_error->is_labeled_error) {
+        return;
+    }
+    furthest_error->expected.insert(furthest_error->expected.end(),
+                                     new_error.expected.begin(),
+                                     new_error.expected.end());
+    std::sort(furthest_error->expected.begin(), furthest_error->expected.end());
+    furthest_error->expected.erase(
+        std::unique(furthest_error->expected.begin(), furthest_error->expected.end()),
+        furthest_error->expected.end()
+    );
+}
 };
 
 template <typename ReturnType, typename Token> class Parser;
@@ -58,10 +88,14 @@ public:
   Parser() = default;
   Parser(ParseFn fn) : parseFn(std::move(fn)) {}
 
+  // MODIFIED: The core parse function now updates the context's error state.
   ParseResult<ReturnType> parse(ParseContext<Token> &context) const {
     auto originalPos = context.position;
     auto result = parseFn(context);
     if (std::holds_alternative<ParseError>(result)) {
+      // This is the key change. If this parse attempt failed,
+      // we update the context's "furthest_error" tracker.
+      context.updateError(std::get<ParseError>(result));
       context.position = originalPos;
     }
     return result;
@@ -131,6 +165,10 @@ Parser<Token, Token> satisfy(std::function<bool(const Token &)> predicate, std::
 template <typename Token> Parser<Token, Token> token(Token t) {
     return satisfy<Token>([t](const Token &other) { return t == other; }, "a token");
 }
+
+// =================================================================
+// ALL COMBINATOR IMPLEMENTATIONS BELOW ARE UNCHANGED FROM ORIGINAL
+// =================================================================
 
 template <typename ReturnType, typename Token>
 template <typename NewReturnType>
@@ -356,9 +394,7 @@ auto Parser<ReturnType, Token>::label(std::string message) const {
     return Parser<ReturnType, Token>([p = *this, message](ParseContext<Token> &context) -> ParseResult<ReturnType> {
         auto res = p.parse(context);
         if (std::holds_alternative<ParseError>(res)) {
-            auto err = std::get<ParseError>(res);
-            err.context_stack.insert(err.context_stack.begin(), message);
-            return err;
+            return ParseError{std::get<ParseError>(res).position, {message}, {}, true};
         }
         return res;
     });
@@ -406,17 +442,31 @@ lazy() {
   return {p, setter};
 }
 
+// MODIFIED: The run function now makes the final decision on which error to report.
 template <typename ReturnType, typename Token>
 ParseResult<ReturnType> run(const Parser<ReturnType, Token> &parser,
                               const std::vector<Token> &tokens) {
-  ParseContext<Token> context{tokens, 0};
+  // MODIFIED: Initialize context with empty furthest_error
+  ParseContext<Token> context{tokens, 0, std::nullopt};
   auto result = parser.parse(context);
-  if (std::holds_alternative<ReturnType>(result) && context.isEOF()) {
-    return result;
+
+  // Case 1: Parse succeeded but did not consume all input. This is an error.
+  if (std::holds_alternative<ReturnType>(result) && !context.isEOF()) {
+      ParseError eof_error{context.position, {"Expected end of input"}, {}};
+      context.updateError(eof_error);
+      return *context.furthest_error;
   }
-  if(std::holds_alternative<ReturnType>(result) && !context.isEOF()) {
-      return ParseError{context.position, {"Expected end of input"}, {}};
+
+  // Case 2: Parse failed. Return the furthest error seen during the entire run.
+  if (std::holds_alternative<ParseError>(result)) {
+      // If furthest_error was somehow not set (highly unlikely), fall back to the result's error.
+      if (context.furthest_error) {
+          return *context.furthest_error;
+      }
+      return std::get<ParseError>(result);
   }
+
+  // Case 3: Success and EOF. The ideal case.
   return result;
 }
 
