@@ -4,6 +4,11 @@ import re
 import time
 from zai import ZhipuAiClient
 
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # --- Configuration ---
 client = ZhipuAiClient(api_key=os.environ.get("ZHIPU_API_KEY"))
 AI_LOG_DIR = "../test-output/ai-logs"

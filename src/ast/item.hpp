@@ -13,10 +13,10 @@ struct FunctionItem {
     using SelfParamPtr = std::unique_ptr<SelfParam>;
     
     IdPtr name;
-    SelfParamPtr self_param;
+    std::optional<SelfParamPtr> self_param;
     std::vector<std::pair<PatternPtr, TypePtr>> params;
-    TypePtr return_type;
-    BlockExprPtr body;
+    std::optional<TypePtr> return_type;
+    std::optional<BlockExprPtr> body;
 };
 
 struct StructItem {

@@ -60,13 +60,31 @@ These are the fundamental parsers you'll use to start building.
 
 You combine basic parsers using methods and overloaded operators. Let `p1` and `p2` be parsers.
 
-#### 1. Transformation: `map`
+#### 1. Transformation and Filtering: `map` and `filter`
 
--   `p1.map(f)`: If `p1` succeeds, it applies the function `f` to its result, creating a new parser with the transformed result.
+-   `p1.map(f)`: If `p1` succeeds, it applies the function `f` to its result, creating a new parser with the transformed result. There are two versions of `map`:
+    1.  **Simple `map`**: The function `f` takes the parser's result and returns a new value.
+    2.  **Failable `map`**: The function `f` takes the parser's result and returns a `parsec::ParseResult<T>`. This allows you to create a failure from within the map, which is useful for validation.
+
+-   `p1.filter(predicate, error_message)`: If `p1` succeeds, it runs the `predicate` on the result. If the predicate returns `true`, the parser succeeds with the original result. If it returns `false`, the parser fails with the given `error_message`.
 
     ```cpp
     // Parses a digit char '5' and maps it to the integer 5
     auto digit_val = parsec::satisfy<char>(isdigit).map([](char c) { return c - '0'; });
+
+    // Failable map: parse a number and fail if it's not a specific value
+    auto parse_the_number_42 = digit_val.map([](int val) -> parsec::ParseResult<int> {
+        if (val == 42) {
+            return val;
+        }
+        return parsec::ParseError{ .expected = {"the number 42"} };
+    });
+
+    // Filter: parse a digit and fail if it's not even
+    auto even_digit_val = digit_val.filter(
+        [](int val) { return val % 2 == 0; },
+        "an even digit"
+    );
     ```
 
 #### 2. Sequencing: `andThen`, `keepLeft`, `keepRight`

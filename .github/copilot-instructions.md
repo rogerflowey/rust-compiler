@@ -22,12 +22,7 @@ The project uses CMake for building and testing.
 
 ### Building the Compiler
 
-To build the compiler, use the following commands from the root of the project:
-
-```bash
-mkdir -p build && cmake -S . -B build && make -C build
-```
-
+To build the compiler, you should use the provided Task CMake:Build in `.vscode/tasks.json`. This task will configure and build the project in a `build/` directory.
 The main executable will be located at `build/compiler`.
 
 ### Running Tests

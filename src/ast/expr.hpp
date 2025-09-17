@@ -6,6 +6,10 @@
 struct BlockExpr {
     std::vector<StmtPtr> statements;
     std::optional<ExprPtr> final_expr;
+
+
+    BlockExpr(std::vector<StmtPtr> statements, std::optional<ExprPtr> final_expr)
+        : statements(std::move(statements)), final_expr(std::move(final_expr)) {}
 };
 
 struct IntegerLiteralExpr {
@@ -19,7 +23,8 @@ struct CharLiteralExpr { char value; };
 struct StringLiteralExpr { std::string value; bool is_cstyle = false; };
 struct PathExpr { PathPtr path; };
 struct GroupedExpr { ExprPtr expr; };
-struct ContinueExpr {};
+struct ContinueExpr { std::optional<IdPtr> label; };
+struct UnderscoreExpr {};
 
 struct UnaryExpr {
     enum Op { NOT, NEGATE, DEREFERENCE, REFERENCE, MUTABLE_REFERENCE };
@@ -28,13 +33,13 @@ struct UnaryExpr {
 };
 
 struct BinaryExpr {
-    enum Op { ADD, SUB, MUL, DIV, REM, AND, OR, BIT_AND, BIT_XOR, EQ, NE, LT, GT, LE, GE };
+    enum Op { ADD, SUB, MUL, DIV, REM, AND, OR, BIT_AND, BIT_XOR, BIT_OR, SHL, SHR, EQ, NE, LT, GT, LE, GE };
     Op op;
     ExprPtr left, right;
 };
 
 struct AssignExpr {
-    enum Op { ASSIGN, ADD_ASSIGN, SUB_ASSIGN, XOR_ASSIGN };
+    enum Op { ASSIGN, ADD_ASSIGN, SUB_ASSIGN, MUL_ASSIGN, DIV_ASSIGN, REM_ASSIGN, XOR_ASSIGN, BIT_OR_ASSIGN, BIT_AND_ASSIGN, SHL_ASSIGN, SHR_ASSIGN };
     Op op;
     ExprPtr left, right;
 };
@@ -71,10 +76,11 @@ using ExprVariant = std::variant<
     StringLiteralExpr, PathExpr, UnaryExpr, BinaryExpr, AssignExpr, CastExpr,
     GroupedExpr, ArrayInitExpr, ArrayRepeatExpr, IndexExpr, StructExpr,
     CallExpr, MethodCallExpr, FieldAccessExpr, IfExpr, LoopExpr, WhileExpr,
-    ReturnExpr, BreakExpr, ContinueExpr
+    ReturnExpr, BreakExpr, ContinueExpr, UnderscoreExpr
 >;
 
 // Complete the forward-declared type from common.hpp
 struct Expr {
     ExprVariant value;
+    Expr(ExprVariant &&v) : value(std::move(v)) {}
 };

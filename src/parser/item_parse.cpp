@@ -66,7 +66,7 @@ ItemParser ItemParserBuilder::buildFunctionParser(
           });
   auto p_only_self =
       selfParam.keepLeft(p_comma.optional()).map([](auto &&self) {
-        return std::make_pair(std::move(self),
+        return std::make_pair(std::optional(std::move(self)),
                               std::vector<std::pair<PatternPtr, TypePtr>>{});
       });
   auto p_func_param_list = funcParam.tuple(p_comma);
@@ -76,9 +76,7 @@ ItemParser ItemParserBuilder::buildFunctionParser(
           .keepLeft(p_comma.optional())
           .map([](auto &&t) {
             auto &[opt_self, params] = t;
-            FunctionItem::SelfParamPtr self =
-                opt_self ? std::move(*opt_self) : nullptr;
-            return std::make_pair(std::move(self), std::move(params));
+            return std::make_pair(std::move(opt_self), std::move(params));
           });
   auto params_content = p_with_regular_params | p_only_self;
   auto params =
@@ -87,14 +85,14 @@ ItemParser ItemParserBuilder::buildFunctionParser(
           .map([](auto &&mv) {
             if (mv)
               return std::move(*mv);
-            return std::make_pair(FunctionItem::SelfParamPtr(nullptr),
+            return std::make_pair(std::optional<FunctionItem::SelfParamPtr>(std::nullopt),
                                   std::vector<std::pair<PatternPtr, TypePtr>>{});
           });
   auto retTy = (equal({TOKEN_OPERATOR, "->"}) > typeParser).optional();
   auto body =
-      blockParser.map([](auto &&b) -> BlockExprPtr { return std::move(b); });
-  auto no_body = equal({TOKEN_SEPARATOR, ";"}).map([](auto) -> BlockExprPtr {
-    return nullptr;
+      blockParser.map([](auto &&b) -> std::optional<BlockExprPtr> { return std::move(b); });
+  auto no_body = equal({TOKEN_SEPARATOR, ";"}).map([](auto) -> std::optional<BlockExprPtr> {
+    return std::nullopt;
   });
   auto body_or_no_body = body | no_body;
 
@@ -105,10 +103,9 @@ ItemParser ItemParserBuilder::buildFunctionParser(
       .map([](auto &&t) -> ItemPtr {
         auto &[name, params_pair, retOpt, body] = t;
         auto &[self, paramList] = params_pair;
-        TypePtr ret = retOpt ? std::move(*retOpt) : nullptr;
         return std::make_unique<Item>(Item{
             FunctionItem{std::move(name), std::move(self), std::move(paramList),
-                         std::move(ret), std::move(body)}});
+                         std::move(retOpt), std::move(body)}});
       })
       .label("a function definition");
 }

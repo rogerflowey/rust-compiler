@@ -71,7 +71,7 @@ First, run the compiler against the test suite to generate the latest output.
 
 ```bash
 # Run tests for the 'semantic-1' stage
-python scripts/run_tests.py semantic-1
+python run_tests.py semantic-1
 ```
 
 This will create `.out` and `.err` files in `../test-output/raw/semantic-1/`. If a baseline exists, it will also check for regressions.
@@ -82,7 +82,7 @@ To understand why certain tests are failing, use the `generate_report.py` script
 
 ```bash
 # Analyze all tests in the 'semantic-1' stage
-python scripts/generate_report.py semantic-1 --analyze
+python generate_report.py semantic-1 --analyze
 ```
 
 After the analysis is complete, you can review:
@@ -95,10 +95,10 @@ If you've made fixes and want to quickly check if the previous failures are reso
 
 ```bash
 # First, run the tests again to get fresh output
-python scripts/run_tests.py semantic-1
+python run_tests.py semantic-1
 
 # Then, re-analyze only the tests that failed last time
-python scripts/generate_report.py semantic-1 --analyze --use-fail-list
+python generate_report.py semantic-1 --analyze --use-fail-list
 ```
 
 ### 4. Update the Baseline
@@ -106,7 +106,7 @@ python scripts/generate_report.py semantic-1 --analyze --use-fail-list
 Once you have verified that changes in test output are correct and intentional (e.g., after fixing a bug or adding a feature), update the baseline.
 
 ```bash
-python scripts/run_tests.py --update-baseline
+python run_tests.py --update-baseline
 ```
 
 This command copies the entire `../test-output/raw` directory to `../test-output/baseline`, establishing a new ground truth for future regression tests.

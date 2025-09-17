@@ -13,3 +13,5 @@ ai_failure*
 .python-version
 pyproject.toml
 uv.lock
+*.env
+regression_failures.log

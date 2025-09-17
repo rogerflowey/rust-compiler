@@ -383,3 +383,113 @@ TEST(ParsecTest, RunFunction) {
     ASSERT_TRUE((std::holds_alternative<std::tuple<char, char>>(res4)));
     EXPECT_EQ((std::get<std::tuple<char, char>>(res4)), (std::make_tuple('a', 'b')));
 }
+// =================================================================
+// TESTS FOR NEW FEATURES
+// =================================================================
+
+TEST(ParsecTest, FailableMap) {
+    auto digit_parser = satisfy<char>([](char c) { return std::isdigit(c); }, "a digit");
+
+    // This map function will fail if the digit is 5 or greater.
+    auto small_number_parser = digit_parser.map([](char c) -> ParseResult<int> {
+        int val = c - '0';
+        if (val < 5) {
+            return val; // Success
+        }
+        // Failure with a custom error. The position (0) is a placeholder;
+        // map() is responsible for setting the correct one.
+        return ParseError{0, {"digit must be less than 5"}};
+    });
+
+    // Case 1: Success. Underlying parser and map function both succeed.
+    auto [res1, pos1] = test_parse(small_number_parser, "3 is a small number");
+    ASSERT_TRUE(std::holds_alternative<int>(res1));
+    EXPECT_EQ(std::get<int>(res1), 3);
+    EXPECT_EQ(pos1, 1);
+
+    // Case 2: Failure in the map function. Underlying parser succeeds, but validation fails.
+    auto [res2, pos2] = test_parse(small_number_parser, "7 is too big");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(res2));
+    // Position must be reset to where the parser started.
+    EXPECT_EQ(pos2, 0);
+    // The run() function would show the error message from our lambda.
+    auto run_res2 = run(small_number_parser, "7 is too big");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(run_res2));
+    auto err2 = std::get<ParseError>(run_res2);
+    EXPECT_EQ(err2.position, 0);
+    EXPECT_EQ(err2.expected[0], "digit must be less than 5");
+
+
+    // Case 3: Failure in the underlying parser. The map function is never called.
+    auto [res3, pos3] = test_parse(small_number_parser, "not a number");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(res3));
+    EXPECT_EQ(pos3, 0);
+    auto run_res3 = run(small_number_parser, "not a number");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(run_res3));
+    auto err3 = std::get<ParseError>(run_res3);
+    EXPECT_EQ(err3.expected[0], "a digit"); // Error comes from the original parser
+}
+
+TEST(ParsecTest, Filter) {
+    auto digit_parser = satisfy<char>([](char c) { return std::isdigit(c); }, "a digit");
+    auto to_int_parser = digit_parser.map([](char c){ return c - '0'; });
+
+    // Case 1: Filter with default error message
+    auto even_number_parser = to_int_parser.filter([](int n) { return n % 2 == 0; });
+
+    // Success
+    auto [res1, pos1] = test_parse(even_number_parser, "246");
+    ASSERT_TRUE(std::holds_alternative<int>(res1));
+    EXPECT_EQ(std::get<int>(res1), 2);
+    EXPECT_EQ(pos1, 1);
+
+    // Failure (predicate returns false)
+    auto [res2, pos2] = test_parse(even_number_parser, "357");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(res2));
+    EXPECT_EQ(pos2, 0); // Position is reset
+    auto run_res2 = run(even_number_parser, "357");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(run_res2));
+    EXPECT_EQ(std::get<ParseError>(run_res2).expected[0], "value did not satisfy predicate");
+
+
+    // Case 2: Filter with a custom error message
+    auto odd_number_parser = to_int_parser.filter(
+        [](int n) { return n % 2 != 0; },
+        "number must be odd"
+    );
+
+    // Success
+    auto [res3, pos3] = test_parse(odd_number_parser, "357");
+    ASSERT_TRUE(std::holds_alternative<int>(res3));
+    EXPECT_EQ(std::get<int>(res3), 3);
+    EXPECT_EQ(pos3, 1);
+
+    // Failure with custom message
+    auto [res4, pos4] = test_parse(odd_number_parser, "246");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(res4));
+    EXPECT_EQ(pos4, 0);
+    auto run_res4 = run(odd_number_parser, "246");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(run_res4));
+    EXPECT_EQ(std::get<ParseError>(run_res4).expected[0], "number must be odd");
+
+
+    // Case 3: Chaining filters
+    auto middle_number_parser = to_int_parser
+        .filter([](int n) { return n > 2; }, "must be > 2")
+        .filter([](int n) { return n < 8; }, "must be < 8");
+
+    // Success
+    auto [res5, pos5] = test_parse(middle_number_parser, "5");
+    ASSERT_TRUE(std::holds_alternative<int>(res5));
+    EXPECT_EQ(std::get<int>(res5), 5);
+
+    // Fails first filter
+    auto run_res6 = run(middle_number_parser, "1");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(run_res6));
+    EXPECT_EQ(std::get<ParseError>(run_res6).expected[0], "must be > 2");
+
+    // Fails second filter
+    auto run_res7 = run(middle_number_parser, "9");
+    ASSERT_TRUE(std::holds_alternative<ParseError>(run_res7));
+    EXPECT_EQ(std::get<ParseError>(run_res7).expected[0], "must be < 8");
+}

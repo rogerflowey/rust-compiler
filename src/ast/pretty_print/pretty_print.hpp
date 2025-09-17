@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <iostream>
@@ -248,7 +247,8 @@ inline const char* to_string(BinaryExpr::Op op) {
         case BinaryExpr::Op::MUL: return "MUL"; case BinaryExpr::Op::DIV: return "DIV";
         case BinaryExpr::Op::REM: return "REM"; case BinaryExpr::Op::AND: return "AND";
         case BinaryExpr::Op::OR: return "OR"; case BinaryExpr::Op::BIT_AND: return "BIT_AND";
-        case BinaryExpr::Op::BIT_XOR: return "BIT_XOR";
+        case BinaryExpr::Op::BIT_XOR: return "BIT_XOR"; case BinaryExpr::Op::BIT_OR: return "BIT_OR";
+        case BinaryExpr::Op::SHL: return "SHL"; case BinaryExpr::Op::SHR: return "SHR";
         case BinaryExpr::Op::EQ: return "EQ"; case BinaryExpr::Op::NE: return "NE";
         case BinaryExpr::Op::LT: return "LT"; case BinaryExpr::Op::GT: return "GT";
         case BinaryExpr::Op::LE: return "LE"; case BinaryExpr::Op::GE: return "GE";
@@ -261,7 +261,14 @@ inline const char* to_string(AssignExpr::Op op) {
         case AssignExpr::Op::ASSIGN: return "ASSIGN";
         case AssignExpr::Op::ADD_ASSIGN: return "ADD_ASSIGN";
         case AssignExpr::Op::SUB_ASSIGN: return "SUB_ASSIGN";
+        case AssignExpr::Op::MUL_ASSIGN: return "MUL_ASSIGN";
+        case AssignExpr::Op::DIV_ASSIGN: return "DIV_ASSIGN";
+        case AssignExpr::Op::REM_ASSIGN: return "REM_ASSIGN";
         case AssignExpr::Op::XOR_ASSIGN: return "XOR_ASSIGN";
+        case AssignExpr::Op::BIT_OR_ASSIGN: return "BIT_OR_ASSIGN";
+        case AssignExpr::Op::BIT_AND_ASSIGN: return "BIT_AND_ASSIGN";
+        case AssignExpr::Op::SHL_ASSIGN: return "SHL_ASSIGN";
+        case AssignExpr::Op::SHR_ASSIGN: return "SHR_ASSIGN";
     }
     return "???";
 }
@@ -279,6 +286,7 @@ struct DebugExprVisitor {
     void operator()(const StringLiteralExpr& e) const { p.out_ << "StringLiteralExpr { value: \"" << e.value << "\" }"; }
     void operator()(const PathExpr& e) const { p.out_ << "PathExpr { path: "; p.print(*e.path); p.out_ << " }"; }
     void operator()(const ContinueExpr&) const { p.out_ << "ContinueExpr {}"; }
+    void operator()(const UnderscoreExpr&) const { p.out_ << "UnderscoreExpr {}"; }
 
     void operator()(const GroupedExpr& e) const {
         p.out_ << "GroupedExpr {\n";
@@ -452,10 +460,10 @@ struct DebugItemVisitor {
         p.out_ << "FunctionItem {\n";
         AstDebugPrinter::IndentGuard guard(p);
         p.print_ptr_field("name", i.name);
-        p.print_ptr_field("self_param", i.self_param);
+        p.print_optional_ptr_field("self_param", i.self_param);
         p.print_pair_list_field("params", i.params);
-        p.print_ptr_field("return_type", i.return_type);
-        p.print_ptr_field("body", i.body);
+        p.print_optional_ptr_field("return_type", i.return_type);
+        p.print_optional_ptr_field("body", i.body);
         p.prefix(); p.out_ << "}";
     }
 

@@ -1,7 +1,7 @@
 #include "expr_parse.hpp"
 
-#include "../lexer/lexer.hpp"
-#include "../utils/helpers.hpp"
+#include "src/lexer/lexer.hpp"
+#include "src/utils/helpers.hpp"
 #include "parser_registry.hpp" // For the full ParserRegistry definition
 #include "utils.hpp"
 #include <stdexcept>
@@ -88,7 +88,12 @@ ExprParser ExprParserBuilder::buildArrayParser(const ExprParser& self) const {
 }
 
 ExprParser ExprParserBuilder::buildPathExprParser(const PathParser& pathParser) const {
-    return pathParser.map([](PathPtr&& p) -> ExprPtr { return make_expr<PathExpr>(std::move(p)); }).label("a path expression");
+    return pathParser.map([](PathPtr&& p) -> ExprPtr {
+        if (p->segments.size() == 1 && p->segments[0].id && (*p->segments[0].id)->name == "_") {
+            return make_expr<UnderscoreExpr>();
+        }
+        return make_expr<PathExpr>(std::move(p));
+    }).label("a path expression");
 }
 
 ExprParser ExprParserBuilder::buildStructExprParser(const PathParser& pathParser, const ExprParser& self) const {
@@ -139,12 +144,13 @@ std::tuple<ExprParser, ExprParser, ExprParser> ExprParserBuilder::buildControlFl
 }
 
 std::tuple<ExprParser, ExprParser, ExprParser> ExprParserBuilder::buildFlowTerminators(const ExprParser& self) const {
+    auto p_label = (equal({TOKEN_OPERATOR, "'"}) > p_identifier).label("a label");
     auto returnExprParser = (equal({TOKEN_KEYWORD, "return"}) > self.optional())
         .map([](auto&& v) -> ExprPtr { return make_expr<ReturnExpr>(std::move(v)); }).label("a return expression");
-    auto breakExprParser = (equal({TOKEN_KEYWORD, "break"}) > p_identifier.optional().andThen(self.optional()))
+    auto breakExprParser = (equal({TOKEN_KEYWORD, "break"}) > p_label.optional().andThen(self.optional()))
         .map([](auto&& t) -> ExprPtr { return make_expr<BreakExpr>(std::move(std::get<0>(t)), std::move(std::get<1>(t))); }).label("a break expression");
-    auto continueExprParser = equal({TOKEN_KEYWORD, "continue"})
-        .map([](Token) -> ExprPtr { return make_expr<ContinueExpr>(); }).label("a continue expression");
+    auto continueExprParser = (equal({TOKEN_KEYWORD, "continue"}) > p_label.optional())
+        .map([](auto&& label) -> ExprPtr { return make_expr<ContinueExpr>(std::move(label)); }).label("a continue expression");
     return { returnExprParser, breakExprParser, continueExprParser };
 }
 
@@ -228,8 +234,11 @@ void ExprParserBuilder::addInfixOperators(parsec::PrattParserBuilder<ExprPtr, To
     builder.addInfixLeft({TOKEN_OPERATOR, "%"}, 60, bin(BinaryExpr::REM));
     builder.addInfixLeft({TOKEN_OPERATOR, "+"}, 50, bin(BinaryExpr::ADD));
     builder.addInfixLeft({TOKEN_OPERATOR, "-"}, 50, bin(BinaryExpr::SUB));
+    builder.addInfixLeft({TOKEN_OPERATOR, "<<"}, 48, bin(BinaryExpr::SHL));
+    builder.addInfixLeft({TOKEN_OPERATOR, ">>"}, 48, bin(BinaryExpr::SHR));
     builder.addInfixLeft({TOKEN_OPERATOR, "&"}, 45, bin(BinaryExpr::BIT_AND));
     builder.addInfixLeft({TOKEN_OPERATOR, "^"}, 42, bin(BinaryExpr::BIT_XOR));
+    builder.addInfixLeft({TOKEN_OPERATOR, "|"}, 41, bin(BinaryExpr::BIT_OR));
     builder.addInfixLeft({TOKEN_OPERATOR, "=="}, 40, bin(BinaryExpr::EQ));
     builder.addInfixLeft({TOKEN_OPERATOR, "!="}, 40, bin(BinaryExpr::NE));
     builder.addInfixLeft({TOKEN_OPERATOR, "<"}, 40, bin(BinaryExpr::LT));
@@ -241,5 +250,12 @@ void ExprParserBuilder::addInfixOperators(parsec::PrattParserBuilder<ExprPtr, To
     builder.addInfixRight({TOKEN_OPERATOR, "="}, 10, assign(AssignExpr::ASSIGN));
     builder.addInfixRight({TOKEN_OPERATOR, "+="}, 10, assign(AssignExpr::ADD_ASSIGN));
     builder.addInfixRight({TOKEN_OPERATOR, "-="}, 10, assign(AssignExpr::SUB_ASSIGN));
+    builder.addInfixRight({TOKEN_OPERATOR, "*="}, 10, assign(AssignExpr::MUL_ASSIGN));
+    builder.addInfixRight({TOKEN_OPERATOR, "/="}, 10, assign(AssignExpr::DIV_ASSIGN));
+    builder.addInfixRight({TOKEN_OPERATOR, "%="}, 10, assign(AssignExpr::REM_ASSIGN));
+    builder.addInfixRight({TOKEN_OPERATOR, "&="}, 10, assign(AssignExpr::BIT_AND_ASSIGN));
+    builder.addInfixRight({TOKEN_OPERATOR, "|="}, 10, assign(AssignExpr::BIT_OR_ASSIGN));
     builder.addInfixRight({TOKEN_OPERATOR, "^="}, 10, assign(AssignExpr::XOR_ASSIGN));
+    builder.addInfixRight({TOKEN_OPERATOR, "<<="}, 10, assign(AssignExpr::SHL_ASSIGN));
+    builder.addInfixRight({TOKEN_OPERATOR, ">>="}, 10, assign(AssignExpr::SHR_ASSIGN));
 }

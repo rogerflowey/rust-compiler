@@ -8,8 +8,8 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
-#include <vector>
 #include <variant>
+#include <vector>
 
 // since type_trait doesn't have is_tuple_v
 template <typename> struct is_tuple : std::false_type {};
@@ -21,12 +21,26 @@ namespace parsec {
 
 struct ParseError {
   size_t position;
-  std::vector<std::string> expected;
-  std::vector<std::string> context_stack;
+  std::vector<std::string> expected = {};
+  std::vector<std::string> context_stack = {};
   bool is_labeled_error = false;
 };
 
 template <typename T> using ParseResult = std::variant<T, ParseError>;
+
+//----- Some mysterious template meta-programming -----
+template <typename T> struct is_parse_result : std::false_type {};
+template <typename T>
+struct is_parse_result<parsec::ParseResult<T>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_parse_result_v = is_parse_result<T>::value;
+
+template <typename T> struct get_success_type;
+template <typename T> struct get_success_type<parsec::ParseResult<T>> {
+  using type = T;
+};
+// ---- END OF Mysterious Template Meta-programming ----
 
 template <typename Token> struct ParseContext {
   const std::vector<Token> &tokens;
@@ -44,30 +58,30 @@ template <typename Token> struct ParseContext {
   }
 
   // NEW: Helper function to update the furthest error.
-  void updateError(const ParseError& new_error) {
-    if (!furthest_error.has_value() || new_error.position > furthest_error->position) {
-        furthest_error = new_error;
-        return;
+  void updateError(const ParseError &new_error) {
+    if (!furthest_error.has_value() ||
+        new_error.position > furthest_error->position) {
+      furthest_error = new_error;
+      return;
     }
     if (new_error.position < furthest_error->position) {
-        return;
+      return;
     }
     if (new_error.is_labeled_error && !furthest_error->is_labeled_error) {
-        furthest_error = new_error;
-        return;
+      furthest_error = new_error;
+      return;
     }
     if (!new_error.is_labeled_error && furthest_error->is_labeled_error) {
-        return;
+      return;
     }
     furthest_error->expected.insert(furthest_error->expected.end(),
-                                     new_error.expected.begin(),
-                                     new_error.expected.end());
+                                    new_error.expected.begin(),
+                                    new_error.expected.end());
     std::sort(furthest_error->expected.begin(), furthest_error->expected.end());
-    furthest_error->expected.erase(
-        std::unique(furthest_error->expected.begin(), furthest_error->expected.end()),
-        furthest_error->expected.end()
-    );
-}
+    furthest_error->expected.erase(std::unique(furthest_error->expected.begin(),
+                                               furthest_error->expected.end()),
+                                   furthest_error->expected.end());
+  }
 };
 
 template <typename ReturnType, typename Token> class Parser;
@@ -80,28 +94,31 @@ private:
   template <typename NewReturnType>
   auto _andThen_impl(const Parser<NewReturnType, Token> &other) const;
 
+  
+
 public:
   using ReturnType_t = ReturnType;
-  using ParseFn =
-      std::function<ParseResult<ReturnType>(ParseContext<Token> &)>;
+  using ParseFn = std::function<ParseResult<ReturnType>(ParseContext<Token> &)>;
+private:
+  ParseFn parseFn;
+public:
 
   Parser() = default;
   Parser(ParseFn fn) : parseFn(std::move(fn)) {}
 
-  // MODIFIED: The core parse function now updates the context's error state.
   ParseResult<ReturnType> parse(ParseContext<Token> &context) const {
     auto originalPos = context.position;
     auto result = parseFn(context);
     if (std::holds_alternative<ParseError>(result)) {
-      // This is the key change. If this parse attempt failed,
-      // we update the context's "furthest_error" tracker.
       context.updateError(std::get<ParseError>(result));
       context.position = originalPos;
     }
     return result;
   }
 
-  template <typename F> auto map(F &&f) const;
+  template <typename Predicate>
+  auto filter(Predicate &&pred,
+              std::optional<std::string> error_message = std::nullopt) const;
 
   auto orElse(const Parser<ReturnType, Token> &other) const;
 
@@ -130,26 +147,69 @@ public:
 
   auto label(std::string message) const;
 
+  template <typename F>
+  auto map(F &&f) const
+    requires(is_parse_result_v<std::invoke_result_t<F, ReturnType &&>>)
+  {
+    using FResult = std::invoke_result_t<F, ReturnType &&>;
+    using NewReturnType = typename get_success_type<FResult>::type;
+
+    return Parser<NewReturnType, Token>(
+        [*this, f = std::forward<F>(f)](ParseContext<Token> &context) mutable
+        -> ParseResult<NewReturnType> {
+          auto originalPos = context.position;
+          auto result = this->parse(context);
+
+          if (std::holds_alternative<ParseError>(result)) {
+            return std::get<ParseError>(result);
+          }
+
+          auto next_result = f(std::move(std::get<ReturnType>(result)));
+
+          if (std::holds_alternative<ParseError>(next_result)) {
+            context.position = originalPos;
+            auto err = std::get<ParseError>(next_result);
+            err.position = originalPos;
+            context.updateError(err);
+            return err;
+          }
+
+          return std::get<NewReturnType>(next_result);
+        });
+  }
+
+  template <typename F> auto map(F &&f) const {
+    using NewReturnType = std::invoke_result_t<F, ReturnType &&>;
+    return Parser<NewReturnType, Token>(
+        [*this, f = std::forward<F>(f)](ParseContext<Token> &context) mutable
+        -> ParseResult<NewReturnType> {
+          auto result = this->parse(context);
+          if (std::holds_alternative<ParseError>(result)) {
+            return std::get<ParseError>(result);
+          }
+          return f(std::move(std::get<ReturnType>(result)));
+        });
+  }
+
 private:
-  ParseFn parseFn;
+
 
   template <typename R, typename T>
   friend std::pair<Parser<R, T>, std::function<void(Parser<R, T>)>> lazy();
 };
 
-
-//??? wtf are you doing
+//??? wtf, why first copy then move?
 template <typename R, typename Token> Parser<R, Token> succeed(R value) {
-  return Parser<R, Token>(
-      [value = std::move(value)](ParseContext<Token> &) mutable {
-        return value;
-      });
+  return Parser<R, Token>([value = std::move(value)](
+                              ParseContext<Token> &) mutable { return value; });
 }
 
 template <typename Token>
-Parser<Token, Token> satisfy(std::function<bool(const Token &)> predicate, std::string expected) {
+Parser<Token, Token> satisfy(std::function<bool(const Token &)> predicate,
+                             std::string expected) {
   return Parser<Token, Token>(
-      [predicate, expected](ParseContext<Token> &context) -> ParseResult<Token> {
+      [predicate,
+       expected](ParseContext<Token> &context) -> ParseResult<Token> {
         if (context.isEOF()) {
           return ParseError{context.position, {expected}, {expected}};
         }
@@ -163,12 +223,10 @@ Parser<Token, Token> satisfy(std::function<bool(const Token &)> predicate, std::
 }
 
 template <typename Token> Parser<Token, Token> token(Token t) {
-    return satisfy<Token>([t](const Token &other) { return t == other; }, "a token");
+  return satisfy<Token>([t](const Token &other) { return t == other; },
+                        "a token");
 }
 
-// =================================================================
-// ALL COMBINATOR IMPLEMENTATIONS BELOW ARE UNCHANGED FROM ORIGINAL
-// =================================================================
 
 template <typename ReturnType, typename Token>
 template <typename NewReturnType>
@@ -190,22 +248,8 @@ auto Parser<ReturnType, Token>::_andThen_impl(
           context.position = originalPos;
           return std::get<ParseError>(res2);
         }
-        return std::make_pair(std::move(std::get<ReturnType>(res1)), std::move(std::get<NewReturnType>(res2)));
-      });
-}
-
-template <typename ReturnType, typename Token>
-template <typename F>
-auto Parser<ReturnType, Token>::map(F &&f) const {
-  using NewReturnType = std::invoke_result_t<F, ReturnType &&>;
-  return Parser<NewReturnType, Token>(
-      [*this, f = std::forward<F>(f)](ParseContext<Token> &context) mutable
-      -> ParseResult<NewReturnType> {
-        auto result = this->parse(context);
-        if (std::holds_alternative<ParseError>(result)) {
-            return std::get<ParseError>(result);
-        }
-        return f(std::move(std::get<ReturnType>(result)));
+        return std::make_pair(std::move(std::get<ReturnType>(res1)),
+                              std::move(std::get<NewReturnType>(res2)));
       });
 }
 
@@ -222,21 +266,22 @@ auto Parser<ReturnType, Token>::orElse(
         }
         context.position = originalPos;
         auto res2 = p2.parse(context);
-        if(std::holds_alternative<ReturnType>(res2)) {
-            return res2;
+        if (std::holds_alternative<ReturnType>(res2)) {
+          return res2;
         }
 
         auto err1 = std::get<ParseError>(res1);
         auto err2 = std::get<ParseError>(res2);
 
         if (err1.position > err2.position) {
-            return err1;
+          return err1;
         }
         if (err2.position > err1.position) {
-            return err2;
+          return err2;
         }
 
-        err1.expected.insert(err1.expected.end(), err2.expected.begin(), err2.expected.end());
+        err1.expected.insert(err1.expected.end(), err2.expected.begin(),
+                             err2.expected.end());
         return err1;
       });
 }
@@ -282,6 +327,38 @@ auto Parser<ReturnType, Token>::keepRight(
       });
 }
 
+// Inside the Parser class definition in parsec.hpp
+template <typename ReturnType, typename Token>
+template <typename Predicate>
+auto Parser<ReturnType, Token>::filter(
+    Predicate &&pred,
+    std::optional<std::string> error_message) const {
+  return Parser<ReturnType, Token>([
+    *this,
+    p = std::forward<Predicate>(pred),
+    msg = std::move(error_message)
+  ](ParseContext<Token> &context) mutable -> ParseResult<ReturnType> {
+    auto originalPos = context.position;
+    auto result = this->parse(context);
+    if (std::holds_alternative<ParseError>(result)) {
+      return std::get<ParseError>(result);
+    }
+    auto value = std::move(std::get<ReturnType>(result));
+    if (p(value)) {
+      return std::move(value);
+    } else {
+      context.position = originalPos;
+
+      std::string final_message = msg.value_or("value did not satisfy predicate");
+      ParseError new_error{originalPos, {final_message}, {}, false};
+
+      context.updateError(new_error);
+
+      return new_error;
+    }
+  });
+}
+
 template <typename ReturnType, typename Token>
 auto Parser<ReturnType, Token>::many() const {
   return Parser<std::vector<ReturnType>, Token>(
@@ -304,11 +381,12 @@ auto Parser<ReturnType, Token>::many() const {
 
 template <typename ReturnType, typename Token>
 auto Parser<ReturnType, Token>::many1() const {
-    return (*this >> this->many()).map([](std::tuple<ReturnType, std::vector<ReturnType>> &&result) {
-        auto& [first, rest] = result;
+  return (*this >> this->many())
+      .map([](std::tuple<ReturnType, std::vector<ReturnType>> &&result) {
+        auto &[first, rest] = result;
         rest.insert(rest.begin(), std::move(first));
         return std::move(rest);
-    });
+      });
 }
 
 template <typename ReturnType, typename Token>
@@ -391,13 +469,16 @@ auto Parser<ReturnType, Token>::tuple(
 
 template <typename ReturnType, typename Token>
 auto Parser<ReturnType, Token>::label(std::string message) const {
-    return Parser<ReturnType, Token>([p = *this, message](ParseContext<Token> &context) -> ParseResult<ReturnType> {
+  return Parser<ReturnType, Token>(
+      [p = *this,
+       message](ParseContext<Token> &context) -> ParseResult<ReturnType> {
         auto res = p.parse(context);
         if (std::holds_alternative<ParseError>(res)) {
-            return ParseError{std::get<ParseError>(res).position, {message}, {}, true};
+          return ParseError{
+              std::get<ParseError>(res).position, {message}, {}, true};
         }
         return res;
-    });
+      });
 }
 
 template <typename R, typename T>
@@ -442,28 +523,30 @@ lazy() {
   return {p, setter};
 }
 
-// MODIFIED: The run function now makes the final decision on which error to report.
+// MODIFIED: The run function now makes the final decision on which error to
+// report.
 template <typename ReturnType, typename Token>
 ParseResult<ReturnType> run(const Parser<ReturnType, Token> &parser,
-                              const std::vector<Token> &tokens) {
+                            const std::vector<Token> &tokens) {
   // MODIFIED: Initialize context with empty furthest_error
   ParseContext<Token> context{tokens, 0, std::nullopt};
   auto result = parser.parse(context);
 
   // Case 1: Parse succeeded but did not consume all input. This is an error.
   if (std::holds_alternative<ReturnType>(result) && !context.isEOF()) {
-      ParseError eof_error{context.position, {"Expected end of input"}, {}};
-      context.updateError(eof_error);
-      return *context.furthest_error;
+    ParseError eof_error{context.position, {"Expected end of input"}, {}};
+    context.updateError(eof_error);
+    return *context.furthest_error;
   }
 
   // Case 2: Parse failed. Return the furthest error seen during the entire run.
   if (std::holds_alternative<ParseError>(result)) {
-      // If furthest_error was somehow not set (highly unlikely), fall back to the result's error.
-      if (context.furthest_error) {
-          return *context.furthest_error;
-      }
-      return std::get<ParseError>(result);
+    // If furthest_error was somehow not set (highly unlikely), fall back to the
+    // result's error.
+    if (context.furthest_error) {
+      return *context.furthest_error;
+    }
+    return std::get<ParseError>(result);
   }
 
   // Case 3: Success and EOF. The ideal case.
@@ -472,7 +555,7 @@ ParseResult<ReturnType> run(const Parser<ReturnType, Token> &parser,
 
 template <typename ReturnType>
 ParseResult<ReturnType> run(const Parser<ReturnType, char> &parser,
-                              const char *input) {
+                            const char *input) {
   std::string s(input);
   std::vector<char> tokens(s.begin(), s.end());
   return run(parser, tokens);
