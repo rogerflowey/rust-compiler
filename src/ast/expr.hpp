@@ -2,6 +2,7 @@
 
 #include "common.hpp"
 
+namespace ast{
 // --- Concrete Expression Nodes ---
 struct BlockExpr {
     std::vector<StmtPtr> statements;
@@ -84,3 +85,5 @@ struct Expr {
     ExprVariant value;
     Expr(ExprVariant &&v) : value(std::move(v)) {}
 };
+
+}

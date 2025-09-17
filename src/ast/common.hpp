@@ -7,6 +7,8 @@
 #include <variant>
 #include <vector>
 
+namespace ast{
+
 // 1. Forward declare the variant wrapper structs to break recursion
 struct Type;
 struct Expr;
@@ -45,3 +47,5 @@ struct Path {
 };
 using PathPtr = std::unique_ptr<Path>;
 
+
+}

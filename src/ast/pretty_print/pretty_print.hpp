@@ -18,6 +18,8 @@
 #include "../common.hpp"
 
 
+using namespace ast;
+
 // Forward declare the visitor structs
 struct DebugItemVisitor;
 struct DebugStmtVisitor;

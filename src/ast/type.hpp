@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common.hpp"
-
+namespace ast{
 // --- Concrete Type Nodes ---
 struct PathType {
     PathPtr path;
@@ -37,3 +37,5 @@ using TypeVariant = std::variant<
 struct Type {
     TypeVariant value;
 };
+
+}

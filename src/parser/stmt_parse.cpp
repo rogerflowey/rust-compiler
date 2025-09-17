@@ -4,6 +4,7 @@
 #include "utils.hpp"
 
 using namespace parsec;
+using namespace ast;
 
 void StmtParserBuilder::finalize(const ParserRegistry& registry, std::function<void(StmtParser)> set_stmt_parser) {
     const auto& exprParser = registry.expr;

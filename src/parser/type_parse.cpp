@@ -7,6 +7,7 @@
 #include <string>
 
 using namespace parsec;
+using namespace ast;
 
 void TypeParserBuilder::finalize(const ParserRegistry& registry, std::function<void(TypeParser)> set_type_parser) {
     const auto& exprParser = registry.expr;

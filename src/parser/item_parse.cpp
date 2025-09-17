@@ -5,6 +5,7 @@
 #include "utils.hpp"
 
 using namespace parsec;
+using namespace ast;
 
 void ItemParserBuilder::finalize(
     const ParserRegistry &registry,

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+using namespace ast;
+
 // Forward-declare to reduce header dependencies
 struct ParserRegistry;
 

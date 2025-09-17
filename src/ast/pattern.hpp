@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common.hpp"
-
+namespace ast{
 // --- Concrete Pattern Nodes ---
 struct LiteralPattern {
   ExprPtr literal; // Depends on ExprPtr
@@ -38,3 +38,5 @@ using PatternVariant = std::variant<
 struct Pattern {
     PatternVariant value;
 };
+
+}

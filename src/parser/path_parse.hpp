@@ -4,7 +4,8 @@
 #include "common.hpp"
 #include <functional>
 
-// Forward-declare to reduce header dependencies
+using namespace ast;
+
 struct ParserRegistry;
 
 class PathParserBuilder {

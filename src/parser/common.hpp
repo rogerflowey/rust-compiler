@@ -5,6 +5,8 @@
 #include "../lexer/lexer.hpp"
 #include "../ast/common.hpp"
 
+using namespace ast;
+
 using ExprParser = parsec::Parser<ExprPtr, Token>;
 using StmtParser = parsec::Parser<StmtPtr, Token>;
 using PatternParser = parsec::Parser<PatternPtr, Token>;

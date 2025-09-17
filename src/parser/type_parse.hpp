@@ -3,8 +3,8 @@
 #include "../ast/type.hpp"
 #include "common.hpp"
 #include <functional>
+using namespace ast;
 
-// Forward-declare to reduce header dependencies
 struct ParserRegistry;
 
 class TypeParserBuilder {

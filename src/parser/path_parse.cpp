@@ -6,6 +6,7 @@
 #include <string>
 
 using namespace parsec;
+using namespace ast;
 
 void PathParserBuilder::finalize(const ParserRegistry& /*registry*/, std::function<void(PathParser)> set_path_parser) {
     auto segmentParser = buildSegmentParser();

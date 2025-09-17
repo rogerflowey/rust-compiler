@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 using namespace parsec;
+using namespace ast;
 
 void ExprParserBuilder::finalize(
     const ParserRegistry& registry,

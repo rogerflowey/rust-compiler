@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 using namespace parsec;
+using namespace ast;
 /**
  * @struct ParserSuite
  * @brief Manages the lifecycle of all parser builders and the registry.

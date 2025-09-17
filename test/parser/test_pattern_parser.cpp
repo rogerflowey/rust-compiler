@@ -11,6 +11,7 @@
 #include "src/parser/parser.hpp"
 
 using namespace parsec;
+using namespace ast;
 
 // Helper to safely get a pointer to the concrete node type from the variant wrapper
 template <typename T, typename VariantPtr>

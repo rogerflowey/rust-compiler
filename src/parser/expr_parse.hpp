@@ -9,6 +9,8 @@
 // Forward-declare to reduce header dependencies
 struct ParserRegistry;
 
+using namespace ast;
+
 class ExprParserBuilder {
 public:
     ExprParserBuilder() = default;

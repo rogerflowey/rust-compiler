@@ -2,6 +2,8 @@
 
 #include "common.hpp"
 
+namespace ast{
+
 // --- Concrete Item Nodes ---
 struct FunctionItem {
     struct SelfParam {
@@ -66,3 +68,5 @@ using ItemVariant = std::variant<
 struct Item {
     ItemVariant value;
 };
+
+}

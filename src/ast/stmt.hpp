@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common.hpp"
-
+namespace ast{
 // --- Concrete Statement Nodes ---
 struct LetStmt {
     PatternPtr pattern;
@@ -31,3 +31,5 @@ using StmtVariant = std::variant<
 struct Statement {
     StmtVariant value;
 };
+
+}

@@ -6,6 +6,7 @@
 #include <string>
 
 using namespace parsec;
+using namespace ast;
 
 void PatternParserBuilder::finalize(const ParserRegistry& registry, std::function<void(PatternParser)> set_pattern_parser) {
     const auto& literalParser = registry.literalExpr;
