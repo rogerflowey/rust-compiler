@@ -4,3 +4,12 @@ build/
 Testing/
 cmake-build-*/
 .vscode/
+test-output/
+
+
+.venv
+__pycache__/
+ai_failure*
+.python-version
+pyproject.toml
+uv.lock
