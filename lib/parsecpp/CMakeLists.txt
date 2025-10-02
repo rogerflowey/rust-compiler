@@ -35,9 +35,9 @@ if(BUILD_TESTING)
         gtest_main
     )
     
-    # Register with CTest.
+        # Register with CTest.
     include(CTest)
-    add_test(NAME parsecpp-basic COMMAND parsecpp_tests)
-    add_test(NAME parsecpp-pratt COMMAND parsecpp_pratt_tests)
-    add_test(NAME parsecpp-pratt-move-only COMMAND parsecpp_pratt_move_only_tests)
+    add_test(NAME parsecpp-basic COMMAND parsecpp_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    add_test(NAME parsecpp-pratt COMMAND parsecpp_pratt_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    add_test(NAME parsecpp-pratt-move-only COMMAND parsecpp_pratt_move_only_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 endif()

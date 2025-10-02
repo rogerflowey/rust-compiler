@@ -1,6 +1,6 @@
 #pragma once
 
-#include "semantic/type.hpp"
+#include "semantic/type/type.hpp"
 #include "symbol.hpp"
 #include <unordered_map>
 #include <vector>

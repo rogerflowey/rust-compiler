@@ -1,4 +1,5 @@
 #pragma once
+
 #include "ast/ast.hpp"
 #include "symbol.hpp"
 #include <optional>
@@ -9,18 +10,21 @@ namespace semantic {
 
 class Scope {
   Scope *parent;
-  bool is_boundary;
-  std::unordered_map<std::string, SymbolId> value_symbols;
+
+  std::unordered_map<std::string, SymbolId> item_symbols;
+  std::unordered_map<std::string, SymbolId> binding_symbols;
   std::unordered_map<std::string, SymbolId> type_symbols;
 
 public:
-  Scope(Scope *parent_scope = nullptr, bool is_boundary = false)
-      : parent(parent_scope), is_boundary(is_boundary) {}
+  Scope(Scope *parent_scope = nullptr) : parent(parent_scope) {}
 
-
-  bool insert_value(const ast::Identifier &name, SymbolId id) {
-    auto [_, inserted] = value_symbols.try_emplace(name.name, id);
+  bool insert_item(const ast::Identifier &name, SymbolId id) {
+    auto [_, inserted] = item_symbols.try_emplace(name.name, id);
     return inserted;
+  }
+
+  void insert_binding(const ast::Identifier &name, SymbolId id) {
+    binding_symbols[name.name] = id;
   }
 
   bool insert_type(const ast::Identifier &name, SymbolId id) {
@@ -28,47 +32,34 @@ public:
     return inserted;
   }
 
-  std::optional<SymbolId> lookup_value(const ast::Identifier &name,
-                                         const SymbolTable &table) const {
-    bool enable_bindings = true;
+  std::optional<SymbolId> lookup_value(const ast::Identifier &name) const {
     const Scope *current = this;
-
     while (current) {
-      if (auto it = current->value_symbols.find(name.name);
-          it != current->value_symbols.end()) {
-        
-        const Symbol *symbol = table.get_symbol(it->second);
-
-        if (std::holds_alternative<BindingSymbol>(symbol->value)) {
-          if (enable_bindings) {
-            return it->second;
-          }
-        } else {
-          return it->second;
-        }
+      if (auto result = current->lookup_value_local(name)) {
+        return result;
       }
-      if (current->is_boundary) {
-        enable_bindings = false;
-      }
-
       current = current->parent;
     }
-
     return std::nullopt;
   }
 
   std::optional<SymbolId> lookup_type(const ast::Identifier &name) const {
-    if (auto local_result = lookup_type_local(name)) {
-      return local_result;
-    }
-    if (parent) {
-      return parent->lookup_type(name);
+    const Scope *current = this;
+    while (current) {
+      if (auto result = current->lookup_type_local(name)) {
+        return result;
+      }
+      current = current->parent;
     }
     return std::nullopt;
   }
 
   std::optional<SymbolId> lookup_value_local(const ast::Identifier &name) const {
-    if (auto it = value_symbols.find(name.name); it != value_symbols.end()) {
+    // binding checked before item to shadow them
+    if (auto it = binding_symbols.find(name.name); it != binding_symbols.end()) {
+      return it->second;
+    }
+    if (auto it = item_symbols.find(name.name); it != item_symbols.end()) {
       return it->second;
     }
     return std::nullopt;
@@ -84,4 +75,4 @@ public:
   Scope *get_parent() const { return parent; }
 };
 
-} // namespace semantic
+}

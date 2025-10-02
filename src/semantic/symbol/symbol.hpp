@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ast/common.hpp"
-#include "semantic/type.hpp"
+#include "semantic/type/type.hpp"
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -25,11 +25,11 @@ struct SymbolIdHasher {
 
 
 
-enum class SymbolKind { Binding, Function, Struct, Field, Enum, Const, Trait, ImplBlock };
+enum class SymbolKind { Binding, Function, Struct, Enum, Const, Trait, ImplBlock };
 
 struct UndefinedSymbol {
   SymbolKind kind;
-  const ast::Item *ast_node;
+  const void *ast_node;
 };
 
 struct BindingSymbol {

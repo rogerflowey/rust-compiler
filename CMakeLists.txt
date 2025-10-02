@@ -45,7 +45,8 @@ add_subdirectory(lib/parsecpp)
 # --- Project Modules ---
 # Add our new parser library. This will execute src/parser/CMakeLists.txt
 # and create the 'parser' target.
-add_subdirectory(src/parser) # <<< ADD THIS LINE
+add_subdirectory(src/parser)
+add_subdirectory(src/semantic)
 
 
 # --- Main Executable ---
@@ -55,7 +56,7 @@ target_include_directories(compiler PRIVATE src)
 # Link the main executable against our new parser library.
 # Because 'parser' has a PUBLIC dependency on 'parsecpp', we no longer
 # need to link parsecpp directly here.
-target_link_libraries(compiler PRIVATE parser) # <<< MODIFY THIS LINE
+target_link_libraries(compiler PRIVATE parser semantic)
 
 
 if(BUILD_TESTING)
@@ -72,12 +73,15 @@ if(BUILD_TESTING)
     foreach(test_source_file ${COMPILER_TEST_SOURCES})
         get_filename_component(test_name ${test_source_file} NAME_WE)
 
+        # Special handling for HIR converter test - add the converter source
         add_executable(${test_name} ${test_source_file})
+        
         target_include_directories(${test_name} PRIVATE src)
 
         # Link tests against the parser library.
         target_link_libraries(${test_name} PRIVATE
             parser # <<< MODIFY THIS LINE (replaces parsecpp)
+            semantic
             gtest_main
             compiler_tests_properties
         )

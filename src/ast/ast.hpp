@@ -4,3 +4,8 @@
 #include "pattern.hpp"
 #include "stmt.hpp"
 #include "type.hpp"
+
+
+namespace ast{
+using Program = std::vector<ItemPtr>;
+}

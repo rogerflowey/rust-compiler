@@ -30,8 +30,8 @@ This list summarizes features removed from base Rust semantics for this compiler
 - Try operator `?` removed.
 
 ### Patterns
-- Only these pattern forms remain: literal, identifier, wildcard (`_`), reference (`&`, `&&`), and path patterns.
-- Removed: struct patterns, tuple-struct patterns, tuple patterns, grouped patterns, slice patterns, range patterns, or-patterns (`p | q`).
+- Only these pattern forms remain: literal, identifier, reference (`&`, `&&`), and path patterns.
+- Removed: struct patterns, tuple-struct patterns, tuple patterns, grouped patterns, slice patterns, range patterns, or-patterns (`p | q`), wildcard/underscore patterns (`_`).
 - Binding with `@` (e.g., `x @ subpattern`) removed from identifier patterns.
 
 ### Const evaluation

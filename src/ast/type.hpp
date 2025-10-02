@@ -14,7 +14,7 @@ struct PrimitiveType {
 
 struct ArrayType {
     TypePtr element_type;
-    ExprPtr size; // Depends on ExprPtr, which is fine due to common.hpp
+    ExprPtr size;
 };
 
 struct ReferenceType {
@@ -24,7 +24,6 @@ struct ReferenceType {
 
 struct UnitType {};
 
-// --- Variant and Wrapper ---
 using TypeVariant = std::variant<
     PathType,
     PrimitiveType,
@@ -33,7 +32,6 @@ using TypeVariant = std::variant<
     UnitType
 >;
 
-// Complete the forward-declared type from common.hpp
 struct Type {
     TypeVariant value;
 };
