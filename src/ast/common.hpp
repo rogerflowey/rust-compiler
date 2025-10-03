@@ -28,8 +28,9 @@ using BlockExprPtr = std::unique_ptr<BlockExpr>;
 // 3. Define non-AST helper types
 struct Identifier {
     std::string name;
-    Identifier(std::string name) : name(std::move(name)) {}
-    
+    Identifier(std::string name) : name(std::move(name)) {};
+    Identifier(const char* name) : name(name) {};
+
     bool operator==(const Identifier& other) const noexcept {
         return name == other.name;
     }

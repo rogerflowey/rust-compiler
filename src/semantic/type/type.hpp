@@ -7,19 +7,32 @@
 #include <unordered_map>
 #include <functional>
 
+
+namespace hir{
+    struct StructDef;
+    struct EnumDef;
+};
+
 namespace semantic {
 
 struct Type;
-struct TypeSymbol;
 
 using TypeId = const Type*;
 
-enum class PrimitiveKind { I32, U32, ISIZE, USIZE, BOOL, CHAR, STRING, UNIT, NEVER };
+enum class PrimitiveKind { I32, U32, ISIZE, USIZE, BOOL, CHAR, STRING};
 
 struct StructType {
-    const TypeSymbol* symbol;
+    const hir::StructDef* symbol;
     
     bool operator==(const StructType& other) const {
+        return symbol == other.symbol;
+    }
+};
+
+struct EnumType {
+    const hir::EnumDef* symbol;
+
+    bool operator==(const EnumType& other) const {
         return symbol == other.symbol;
     }
 };
@@ -47,13 +60,20 @@ struct UnitType{
         return true;
     }
 };
+struct NeverType{
+    bool operator==(const NeverType&) const {
+        return true;
+    }
+};
+
 
 using TypeVariant = std::variant<
     PrimitiveKind,
     StructType,
     ReferenceType,
     ArrayType,
-    UnitType
+    UnitType,
+    NeverType
 >;
 
 struct Type {
@@ -69,7 +89,7 @@ struct TypeHash {
         return std::hash<int>()(static_cast<int>(pk));
     }
     size_t operator()(const StructType& st) const {
-        return std::hash<const TypeSymbol*>()(st.symbol);
+        return std::hash<const hir::StructDef*>()(st.symbol);
     }
     size_t operator()(const ReferenceType& rt) const {
         return std::hash<TypeId>()(rt.referenced_type) ^ std::hash<bool>()(rt.is_mutable);
@@ -79,6 +99,9 @@ struct TypeHash {
     }
     size_t operator()(const UnitType&) const {
         return 0xDABCABCC;
+    }
+    size_t operator()(const NeverType&) const {
+        return 0xDABCABCD;
     }
     size_t operator()(const Type& t) const {
         return std::visit(*this, t.value);
@@ -109,4 +132,8 @@ private:
     std::unordered_map<Type, std::unique_ptr<Type>, TypeHash> registered_types;
 };
 
+
+inline TypeId get_type(const Type& t){
+    return TypeContext::get_instance().get_id(t);
+};
 }

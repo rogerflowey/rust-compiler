@@ -1,6 +1,6 @@
 #pragma once
 
-#include "semantic/symbol/symbol.hpp"
+#include "semantic/common.hpp"
 #include "semantic/type/type.hpp"
 #include "ast/ast.hpp"
 
@@ -9,6 +9,21 @@
 #include <variant>
 #include <vector>
 
+
+//some utils
+namespace semantic {
+
+struct Field {
+    ast::Identifier name;
+    TypeId type;
+};
+
+struct EnumVariant {
+    ast::Identifier name;
+};
+
+}
+
 namespace hir {
 
 // Forward declarations for HIR nodes
@@ -16,6 +31,18 @@ struct Expr;
 struct Stmt;
 struct Block;
 struct Item;
+struct Function;
+struct StructDef;
+struct EnumDef;
+struct ConstDef;
+
+struct Binding {
+    bool is_mutable;
+    std::optional<semantic::TypeId> type; // fill in Type Checking pass
+    const ast::IdentifierPattern* ast_node = nullptr;
+};
+
+using Pattern = Binding;
 
 // --- HIR Expression Variants ---
 
@@ -40,7 +67,7 @@ struct Literal {
 };
 
 struct Variable {
-    std::optional<semantic::SymbolId> symbol; // fill in Name Resolution pass
+    std::optional<ValueDef> definition;
     const ast::Expr* ast_node = nullptr;
 };
 
@@ -51,7 +78,7 @@ struct FieldAccess {
 };
 
 struct StructLiteral {
-    std::optional<semantic::TypeId> struct_type; // fill in Name Resolution pass
+    hir::StructDef* struct_def = nullptr;
     struct FieldInit {
         std::optional<const semantic::Field*> field; // fill in Type Checking pass
         std::unique_ptr<Expr> initializer;
@@ -175,7 +202,8 @@ struct Expr {
 };
 
 struct LetStmt {
-    std::vector<semantic::SymbolId> bindings;
+    Pattern pattern;
+    std::optional<semantic::TypeId> type;
     std::unique_ptr<Expr> initializer;
     const ast::LetStmt* ast_node = nullptr;
 };
@@ -199,35 +227,35 @@ struct Stmt {
 
 
 struct Function {
-    semantic::SymbolId symbol;
+    std::vector<Pattern> params;
+    std::optional<semantic::TypeId> return_type;
     std::unique_ptr<Block> body;
     const ast::FunctionItem* ast_node = nullptr;
 };
 
 struct StructDef {
-    semantic::SymbolId symbol;
+    std::vector<semantic::Field> fields;
     const ast::StructItem* ast_node = nullptr;
 };
 
 struct EnumDef {
-    semantic::SymbolId symbol;
+    std::vector<semantic::EnumVariant> variants;
     const ast::EnumItem* ast_node = nullptr;
 };
 
 struct ConstDef {
-    semantic::SymbolId symbol;
+    std::optional<semantic::TypeId> type;
     std::unique_ptr<Expr> value;
     const ast::ConstItem* ast_node = nullptr;
 };
 
 struct Trait {
-    semantic::SymbolId symbol;
     std::vector<std::unique_ptr<Item>> items;
     const ast::TraitItem* ast_node = nullptr;
 };
 
 struct Impl {
-    std::optional<semantic::SymbolId> trait_symbol; // nullopt for inherent impls
+    std::optional<const Trait*> trait_symbol; // nullopt for inherent impls
     std::optional<semantic::TypeId> for_type; // to be filled by name resolution
     std::vector<std::unique_ptr<Item>> items;
     const ast::Item* ast_node = nullptr;

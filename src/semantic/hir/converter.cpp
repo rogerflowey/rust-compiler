@@ -4,6 +4,9 @@
 
 namespace detail {
 
+// Forward declaration
+static hir::Pattern convert_pattern(const ast::Pattern& ast_pattern);
+
 struct ExprConverter {
     AstToHirConverter& converter;
     const ast::Expr& ast_expr;
@@ -27,8 +30,10 @@ struct ExprConverter {
         };
     }
 
-    hir::ExprVariant operator()(const ast::PathExpr&) const {
-        return hir::Variable{ .symbol = std::nullopt, .ast_node = &ast_expr };
+    hir::ExprVariant operator()(const ast::PathExpr& path) const {
+        // The path parameter is unused now, but will be used in name resolution.
+        (void)path;
+        return hir::Variable{ .definition = std::nullopt, .ast_node = &ast_expr };
     }
 
     hir::ExprVariant operator()(const ast::UnaryExpr& op) const {
@@ -173,10 +178,13 @@ struct ExprConverter {
         return hir::ArrayLiteral{ .elements = converter.convert_vec<hir::Expr, ast::Expr>(arr.elements), .ast_node = &arr };
     }
     hir::ExprVariant operator()(const ast::ArrayRepeatExpr& arr) const {
+        // The count expression needs to be evaluated by the constant evaluator.
+        // For now, we leave it as std::nullopt.
         return hir::ArrayRepeat{ .value = converter.convert_expr(*arr.value), .count = std::nullopt, .ast_node = &arr };
     }
     hir::ExprVariant operator()(const ast::StructExpr& s) const {
         hir::StructLiteral hir_s;
+        hir_s.struct_def = nullptr;
         hir_s.fields.reserve(s.fields.size());
         for (const auto& field : s.fields) {
             hir_s.fields.push_back(hir::StructLiteral::FieldInit{
@@ -198,9 +206,26 @@ struct ExprConverter {
         return std::move(converter.convert_expr(*grouped.expr)->value);
     }
     hir::ExprVariant operator()(const ast::UnderscoreExpr&) const {
-        return hir::Variable{ .symbol = std::nullopt, .ast_node = &ast_expr };
+        return hir::Variable{ .definition = std::nullopt, .ast_node = &ast_expr };
     }
 };
+
+static hir::Pattern convert_pattern(const ast::Pattern& ast_pattern) {
+    // We need to find the concrete IdentifierPattern to pass its pointer to the HIR node.
+    if (const auto* id_pattern = std::get_if<ast::IdentifierPattern>(&ast_pattern.value)) {
+         return hir::Binding{
+            .is_mutable = id_pattern->is_mut,
+            .type = std::nullopt,
+            .ast_node = id_pattern
+        };
+    }
+
+    if (std::holds_alternative<ast::WildcardPattern>(ast_pattern.value)) {
+        throw std::logic_error("Wildcard pattern in let/param is not yet supported in HIR");
+    }
+    
+    throw std::logic_error("Unsupported pattern type in HIR conversion");
+}
 
 struct StmtConverter {
     AstToHirConverter& converter;
@@ -208,7 +233,8 @@ struct StmtConverter {
 
     hir::StmtVariant operator()(const ast::LetStmt& let_stmt) const {
         return hir::LetStmt {
-            .bindings = {},
+            .pattern = convert_pattern(*let_stmt.pattern),
+            .type = std::nullopt, // Will be resolved later
             .initializer = let_stmt.initializer ? converter.convert_expr(**let_stmt.initializer) : nullptr,
             .ast_node = &let_stmt
         };
@@ -217,6 +243,8 @@ struct StmtConverter {
         return hir::ExprStmt { .expr = converter.convert_expr(*expr_stmt.expr), .ast_node = &expr_stmt };
     }
     hir::StmtVariant operator()(const ast::ItemStmt&) const {
+        // Item statements are handled by hoisting them into the block's item list.
+        // Here we produce nothing.
         return hir::ExprStmt{ .expr = nullptr, .ast_node = nullptr };
     }
     hir::StmtVariant operator()(const ast::EmptyStmt&) const {
@@ -230,21 +258,38 @@ struct ItemConverter {
     const ast::Item& ast_item;
 
     hir::ItemVariant operator()(const ast::FunctionItem& fn) const {
+        std::vector<hir::Pattern> params;
+        params.reserve(fn.params.size());
+        for (const auto& p : fn.params) {
+            params.push_back(convert_pattern(*p.first));
+        }
+
         return hir::Function{
-            .symbol = converter.top_level_symbols.at(&ast_item),
-            .body = std::make_unique<hir::Block>(converter.convert_block(**fn.body)),
+            .params = std::move(params),
+            .return_type = std::nullopt, // Will be resolved later
+            .body = fn.body ? std::make_unique<hir::Block>(converter.convert_block(**fn.body)) : nullptr,
             .ast_node = &fn
         };
     }
     hir::ItemVariant operator()(const ast::StructItem& s) const {
-        return hir::StructDef{ .symbol = converter.top_level_symbols.at(&ast_item), .ast_node = &s };
+        std::vector<semantic::Field> fields;
+        fields.reserve(s.fields.size());
+        for(const auto& f : s.fields) {
+            fields.push_back(semantic::Field{ .name = *f.first, .type = nullptr });
+        }
+        return hir::StructDef{ .fields = std::move(fields), .ast_node = &s };
     }
     hir::ItemVariant operator()(const ast::EnumItem& e) const {
-        return hir::EnumDef{ .symbol = converter.top_level_symbols.at(&ast_item), .ast_node = &e };
+        std::vector<semantic::EnumVariant> variants;
+        variants.reserve(e.variants.size());
+        for(const auto& v : e.variants) {
+            variants.push_back(semantic::EnumVariant{ .name = *v });
+        }
+        return hir::EnumDef{ .variants = std::move(variants), .ast_node = &e };
     }
     hir::ItemVariant operator()(const ast::ConstItem& cnst) const {
         return hir::ConstDef{
-            .symbol = converter.top_level_symbols.at(&ast_item),
+            .type = std::nullopt,
             .value = converter.convert_expr(*cnst.value),
             .ast_node = &cnst
         };
@@ -252,8 +297,7 @@ struct ItemConverter {
 
     hir::ItemVariant operator()(const ast::TraitItem& trait) const {
         return hir::Trait{
-            .symbol = converter.top_level_symbols.at(&ast_item),
-            .items = converter.convert_vec<hir::Item>(trait.items),
+            .items = converter.convert_vec<hir::Item, ast::Item>(trait.items),
             .ast_node = &trait
         };
     }
@@ -262,7 +306,7 @@ struct ItemConverter {
         return hir::Impl{
             .trait_symbol = std::nullopt,
             .for_type = std::nullopt,
-            .items = converter.convert_vec<hir::Item>(impl.items),
+            .items = converter.convert_vec<hir::Item, ast::Item>(impl.items),
             .ast_node = &ast_item
         };
     }
@@ -271,7 +315,7 @@ struct ItemConverter {
         return hir::Impl{
             .trait_symbol = std::nullopt,
             .for_type = std::nullopt,
-            .items = converter.convert_vec<hir::Item>(impl.items),
+            .items = converter.convert_vec<hir::Item, ast::Item>(impl.items),
             .ast_node = &ast_item
         };
     }
@@ -283,9 +327,6 @@ struct ItemConverter {
 };
 
 } // namespace detail
-
-AstToHirConverter::AstToHirConverter(const AstToSymbolMap& symbol_map)
-    : top_level_symbols(symbol_map) {}
 
 template <typename T, typename U>
 std::vector<std::unique_ptr<T>> AstToHirConverter::convert_vec(const std::vector<std::unique_ptr<U>>& ast_nodes) {
@@ -301,6 +342,7 @@ std::vector<std::unique_ptr<T>> AstToHirConverter::convert_vec(const std::vector
         } else if constexpr (std::is_same_v<T, hir::Item> && std::is_same_v<U, ast::Item>) {
             hir_nodes.push_back(convert_item(*node));
         } else {
+            // This will cause a compile-time error if the conversion is not supported.
             static_assert(sizeof(T) == 0, "Unsupported vector conversion");
         }
     }

@@ -2,14 +2,14 @@
 #include <sstream>
 #include <string>
 #include <memory>
-#include <unordered_map>
+// #include <unordered_map> // No longer needed
 
 #include "src/ast/ast.hpp"
 #include "src/lexer/lexer.hpp"
 #include "src/parser/parser.hpp"
 #include "src/semantic/hir/converter.hpp"
 #include "src/semantic/hir/hir.hpp"
-#include "src/semantic/symbol/symbol.hpp"
+// #include "src/semantic/symbol/symbol.hpp" // No longer needed
 
 using namespace parsec;
 
@@ -146,24 +146,10 @@ std::unique_ptr<ast::Item> make_inherent_impl_item(std::vector<std::unique_ptr<a
     return item;
 }
 
-// Create a dummy symbol for testing
-semantic::SymbolId make_dummy_symbol(const std::string& /*name*/) {
-    // In a real scenario, this would interact with a symbol table.
-    // For converter tests, we just need a unique ID.
-    static uint64_t next_id = 1;
-    return semantic::SymbolId{next_id++};
-}
-
 } // namespace test_helpers
 
 class HirConverterTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        // Create empty symbol map for most tests
-        symbol_map.clear();
-    }
-
-    AstToSymbolMap symbol_map;
+    // No setup or member variables needed anymore
 };
 
 // ============================================================================
@@ -171,7 +157,7 @@ protected:
 // ============================================================================
 
 TEST_F(HirConverterTest, ConvertsIntegerLiterals) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto ast_expr = test_helpers::make_int_literal(42, ast::IntegerLiteralExpr::I32);
     auto hir_expr = converter.convert_expr(*ast_expr);
@@ -189,7 +175,7 @@ TEST_F(HirConverterTest, ConvertsIntegerLiterals) {
 }
 
 TEST_F(HirConverterTest, ConvertsBoolLiterals) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto ast_expr = test_helpers::make_bool_literal(true);
     auto hir_expr = converter.convert_expr(*ast_expr);
@@ -203,7 +189,7 @@ TEST_F(HirConverterTest, ConvertsBoolLiterals) {
 }
 
 TEST_F(HirConverterTest, ConvertsCharLiterals) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto ast_expr = test_helpers::make_char_literal('x');
     auto hir_expr = converter.convert_expr(*ast_expr);
@@ -217,7 +203,7 @@ TEST_F(HirConverterTest, ConvertsCharLiterals) {
 }
 
 TEST_F(HirConverterTest, ConvertsStringLiterals) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto ast_expr = test_helpers::make_string_literal("hello", false);
     auto hir_expr = converter.convert_expr(*ast_expr);
@@ -236,7 +222,7 @@ TEST_F(HirConverterTest, ConvertsStringLiterals) {
 // ============================================================================
 
 TEST_F(HirConverterTest, ConvertsPathExpressions) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto ast_expr = test_helpers::make_path_expr();
     auto hir_expr = converter.convert_expr(*ast_expr);
@@ -244,7 +230,7 @@ TEST_F(HirConverterTest, ConvertsPathExpressions) {
     auto* variable = std::get_if<hir::Variable>(&hir_expr->value);
     ASSERT_NE(variable, nullptr);
     // Symbol should be nullopt since we haven't done name resolution
-    EXPECT_FALSE(variable->symbol.has_value());
+    EXPECT_FALSE(variable->definition.has_value());
 }
 
 // ============================================================================
@@ -252,7 +238,7 @@ TEST_F(HirConverterTest, ConvertsPathExpressions) {
 // ============================================================================
 
 TEST_F(HirConverterTest, ConvertsUnaryExpressions) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto operand = test_helpers::make_int_literal(5);
     auto ast_expr = test_helpers::make_unary_expr(ast::UnaryExpr::NEGATE, std::move(operand));
@@ -274,7 +260,7 @@ TEST_F(HirConverterTest, ConvertsUnaryExpressions) {
 }
 
 TEST_F(HirConverterTest, ConvertsBinaryExpressions) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto left = test_helpers::make_int_literal(3);
     auto right = test_helpers::make_int_literal(4);
@@ -302,7 +288,7 @@ TEST_F(HirConverterTest, ConvertsBinaryExpressions) {
 }
 
 TEST_F(HirConverterTest, ConvertsSimpleAssignment) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto left = test_helpers::make_path_expr();
     auto right = test_helpers::make_int_literal(10);
@@ -326,7 +312,7 @@ TEST_F(HirConverterTest, ConvertsSimpleAssignment) {
 }
 
 TEST_F(HirConverterTest, ConvertsCompoundAssignment) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto left = test_helpers::make_path_expr();
     auto right = test_helpers::make_int_literal(5);
@@ -358,7 +344,7 @@ TEST_F(HirConverterTest, ConvertsCompoundAssignment) {
 // ============================================================================
 
 TEST_F(HirConverterTest, ConvertsGroupedExpressions) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto inner = test_helpers::make_int_literal(42);
     auto ast_expr = test_helpers::make_grouped_expr(std::move(inner));
@@ -378,7 +364,7 @@ TEST_F(HirConverterTest, ConvertsGroupedExpressions) {
 // ============================================================================
 
 TEST_F(HirConverterTest, ConvertsEmptyBlocks) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto ast_block_unique_ptr = test_helpers::make_block_expr();
     // Create the wrapper AST Expr by moving the BlockExpr into it.
@@ -399,7 +385,7 @@ TEST_F(HirConverterTest, ConvertsEmptyBlocks) {
 }
 
 TEST_F(HirConverterTest, ConvertsBlocksWithStatements) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     std::vector<std::unique_ptr<ast::Statement>> statements;
     statements.push_back(test_helpers::make_let_stmt(test_helpers::make_int_literal(10)));
@@ -428,22 +414,21 @@ TEST_F(HirConverterTest, ConvertsBlocksWithStatements) {
 TEST_F(HirConverterTest, ConvertsBlocksWithItemStatements) {
     auto nested_body = test_helpers::make_block_expr();
     auto nested_item = test_helpers::make_function_item("nested", std::move(nested_body));
-    auto* nested_item_ptr = nested_item.get();
-    auto nested_symbol = test_helpers::make_dummy_symbol("nested");
-    symbol_map[nested_item_ptr] = nested_symbol;
 
     std::vector<std::unique_ptr<ast::Statement>> statements;
     statements.push_back(test_helpers::make_item_stmt(std::move(nested_item)));
     statements.push_back(test_helpers::make_expr_stmt(test_helpers::make_int_literal(1)));
 
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     auto block = test_helpers::make_block_expr(std::move(statements));
     auto hir_block = converter.convert_block(*block);
 
     ASSERT_EQ(hir_block.items.size(), 1u);
     auto* hir_function = std::get_if<hir::Function>(&hir_block.items.front()->value);
     ASSERT_NE(hir_function, nullptr);
-    EXPECT_EQ(hir_function->symbol, nested_symbol);
+    ASSERT_NE(hir_function->ast_node, nullptr);
+    ASSERT_NE(hir_function->ast_node->name, nullptr);
+    EXPECT_EQ(hir_function->ast_node->name->name, "nested");
 
     ASSERT_EQ(hir_block.stmts.size(), 1u);
     auto* expr_stmt = std::get_if<hir::ExprStmt>(&hir_block.stmts.front()->value);
@@ -456,7 +441,7 @@ TEST_F(HirConverterTest, ConvertsBlocksWithItemStatements) {
 // ============================================================================
 
 TEST_F(HirConverterTest, ConvertsLetStatements) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto initializer = test_helpers::make_int_literal(5);
     auto ast_stmt = test_helpers::make_let_stmt(std::move(initializer));
@@ -471,8 +456,12 @@ TEST_F(HirConverterTest, ConvertsLetStatements) {
     ASSERT_NE(let_stmt, nullptr);
     EXPECT_EQ(let_stmt->ast_node, ast_let_stmt);
     
-    // Bindings should be empty (filled in name resolution)
-    EXPECT_TRUE(let_stmt->bindings.empty());
+    // Check the converted pattern/binding
+    ASSERT_NE(let_stmt->pattern.ast_node, nullptr);
+    ASSERT_NE(let_stmt->pattern.ast_node->name, nullptr);
+    EXPECT_EQ(let_stmt->pattern.ast_node->name->name, "x");
+    EXPECT_FALSE(let_stmt->pattern.is_mutable);
+    EXPECT_FALSE(let_stmt->pattern.type.has_value());
     
     // Initializer should be converted
     ASSERT_NE(let_stmt->initializer, nullptr);
@@ -481,7 +470,7 @@ TEST_F(HirConverterTest, ConvertsLetStatements) {
 }
 
 TEST_F(HirConverterTest, ConvertsExpressionStatements) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto expr = test_helpers::make_int_literal(42);
     auto ast_stmt = test_helpers::make_expr_stmt(std::move(expr));
@@ -506,16 +495,12 @@ TEST_F(HirConverterTest, ConvertsExpressionStatements) {
 // ============================================================================
 
 TEST_F(HirConverterTest, ConvertsFunctionItems) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto body = test_helpers::make_block_expr({}, test_helpers::make_int_literal(0));
     auto ast_item = test_helpers::make_function_item("test_fn", std::move(body));
     const auto* ast_fn_item = get_node<ast::FunctionItem>(ast_item);
     ASSERT_NE(ast_fn_item, nullptr);
-    
-    // Add symbol to map
-    auto symbol = test_helpers::make_dummy_symbol("test_fn");
-    symbol_map[ast_item.get()] = symbol;
     
     auto hir_item = converter.convert_item(*ast_item);
     
@@ -524,36 +509,35 @@ TEST_F(HirConverterTest, ConvertsFunctionItems) {
     auto* function = std::get_if<hir::Function>(&hir_item->value);
     ASSERT_NE(function, nullptr);
     EXPECT_EQ(function->ast_node, ast_fn_item);
-    EXPECT_EQ(function->symbol, symbol);
+    ASSERT_NE(function->ast_node, nullptr);
+    ASSERT_NE(function->ast_node->name, nullptr);
+    EXPECT_EQ(function->ast_node->name->name, "test_fn");
     ASSERT_NE(function->body, nullptr);
 }
 
 TEST_F(HirConverterTest, ConvertsStructItems) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
 
     auto ast_item = test_helpers::make_struct_item("MyStruct");
     const auto* ast_struct_item = get_node<ast::StructItem>(ast_item);
     ASSERT_NE(ast_struct_item, nullptr);
-
-    auto dummy_symbol = test_helpers::make_dummy_symbol("MyStruct");
-    symbol_map[ast_item.get()] = dummy_symbol;
 
     auto hir_item = converter.convert_item(*ast_item);
     ASSERT_NE(hir_item, nullptr);
 
     auto* struct_def = std::get_if<hir::StructDef>(&hir_item->value);
     ASSERT_NE(struct_def, nullptr);
-    EXPECT_EQ(struct_def->symbol, dummy_symbol);
+    ASSERT_NE(struct_def->ast_node, nullptr);
+    ASSERT_NE(struct_def->ast_node->name, nullptr);
+    EXPECT_EQ(struct_def->ast_node->name->name, "MyStruct");
     EXPECT_EQ(struct_def->ast_node, ast_struct_item);
 }
 
 TEST_F(HirConverterTest, ConvertsTraitItems) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
 
     auto ast_fn_item = test_helpers::make_function_item("my_fn", test_helpers::make_block_expr());
-    auto fn_dummy_symbol = test_helpers::make_dummy_symbol("my_fn");
-    symbol_map[ast_fn_item.get()] = fn_dummy_symbol;
-
+    
     std::vector<std::unique_ptr<ast::Item>> trait_items;
     trait_items.push_back(std::move(ast_fn_item));
 
@@ -561,77 +545,74 @@ TEST_F(HirConverterTest, ConvertsTraitItems) {
     const auto* ast_trait_node = get_node<ast::TraitItem>(ast_trait_item);
     ASSERT_NE(ast_trait_node, nullptr);
 
-    auto trait_dummy_symbol = test_helpers::make_dummy_symbol("MyTrait");
-    symbol_map[ast_trait_item.get()] = trait_dummy_symbol;
-
     auto hir_item = converter.convert_item(*ast_trait_item);
     ASSERT_NE(hir_item, nullptr);
 
     auto* trait_def = std::get_if<hir::Trait>(&hir_item->value);
     ASSERT_NE(trait_def, nullptr);
-    EXPECT_EQ(trait_def->symbol, trait_dummy_symbol);
+    ASSERT_NE(trait_def->ast_node, nullptr);
+    ASSERT_NE(trait_def->ast_node->name, nullptr);
+    EXPECT_EQ(trait_def->ast_node->name->name, "MyTrait");
     EXPECT_EQ(trait_def->ast_node, ast_trait_node);
     ASSERT_EQ(trait_def->items.size(), 1);
 
     auto* func = std::get_if<hir::Function>(&trait_def->items[0]->value);
     ASSERT_NE(func, nullptr);
-    EXPECT_EQ(func->symbol, fn_dummy_symbol);
+    ASSERT_NE(func->ast_node, nullptr);
+    ASSERT_NE(func->ast_node->name, nullptr);
+    EXPECT_EQ(func->ast_node->name->name, "my_fn");
 }
 
 TEST_F(HirConverterTest, ConvertsTraitImplItems) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
 
     auto ast_fn_item = test_helpers::make_function_item("my_fn", test_helpers::make_block_expr());
-    auto fn_dummy_symbol = test_helpers::make_dummy_symbol("my_fn");
-    symbol_map[ast_fn_item.get()] = fn_dummy_symbol;
-
+    
     std::vector<std::unique_ptr<ast::Item>> impl_items;
     impl_items.push_back(std::move(ast_fn_item));
 
     auto ast_impl_item = test_helpers::make_trait_impl_item("MyTrait", std::move(impl_items));
-    // No top-level symbol for impls
 
     auto hir_item = converter.convert_item(*ast_impl_item);
     ASSERT_NE(hir_item, nullptr);
 
     auto* impl = std::get_if<hir::Impl>(&hir_item->value);
     ASSERT_NE(impl, nullptr);
-    EXPECT_FALSE(impl->trait_symbol.has_value()); // Name resolution not done yet
     EXPECT_FALSE(impl->for_type.has_value());   // Type resolution not done yet
     EXPECT_EQ(impl->ast_node, ast_impl_item.get());
     ASSERT_EQ(impl->items.size(), 1);
 
     auto* func = std::get_if<hir::Function>(&impl->items[0]->value);
     ASSERT_NE(func, nullptr);
-    EXPECT_EQ(func->symbol, fn_dummy_symbol);
+    ASSERT_NE(func->ast_node, nullptr);
+    ASSERT_NE(func->ast_node->name, nullptr);
+    EXPECT_EQ(func->ast_node->name->name, "my_fn");
 }
 
 TEST_F(HirConverterTest, ConvertsInherentImplItems) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
 
     auto ast_fn_item = test_helpers::make_function_item("my_fn", test_helpers::make_block_expr());
-    auto fn_dummy_symbol = test_helpers::make_dummy_symbol("my_fn");
-    symbol_map[ast_fn_item.get()] = fn_dummy_symbol;
 
     std::vector<std::unique_ptr<ast::Item>> impl_items;
     impl_items.push_back(std::move(ast_fn_item));
 
     auto ast_impl_item = test_helpers::make_inherent_impl_item(std::move(impl_items));
-    // No top-level symbol for impls
 
     auto hir_item = converter.convert_item(*ast_impl_item);
     ASSERT_NE(hir_item, nullptr);
 
     auto* impl = std::get_if<hir::Impl>(&hir_item->value);
     ASSERT_NE(impl, nullptr);
-    EXPECT_FALSE(impl->trait_symbol.has_value()); // Inherent impl
     EXPECT_FALSE(impl->for_type.has_value());   // Type resolution not done yet
     EXPECT_EQ(impl->ast_node, ast_impl_item.get());
     ASSERT_EQ(impl->items.size(), 1);
 
     auto* func = std::get_if<hir::Function>(&impl->items[0]->value);
     ASSERT_NE(func, nullptr);
-    EXPECT_EQ(func->symbol, fn_dummy_symbol);
+    ASSERT_NE(func->ast_node, nullptr);
+    ASSERT_NE(func->ast_node->name, nullptr);
+    EXPECT_EQ(func->ast_node->name->name, "my_fn");
 }
 
 // ============================================================================
@@ -639,20 +620,16 @@ TEST_F(HirConverterTest, ConvertsInherentImplItems) {
 // ============================================================================
 
 TEST_F(HirConverterTest, ConvertsPrograms) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     ast::Program ast_program;
     
     // Add a function item
     auto body = test_helpers::make_block_expr({}, test_helpers::make_int_literal(42));
     auto fn_item = test_helpers::make_function_item("main", std::move(body));
-    auto fn_symbol = test_helpers::make_dummy_symbol("main");
-    symbol_map[fn_item.get()] = fn_symbol;
     
     // Add a struct item
     auto struct_item = test_helpers::make_struct_item("MyStruct");
-    auto struct_symbol = test_helpers::make_dummy_symbol("MyStruct");
-    symbol_map[struct_item.get()] = struct_symbol;
     
     ast_program.push_back(std::move(fn_item));
     ast_program.push_back(std::move(struct_item));
@@ -665,12 +642,16 @@ TEST_F(HirConverterTest, ConvertsPrograms) {
     // Check first item (function)
     auto* function = std::get_if<hir::Function>(&hir_program->items[0]->value);
     ASSERT_NE(function, nullptr);
-    EXPECT_EQ(function->symbol, fn_symbol);
+    ASSERT_NE(function->ast_node, nullptr);
+    ASSERT_NE(function->ast_node->name, nullptr);
+    EXPECT_EQ(function->ast_node->name->name, "main");
     
     // Check second item (struct) 
     auto* struct_def = std::get_if<hir::StructDef>(&hir_program->items[1]->value);
     ASSERT_NE(struct_def, nullptr);
-    EXPECT_EQ(struct_def->symbol, struct_symbol);
+    ASSERT_NE(struct_def->ast_node, nullptr);
+    ASSERT_NE(struct_def->ast_node->name, nullptr);
+    EXPECT_EQ(struct_def->ast_node->name->name, "MyStruct");
 }
 
 // ============================================================================
@@ -678,7 +659,7 @@ TEST_F(HirConverterTest, ConvertsPrograms) {
 // ============================================================================
 
 TEST_F(HirConverterTest, HandlesUnderscoreExpressions) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto ast_expr = std::make_unique<ast::Expr>(ast::UnderscoreExpr{});
     auto hir_expr = converter.convert_expr(*ast_expr);
@@ -689,7 +670,7 @@ TEST_F(HirConverterTest, HandlesUnderscoreExpressions) {
 }
 
 TEST_F(HirConverterTest, PreservesBackPointers) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     auto ast_expr = test_helpers::make_int_literal(123);
     auto* original_ast_ptr = ast_expr.get();
@@ -706,7 +687,7 @@ TEST_F(HirConverterTest, PreservesBackPointers) {
 // ============================================================================
 
 TEST_F(HirConverterTest, ConvertsNestedExpressions) {
-    AstToHirConverter converter(symbol_map);
+    AstToHirConverter converter;
     
     // Create: (1 + 2) * 3
     auto left_inner = test_helpers::make_int_literal(1);
