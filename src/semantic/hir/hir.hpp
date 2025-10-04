@@ -31,18 +31,29 @@ struct Expr;
 struct Stmt;
 struct Block;
 struct Item;
+struct AssociatedItem;
+struct Pattern;
 struct Function;
 struct StructDef;
 struct EnumDef;
 struct ConstDef;
+struct Trait;
 
 struct Binding {
     bool is_mutable;
     std::optional<semantic::TypeId> type; // fill in Type Checking pass
     const ast::IdentifierPattern* ast_node = nullptr;
 };
+struct WildCardPattern {
+    const ast::WildcardPattern* ast_node = nullptr;
+};
 
-using Pattern = Binding;
+using PatternVariant = std::variant<Binding, WildCardPattern>;
+struct Pattern {
+    PatternVariant value;
+    Pattern(PatternVariant&& val)
+        : value(std::move(val)) {}
+};
 
 // --- HIR Expression Variants ---
 
@@ -63,28 +74,66 @@ struct Literal {
     >;
 
     Value value;
-    const ast::Expr* ast_node = nullptr;
+    using AstNode = std::variant<
+        const ast::IntegerLiteralExpr*,
+        const ast::BoolLiteralExpr*,
+        const ast::CharLiteralExpr*,
+        const ast::StringLiteralExpr*
+    >;
+    AstNode ast_node;
 };
 
 struct Variable {
     std::optional<ValueDef> definition;
-    const ast::Expr* ast_node = nullptr;
+    const ast::PathExpr* ast_node = nullptr;
+};
+
+// Represents a path with two segments, like `MyType::something`.
+// Will be resolved into a more specific node like `StructStatic` during name resolution.
+struct TypeStatic {
+    std::optional<TypeDef> type_def; // fill in Name Resolution
+    ast::Identifier name;
+    const ast::PathExpr* ast_node = nullptr;
+};
+
+struct Underscore {
+    const ast::UnderscoreExpr* ast_node = nullptr;
 };
 
 struct FieldAccess {
     std::unique_ptr<Expr> base;
-    std::optional<const semantic::Field*> field; // fill in Type Checking pass
-    const ast::Expr* ast_node = nullptr;
+    std::optional<size_t> field_index; // fill in Type Checking pass
+    const ast::FieldAccessExpr* ast_node = nullptr;
 };
 
 struct StructLiteral {
     hir::StructDef* struct_def = nullptr;
-    struct FieldInit {
-        std::optional<const semantic::Field*> field; // fill in Type Checking pass
-        std::unique_ptr<Expr> initializer;
+
+    struct SyntacticFields {
+        std::vector<std::pair<ast::Identifier, std::unique_ptr<Expr>>> initializers;
     };
-    std::vector<FieldInit> fields;
+    struct CanonicalFields {
+        std::vector<std::unique_ptr<Expr>> initializers;
+    };
+
+    std::variant<SyntacticFields, CanonicalFields> fields;
+
     const ast::StructExpr* ast_node = nullptr;
+};
+
+struct StructConst {
+    hir::StructDef* struct_def = nullptr;
+    hir::ConstDef* assoc_const = nullptr;
+};
+
+struct StructStatic {
+    hir::StructDef* struct_def = nullptr;
+    hir::Function* assoc_fn = nullptr;
+};
+
+struct EnumVariant {
+    hir::EnumDef* enum_def = nullptr;
+    size_t variant_index;
 };
 
 struct ArrayLiteral {
@@ -94,7 +143,7 @@ struct ArrayLiteral {
 
 struct ArrayRepeat {
     std::unique_ptr<Expr> value;
-    std::optional<size_t> count; // fill in Const Evaluation pass
+    std::variant<std::unique_ptr<Expr>, size_t> count;
     const ast::ArrayRepeatExpr* ast_node = nullptr;
 };
 
@@ -122,7 +171,8 @@ struct BinaryOp {
     Op op;
     std::unique_ptr<Expr> lhs;
     std::unique_ptr<Expr> rhs;
-    const ast::Expr* ast_node = nullptr;
+    using AstNode = std::variant<const ast::BinaryExpr*, const ast::AssignExpr*>;
+    AstNode ast_node;
 };
 
 struct Cast {
@@ -134,7 +184,14 @@ struct Cast {
 struct Call {
     std::unique_ptr<Expr> callee;
     std::vector<std::unique_ptr<Expr>> args;
-    const ast::Expr* ast_node = nullptr;
+    const ast::CallExpr* ast_node = nullptr;
+};
+
+struct MethodCall {
+    std::unique_ptr<Expr> receiver;
+    ast::Identifier method_name;
+    std::vector<std::unique_ptr<Expr>> args;
+    const ast::MethodCallExpr* ast_node = nullptr;
 };
 
 struct If {
@@ -183,9 +240,11 @@ struct Block {
 
 
 using ExprVariant = std::variant<
-    Literal, Variable, FieldAccess, StructLiteral, ArrayLiteral, ArrayRepeat,
-    Index, Assignment, UnaryOp, BinaryOp, Cast, Call, Block, If, Loop, While,
-    Break, Continue, Return
+    Literal, Variable, TypeStatic, Underscore, FieldAccess, StructLiteral, ArrayLiteral, ArrayRepeat,
+    Index, Assignment, UnaryOp, BinaryOp, Cast, Call, MethodCall, Block, If, Loop, While,
+    Break, Continue, Return,
+    // Resolved static items
+    StructConst, StructStatic, EnumVariant
 >;
 
 
@@ -233,6 +292,21 @@ struct Function {
     const ast::FunctionItem* ast_node = nullptr;
 };
 
+struct Method {
+    struct SelfParam {
+        bool is_reference;
+        bool is_mutable;
+        const ast::FunctionItem::SelfParam* ast_node = nullptr;
+    };
+    
+    SelfParam self_param; // Non-optional: a method must have a receiver
+    std::vector<Pattern> params;
+    std::optional<semantic::TypeId> return_type;
+    std::unique_ptr<Block> body;
+    const ast::FunctionItem* ast_node = nullptr;
+};
+
+
 struct StructDef {
     std::vector<semantic::Field> fields;
     const ast::StructItem* ast_node = nullptr;
@@ -254,11 +328,18 @@ struct Trait {
     const ast::TraitItem* ast_node = nullptr;
 };
 
+using AssociatedItemVariant = std::variant<Function, Method, ConstDef>;
+struct AssociatedItem {
+    AssociatedItemVariant value;
+    AssociatedItem(AssociatedItemVariant&& val) : value(std::move(val)) {}
+};
+
 struct Impl {
     std::optional<const Trait*> trait_symbol; // nullopt for inherent impls
-    std::optional<semantic::TypeId> for_type; // to be filled by name resolution
-    std::vector<std::unique_ptr<Item>> items;
-    const ast::Item* ast_node = nullptr;
+    std::optional<TypeDef> for_type; // fill in Name Resolution
+    std::vector<std::unique_ptr<AssociatedItem>> items;
+    using AstNode = std::variant<const ast::TraitImplItem*, const ast::InherentImplItem*>;
+    AstNode ast_node;
 };
 
 using ItemVariant = std::variant<Function, StructDef, EnumDef, ConstDef, Trait, Impl>;

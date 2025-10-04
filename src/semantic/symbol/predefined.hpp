@@ -8,38 +8,38 @@ namespace semantic {
 
 // fn print(s: &str) -> ()
 static hir::Function func_print = {
-    .params = {hir::Binding{.is_mutable = false,
-                            .type = get_type(Type{ReferenceType{
-                                .referenced_type = get_type(Type{PrimitiveKind::STRING}),
-                                .is_mutable = false}})}},
-    .return_type = get_type(Type{UnitType{}}),
+    .params = {hir::Pattern(hir::Binding{.is_mutable = false,
+                            .type = get_typeID(Type{ReferenceType{
+                                .referenced_type = get_typeID(Type{PrimitiveKind::STRING}),
+                                .is_mutable = false}})})},
+    .return_type = get_typeID(Type{UnitType{}}),
     .body = {},
     .ast_node = nullptr,
 };
 
 // fn println(s: &str) -> ()
 static hir::Function func_println = {
-    .params = {hir::Binding{.is_mutable = false,
-                            .type = get_type(Type{ReferenceType{
-                                .referenced_type = get_type(Type{PrimitiveKind::STRING}),
-                                .is_mutable = false}})}},
-    .return_type = get_type(Type{UnitType{}}),
+    .params = {hir::Pattern(hir::Binding{.is_mutable = false,
+                            .type = get_typeID(Type{ReferenceType{
+                                .referenced_type = get_typeID(Type{PrimitiveKind::STRING}),
+                                .is_mutable = false}})})},
+    .return_type = get_typeID(Type{UnitType{}}),
     .body = {},
     .ast_node = nullptr,
 };
 
 // fn printInt(n: i32) -> ()
 static hir::Function func_printInt = {
-    .params = {hir::Binding{.is_mutable = false, .type = get_type(Type{PrimitiveKind::I32})}},
-    .return_type = get_type(Type{UnitType{}}),
+    .params = {hir::Pattern(hir::Binding{.is_mutable = false, .type = get_typeID(Type{PrimitiveKind::I32})})},
+    .return_type = get_typeID(Type{UnitType{}}),
     .body = {},
     .ast_node = nullptr,
 };
 
 // fn printlnInt(n: i32) -> ()
 static hir::Function func_printlnInt = {
-    .params = {hir::Binding{.is_mutable = false, .type = get_type(Type{PrimitiveKind::I32})}},
-    .return_type = get_type(Type{UnitType{}}),
+    .params = {hir::Pattern(hir::Binding{.is_mutable = false, .type = get_typeID(Type{PrimitiveKind::I32})})},
+    .return_type = get_typeID(Type{UnitType{}}),
     .body = {},
     .ast_node = nullptr,
 };
@@ -53,7 +53,7 @@ static hir::StructDef struct_String = {
 // fn getString() -> String
 static hir::Function func_getString = {
     .params = {},
-    .return_type = get_type(Type{StructType{.symbol = &struct_String}}),
+    .return_type = get_typeID(Type{StructType{.symbol = &struct_String}}),
     .body = {},
     .ast_node = nullptr,
 };
@@ -61,15 +61,15 @@ static hir::Function func_getString = {
 // fn getInt() -> i32
 static hir::Function func_getInt = {
     .params = {},
-    .return_type = get_type(Type{PrimitiveKind::I32}),
+    .return_type = get_typeID(Type{PrimitiveKind::I32}),
     .body = {},
     .ast_node = nullptr,
 };
 
 // fn exit(code: i32) -> !
 static hir::Function func_exit = {
-    .params = {hir::Binding{.is_mutable = false, .type = get_type(Type{PrimitiveKind::I32})}},
-    .return_type = get_type(Type{NeverType{}}),
+    .params = {hir::Pattern(hir::Binding{.is_mutable = false, .type = get_typeID(Type{PrimitiveKind::I32})})},
+    .return_type = get_typeID(Type{NeverType{}}),
     .body = {},
     .ast_node = nullptr,
 };
@@ -91,5 +91,8 @@ inline Scope create_predefined_scope() {
   return scope;
 }
 
-static Scope predefined_scope = create_predefined_scope();
+inline Scope& get_predefined_scope() {
+    static Scope predefined_scope = create_predefined_scope();
+    return predefined_scope;
+}
 } // namespace semantic

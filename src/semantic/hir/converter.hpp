@@ -19,6 +19,7 @@ public:
     std::unique_ptr<hir::Item> convert_item(const ast::Item& item);
     std::unique_ptr<hir::Stmt> convert_stmt(const ast::Statement& stmt);
     std::unique_ptr<hir::Expr> convert_expr(const ast::Expr& expr);
+    std::unique_ptr<hir::AssociatedItem> convert_associated_item(const ast::Item& item);
     hir::Block convert_block(const ast::BlockExpr& block);
 
 private:

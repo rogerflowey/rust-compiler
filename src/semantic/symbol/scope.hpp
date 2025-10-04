@@ -2,6 +2,8 @@
 
 #include "ast/ast.hpp"
 #include "semantic/common.hpp"
+#include "semantic/hir/hir.hpp"
+#include "semantic/hir/helper.hpp"
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -34,18 +36,49 @@ public:
     return inserted;
   }
 
+  using SymbolDef = hir::helper::NamedItemPtr;
+
+  bool define(const ast::Identifier &name, SymbolDef def) {
+    struct DefineVisitor {
+      Scope *self;
+      const ast::Identifier &name;
+      bool operator()(hir::Binding *def) const {
+        self->define_binding(name, def);
+        return true;
+      }
+      bool operator()(hir::ConstDef *def) const {
+        return self->define_item(name, def);
+      }
+      bool operator()(hir::Function *def) const {
+        return self->define_item(name, def);
+      }
+      bool operator()(hir::StructDef *def) const {
+        return self->define_type(name, def);
+      }
+      bool operator()(hir::EnumDef *def) const {
+        return self->define_type(name, def);
+      }
+      bool operator()(hir::Trait *def) const {
+        return self->define_type(name, def);
+      }
+    };
+    return std::visit(DefineVisitor{this, name}, def);
+  }
+
   std::optional<ValueDef> lookup_value(const ast::Identifier &name) const {
     bool bindings_enabled = true;
     const Scope *current = this;
 
     while (current) {
       if (bindings_enabled) {
-        if (auto it = current->binding_symbols.find(name.name); it != current->binding_symbols.end()) {
+        if (auto it = current->binding_symbols.find(name.name);
+            it != current->binding_symbols.end()) {
           return it->second;
         }
       }
 
-      if (auto it = current->item_symbols.find(name.name); it != current->item_symbols.end()) {
+      if (auto it = current->item_symbols.find(name.name);
+          it != current->item_symbols.end()) {
         return it->second;
       }
 
@@ -62,7 +95,8 @@ public:
   std::optional<TypeDef> lookup_type(const ast::Identifier &name) const {
     const Scope *current = this;
     while (current) {
-      if (auto it = current->type_symbols.find(name.name); it != current->type_symbols.end()) {
+      if (auto it = current->type_symbols.find(name.name);
+          it != current->type_symbols.end()) {
         return it->second;
       }
       current = current->parent;
@@ -70,8 +104,10 @@ public:
     return std::nullopt;
   }
 
-  std::optional<ValueDef> lookup_value_local(const ast::Identifier &name) const {
-    if (auto it = binding_symbols.find(name.name); it != binding_symbols.end()) {
+  std::optional<ValueDef>
+  lookup_value_local(const ast::Identifier &name) const {
+    if (auto it = binding_symbols.find(name.name);
+        it != binding_symbols.end()) {
       return it->second;
     }
     if (auto it = item_symbols.find(name.name); it != item_symbols.end()) {

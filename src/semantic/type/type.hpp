@@ -70,6 +70,7 @@ struct NeverType{
 using TypeVariant = std::variant<
     PrimitiveKind,
     StructType,
+    EnumType,
     ReferenceType,
     ArrayType,
     UnitType,
@@ -90,6 +91,9 @@ struct TypeHash {
     }
     size_t operator()(const StructType& st) const {
         return std::hash<const hir::StructDef*>()(st.symbol);
+    }
+    size_t operator()(const EnumType& et) const {
+        return std::hash<const hir::EnumDef*>()(et.symbol);
     }
     size_t operator()(const ReferenceType& rt) const {
         return std::hash<TypeId>()(rt.referenced_type) ^ std::hash<bool>()(rt.is_mutable);
@@ -133,7 +137,7 @@ private:
 };
 
 
-inline TypeId get_type(const Type& t){
+inline TypeId get_typeID(const Type& t){
     return TypeContext::get_instance().get_id(t);
 };
 }

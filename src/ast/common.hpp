@@ -17,7 +17,7 @@ struct Item;
 struct Pattern;
 struct BlockExpr;
 
-// 2. Define smart pointer aliases using the incomplete types
+
 using TypePtr = std::unique_ptr<Type>;
 using ExprPtr = std::unique_ptr<Expr>;
 using StmtPtr = std::unique_ptr<Statement>;
@@ -25,7 +25,7 @@ using ItemPtr = std::unique_ptr<Item>;
 using PatternPtr = std::unique_ptr<Pattern>;
 using BlockExprPtr = std::unique_ptr<BlockExpr>;
 
-// 3. Define non-AST helper types
+
 struct Identifier {
     std::string name;
     Identifier(std::string name) : name(std::move(name)) {};
@@ -53,6 +53,19 @@ struct PathSegment {
 struct Path {
     std::vector<PathSegment> segments;
     Path(std::vector<PathSegment> segments) : segments(std::move(segments)) {}
+    std::optional<ast::Identifier> get_name(size_t index) const {
+        if(index >= segments.size()){
+            return std::nullopt;
+        }
+        switch(segments[index].type){
+            case PathSegType::IDENTIFIER:
+                return std::optional<ast::Identifier>(*(segments[index].id.value()));
+            case PathSegType::SELF:
+                return ast::Identifier("Self");//dirty casting
+            case PathSegType::self:
+                return ast::Identifier("self");
+        }
+    }
 };
 using PathPtr = std::unique_ptr<Path>;
 

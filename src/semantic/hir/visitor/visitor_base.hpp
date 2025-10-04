@@ -9,6 +9,8 @@ class HirVisitorBase {
 protected:
 	Derived& derived() { return *static_cast<Derived*>(this); }
 	const Derived& derived() const { return *static_cast<const Derived*>(this); }
+	HirVisitorBase& base() { return *this; }
+	const HirVisitorBase& base() const { return *this; }
 
 	void visit_optional_expr(std::optional<std::unique_ptr<Expr>>& maybe_expr) {
 		if (maybe_expr && *maybe_expr) {
@@ -30,6 +32,16 @@ public:
 	}
 
 	void visit_item(Item& item) {
+		std::visit([this](auto& node) { derived().visit(node); }, item.value);
+	}
+
+	void visit_associated_item(std::unique_ptr<AssociatedItem>& item) {
+		if (item) {
+			derived().visit_associated_item(*item);
+		}
+	}
+
+	void visit_associated_item(AssociatedItem& item) {
 		std::visit([this](auto& node) { derived().visit(node); }, item.value);
 	}
 
@@ -60,6 +72,9 @@ public:
 	}
 
 	void visit_block(Block& block) {
+		for (auto& item : block.items) {
+			derived().visit_item(item);
+		}
 		for (auto& stmt : block.stmts) {
 			derived().visit_stmt(stmt);
 		}
@@ -70,7 +85,18 @@ public:
 
 	// Items
 	void visit(Function& function) {
+		for (auto& param : function.params) {
+			derived().visit_pattern(param);
+		}
 		derived().visit_block(function.body);
+	}
+
+	void visit(Method& method) {
+		// self_param is a simple struct, no need to visit its members.
+		for (auto& param : method.params) {
+			derived().visit_pattern(param);
+		}
+		derived().visit_block(method.body);
 	}
 
 	void visit(StructDef&) {}
@@ -79,9 +105,20 @@ public:
 	void visit(ConstDef& constant) {
 		derived().visit_expr(constant.value);
 	}
+	void visit(Trait& trait) {
+		for (auto& item : trait.items) {
+			derived().visit_item(item);
+		}
+	}
+	void visit(Impl& impl) {
+		for (auto& item : impl.items) {
+			derived().visit_associated_item(item);
+		}
+	}
 
 	// Statements
 	void visit(LetStmt& stmt) {
+		derived().visit_pattern(stmt.pattern);
 		derived().visit_expr(stmt.initializer);
 	}
 
@@ -89,17 +126,42 @@ public:
 		derived().visit_expr(stmt.expr);
 	}
 
+	void visit_pattern(Pattern& pattern) {
+		std::visit([this](auto& node) { derived().visit(node); }, pattern.value);
+	}
+
+	// Patterns
+	void visit(Binding&) {}
+	void visit(WildCardPattern&) {}
+
 	// Expressions
 	void visit(Literal&) {}
 	void visit(Variable&) {}
+	void visit(TypeStatic&) {}
+	void visit(Underscore&) {}
 	void visit(FieldAccess& access) {
 		derived().visit_expr(access.base);
 	}
 	void visit(StructLiteral& literal) {
-		for (auto& field : literal.fields) {
-			derived().visit_expr(field.initializer);
-		}
+		std::visit(
+			[this](auto& fields_variant) {
+				using T = std::decay_t<decltype(fields_variant)>;
+				if constexpr (std::is_same_v<T, StructLiteral::SyntacticFields>) {
+					for (auto& field : fields_variant.initializers) {
+						derived().visit_expr(field.second);
+					}
+				} else if constexpr (std::is_same_v<T, StructLiteral::CanonicalFields>) {
+					for (auto& field : fields_variant.initializers) {
+						derived().visit_expr(field);
+					}
+				}
+			},
+			literal.fields
+		);
 	}
+	void visit(StructConst&) {}
+	void visit(StructStatic&) {}
+	void visit(EnumVariant&) {}
 	void visit(ArrayLiteral& literal) {
 		for (auto& element : literal.elements) {
 			derived().visit_expr(element);
@@ -107,6 +169,9 @@ public:
 	}
 	void visit(ArrayRepeat& repeat) {
 		derived().visit_expr(repeat.value);
+        if (auto* count_expr = std::get_if<std::unique_ptr<Expr>>(&repeat.count)) {
+            derived().visit_expr(*count_expr);
+        }
 	}
 	void visit(Index& index) {
 		derived().visit_expr(index.base);
@@ -128,6 +193,12 @@ public:
 	}
 	void visit(Call& call) {
 		derived().visit_expr(call.callee);
+		for (auto& arg : call.args) {
+			derived().visit_expr(arg);
+		}
+	}
+	void visit(MethodCall& call) {
+		derived().visit_expr(call.receiver);
 		for (auto& arg : call.args) {
 			derived().visit_expr(arg);
 		}

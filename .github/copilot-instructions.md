@@ -10,6 +10,7 @@ The compiler uses a standard structure:
 - **Lexer:** Tokenizes the source code (`src/lexer/`).
 - **Parser:** Builds an Abstract Syntax Tree (AST) from the tokens (`src/parser/`).
 - **AST:** The data structures representing the code are in `src/ast/`.
+- **Semantic Analyzer:** Transforms the AST to a High-Level IR (HIR) and performs semantic checks (`src/semantic/`).
 
 ## Core Dependencies
 
@@ -44,8 +45,35 @@ When adding a new test file (e.g., `test/semantic/test_new_feature.cpp`), it wil
 - **Parser Registry:** The `src/parser/parser_registry.hpp` file seems to be a central place where parsers are registered. When adding a new parser, it should be registered here.
 - **Language Specification:** The `RCompiler-Spec/` directory contains the specification for the language. Refer to this for details on syntax and semantics. Note that top layer file(such as `src/expression.md`) should be preferred over lower layer(such as `src/expression/*`) files since they might not be up to date.
 
+## Semantic Analysis (`src/semantic/`)
+
+The semantic analysis phase transforms the AST into a High-Level IR (HIR) and enriches it with semantic information through a series of passes. The design is detailed in `design_overview.md`.
+
+### Architecture: HIR Refinement
+
+- **HIR (`src/semantic/hir/`):** A single, mutable High-Level Intermediate Representation. It's initially created as a "skeletal" structure from the AST and then refined by subsequent passes.
+- **Passes (`src/semantic/pass/`):** Each pass traverses the HIR and modifies it in-place to add semantic information like symbol resolution and types.
+
+### Pipeline Status
+
+The analysis is performed in a strict sequence of passes:
+
+1.  **Structural Transformation (AST -> Skeletal HIR):** **(Finished)**
+    -   Mechanically converts the `ast::Program` into a skeletal `hir::Program`.
+    -   Implemented in `src/semantic/hir/converter.cpp`.
+
+2.  **Name Resolution:** **(In Progress)**
+    -   Traverses the HIR and resolves all names to unique `SymbolId`s, filling in the `symbol` field in HIR nodes.
+    -   Work is ongoing in `src/semantic/pass/name_resolution/name_resolution.hpp`.
+
+3.  **Type Checking & Inference:** **(TODO)**
+    -   The next major step. This pass will traverse the name-resolved HIR to infer and check types, filling in the `type_id` field in HIR nodes.
+
+
 When working on a new feature, the typical workflow is:
-1.  Update the lexer in `src/lexer/` if new tokens are needed.
-2.  Define new AST nodes in `src/ast/` (and update the relevant `std::variant` types).
-3.  Implement the parser for the new feature in `src/parser/`, using `parsecpp`.
-4.  Add comprehensive tests in the `test/` directory.
+1.  **AST/Parser (if needed):** If the feature introduces new syntax, first update the lexer, AST nodes (`src/ast/`), and parser (`src/parser/`).
+2.  **HIR Transformation:** Update the `hir::Converter` (`src/semantic/hir/converter.cpp`) to correctly transform the new or modified AST nodes into their HIR counterparts.
+3.  **Semantic Pass:**
+    *   For **Name Resolution**, update the `NameResolution` pass (`src/semantic/pass/name_resolution/name_resolution.hpp`) to resolve symbols for the new HIR nodes.
+    *   For **Type Checking**, update the type checking pass (once it's created) to infer and validate types.
+4.  **Testing:** Add new test cases in `test/semantic/` to validate the new semantic analysis logic.
