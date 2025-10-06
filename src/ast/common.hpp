@@ -65,6 +65,7 @@ struct Path {
             case PathSegType::self:
                 return ast::Identifier("self");
         }
+        return std::nullopt;
     }
 };
 using PathPtr = std::unique_ptr<Path>;

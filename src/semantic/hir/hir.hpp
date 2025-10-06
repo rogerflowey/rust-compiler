@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ast/common.hpp"
 #include "semantic/common.hpp"
 #include "semantic/type/type.hpp"
 #include "ast/ast.hpp"
@@ -34,14 +35,67 @@ struct Item;
 struct AssociatedItem;
 struct Pattern;
 struct Function;
+struct Method;
 struct StructDef;
 struct EnumDef;
 struct ConstDef;
 struct Trait;
+struct Impl;
+
+// --- HIR Type System Nodes ---
+struct DefType;
+struct PrimitiveType;
+struct ArrayType;
+struct ReferenceType;
+struct UnitType;
+struct TypeNode;
+
+using TypeNodeVariant = std::variant<
+    std::unique_ptr<DefType>,
+    std::unique_ptr<PrimitiveType>,
+    std::unique_ptr<ArrayType>,
+    std::unique_ptr<ReferenceType>,
+    std::unique_ptr<UnitType>
+>;
+
+struct TypeNode {
+    TypeNodeVariant value;
+};
+using TypeAnnotation = std::variant<std::unique_ptr<TypeNode>, semantic::TypeId>;
+
+struct DefType {
+    ast::Identifier name;
+    const ast::PathType* ast_node = nullptr;
+};
+
+struct PrimitiveType {
+    ast::PrimitiveType::Kind kind;
+    const ast::PrimitiveType* ast_node = nullptr;
+};
+
+struct ArrayType {
+    TypeAnnotation element_type;
+    std::unique_ptr<Expr> size;
+    const ast::ArrayType* ast_node = nullptr;
+};
+
+struct ReferenceType {
+    TypeAnnotation referenced_type;
+    bool is_mutable;
+    const ast::ReferenceType* ast_node = nullptr;
+};
+
+struct UnitType {
+    const ast::UnitType* ast_node = nullptr;
+};
+
+
+
+
 
 struct Binding {
     bool is_mutable;
-    std::optional<semantic::TypeId> type; // fill in Type Checking pass
+    std::optional<TypeAnnotation> type_annotation; // fill in Type Checking pass
     const ast::IdentifierPattern* ast_node = nullptr;
 };
 struct WildCardPattern {
@@ -84,14 +138,14 @@ struct Literal {
 };
 
 struct Variable {
-    std::optional<ValueDef> definition;
+    std::variant<ast::Identifier, ValueDef> definition;
     const ast::PathExpr* ast_node = nullptr;
 };
 
 // Represents a path with two segments, like `MyType::something`.
 // Will be resolved into a more specific node like `StructStatic` during name resolution.
 struct TypeStatic {
-    std::optional<TypeDef> type_def; // fill in Name Resolution
+    std::variant<ast::Identifier, TypeDef> type; // The first segment of the path, e.g., `MyType`
     ast::Identifier name;
     const ast::PathExpr* ast_node = nullptr;
 };
@@ -102,12 +156,12 @@ struct Underscore {
 
 struct FieldAccess {
     std::unique_ptr<Expr> base;
-    std::optional<size_t> field_index; // fill in Type Checking pass
+    std::variant<ast::Identifier, size_t> field;
     const ast::FieldAccessExpr* ast_node = nullptr;
 };
 
 struct StructLiteral {
-    hir::StructDef* struct_def = nullptr;
+    std::variant<ast::Identifier, hir::StructDef*> struct_path;
 
     struct SyntacticFields {
         std::vector<std::pair<ast::Identifier, std::unique_ptr<Expr>>> initializers;
@@ -177,7 +231,7 @@ struct BinaryOp {
 
 struct Cast {
     std::unique_ptr<Expr> expr;
-    std::optional<semantic::TypeId> target_type; // fill in Type Checking pass
+    TypeAnnotation target_type;
     const ast::CastExpr* ast_node = nullptr;
 };
 
@@ -189,7 +243,7 @@ struct Call {
 
 struct MethodCall {
     std::unique_ptr<Expr> receiver;
-    ast::Identifier method_name;
+    std::variant<ast::Identifier, const Method*> method;
     std::vector<std::unique_ptr<Expr>> args;
     const ast::MethodCallExpr* ast_node = nullptr;
 };
@@ -262,7 +316,7 @@ struct Expr {
 
 struct LetStmt {
     Pattern pattern;
-    std::optional<semantic::TypeId> type;
+    std::optional<TypeAnnotation> type_annotation;
     std::unique_ptr<Expr> initializer;
     const ast::LetStmt* ast_node = nullptr;
 };
@@ -287,7 +341,7 @@ struct Stmt {
 
 struct Function {
     std::vector<Pattern> params;
-    std::optional<semantic::TypeId> return_type;
+    std::optional<TypeAnnotation> return_type;
     std::unique_ptr<Block> body;
     const ast::FunctionItem* ast_node = nullptr;
 };
@@ -299,9 +353,9 @@ struct Method {
         const ast::FunctionItem::SelfParam* ast_node = nullptr;
     };
     
-    SelfParam self_param; // Non-optional: a method must have a receiver
+    SelfParam self_param;
     std::vector<Pattern> params;
-    std::optional<semantic::TypeId> return_type;
+    std::optional<TypeAnnotation> return_type;
     std::unique_ptr<Block> body;
     const ast::FunctionItem* ast_node = nullptr;
 };
@@ -318,7 +372,7 @@ struct EnumDef {
 };
 
 struct ConstDef {
-    std::optional<semantic::TypeId> type;
+    std::optional<TypeAnnotation> type;
     std::unique_ptr<Expr> value;
     const ast::ConstItem* ast_node = nullptr;
 };
@@ -335,8 +389,8 @@ struct AssociatedItem {
 };
 
 struct Impl {
-    std::optional<const Trait*> trait_symbol; // nullopt for inherent impls
-    std::optional<TypeDef> for_type; // fill in Name Resolution
+    std::optional<std::variant<ast::Identifier, const Trait*>> trait; // nullopt for inherent impls
+    TypeAnnotation for_type;
     std::vector<std::unique_ptr<AssociatedItem>> items;
     using AstNode = std::variant<const ast::TraitImplItem*, const ast::InherentImplItem*>;
     AstNode ast_node;

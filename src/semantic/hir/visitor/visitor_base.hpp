@@ -4,6 +4,14 @@
 
 namespace hir {
 
+// Forward declare HIR type nodes for the visitor
+struct DefType;
+struct PrimitiveType;
+struct ArrayType;
+struct ReferenceType;
+struct UnitType;
+struct TypeNode;
+
 template<typename Derived>
 class HirVisitorBase {
 protected:
@@ -15,6 +23,20 @@ protected:
 	void visit_optional_expr(std::optional<std::unique_ptr<Expr>>& maybe_expr) {
 		if (maybe_expr && *maybe_expr) {
 			derived().visit_expr(**maybe_expr);
+		}
+	}
+
+	void visit_type_annotation(TypeAnnotation& annotation) {
+		if (auto* type_node = std::get_if<std::unique_ptr<TypeNode>>(&annotation)) {
+			if (*type_node) {
+				derived().visit_type_node(**type_node);
+			}
+		}
+	}
+
+	void visit_optional_type_annotation(std::optional<TypeAnnotation>& opt_annotation) {
+		if (opt_annotation) {
+			derived().visit_type_annotation(*opt_annotation);
 		}
 	}
 
@@ -83,11 +105,27 @@ public:
 		}
 	}
 
+	// Type Nodes
+	void visit_type_node(TypeNode& type_node) {
+		std::visit([this](auto& node) { derived().visit(*node); }, type_node.value);
+	}
+	void visit(DefType&) {}
+	void visit(PrimitiveType&) {}
+	void visit(UnitType&) {}
+	void visit(ArrayType& array_type) {
+		derived().visit_type_annotation(array_type.element_type);
+		derived().visit_expr(array_type.size);
+	}
+	void visit(ReferenceType& ref_type) {
+		derived().visit_type_annotation(ref_type.referenced_type);
+	}
+
 	// Items
 	void visit(Function& function) {
 		for (auto& param : function.params) {
 			derived().visit_pattern(param);
 		}
+		visit_optional_type_annotation(function.return_type);
 		derived().visit_block(function.body);
 	}
 
@@ -96,6 +134,7 @@ public:
 		for (auto& param : method.params) {
 			derived().visit_pattern(param);
 		}
+		visit_optional_type_annotation(method.return_type);
 		derived().visit_block(method.body);
 	}
 
@@ -103,6 +142,7 @@ public:
 	void visit(EnumDef&) {}
 
 	void visit(ConstDef& constant) {
+		visit_optional_type_annotation(constant.type);
 		derived().visit_expr(constant.value);
 	}
 	void visit(Trait& trait) {
@@ -111,6 +151,7 @@ public:
 		}
 	}
 	void visit(Impl& impl) {
+		visit_type_annotation(impl.for_type);
 		for (auto& item : impl.items) {
 			derived().visit_associated_item(item);
 		}
@@ -119,6 +160,7 @@ public:
 	// Statements
 	void visit(LetStmt& stmt) {
 		derived().visit_pattern(stmt.pattern);
+		visit_optional_type_annotation(stmt.type_annotation);
 		derived().visit_expr(stmt.initializer);
 	}
 
@@ -131,7 +173,9 @@ public:
 	}
 
 	// Patterns
-	void visit(Binding&) {}
+	void visit(Binding& binding) {
+		visit_optional_type_annotation(binding.type_annotation);
+	}
 	void visit(WildCardPattern&) {}
 
 	// Expressions
@@ -190,6 +234,7 @@ public:
 	}
 	void visit(Cast& cast) {
 		derived().visit_expr(cast.expr);
+		visit_type_annotation(cast.target_type);
 	}
 	void visit(Call& call) {
 		derived().visit_expr(call.callee);

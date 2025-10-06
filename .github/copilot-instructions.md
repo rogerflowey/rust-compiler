@@ -31,6 +31,7 @@ The main executable will be located at `build/compiler`.
 Tests are crucial in this project. To run all tests, use the following command:
 
 ```bash
+# You must build before running tests
 ctest --test-dir build
 ```
 

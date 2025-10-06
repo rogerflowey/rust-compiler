@@ -4,8 +4,10 @@
 
 namespace detail {
 
-// Forward declaration
+// Forward declarations
 static hir::Pattern convert_pattern(const ast::Pattern& ast_pattern);
+static std::unique_ptr<hir::TypeNode> convert_type(AstToHirConverter& converter, const ast::Type& ast_type);
+
 
 struct ExprConverter {
     AstToHirConverter& converter;
@@ -34,21 +36,20 @@ struct ExprConverter {
         if (!path.path) {
             throw std::logic_error("Path expression with null path found.");
         }
-        // ast::Path has a `segments` member of type std::vector<ast::PathSegment>.
         if (path.path->segments.empty()) {
             throw std::logic_error("Path expression with no segments found.");
         }
         if (path.path->segments.size() == 1) {
-            return hir::Variable{ .definition = std::nullopt, .ast_node = &path };
+            return hir::Variable{ .definition = path.path->get_name(0).value(), .ast_node = &path };
         }
         if (path.path->segments.size() == 2) {
-            // ast::PathSegment has a member `id` of type IdPtr (std::unique_ptr<ast::Identifier>)
+            const auto& first_segment_id = path.path->get_name(0);
             const auto& second_segment_id = path.path->segments.at(1).id;
-            if (!second_segment_id) {
+            if (!first_segment_id || !second_segment_id) {
                 throw std::logic_error("Path segment has a null identifier.");
             }
             return hir::TypeStatic{
-                .type_def = std::nullopt,
+                .type = *first_segment_id,
                 .name = **second_segment_id,
                 .ast_node = &path
             };
@@ -176,14 +177,14 @@ struct ExprConverter {
     hir::ExprVariant operator()(const ast::MethodCallExpr& call) const {
         return hir::MethodCall{
             .receiver = converter.convert_expr(*call.receiver),
-            .method_name = *call.method_name,
+            .method = *call.method_name,
             .args = converter.convert_vec<hir::Expr, ast::Expr>(call.args),
             .ast_node = &call
         };
     }
 
     hir::ExprVariant operator()(const ast::FieldAccessExpr& access) const {
-        return hir::FieldAccess{ .base = converter.convert_expr(*access.object), .field_index = std::nullopt, .ast_node = &access };
+        return hir::FieldAccess{ .base = converter.convert_expr(*access.object), .field = *access.field_name, .ast_node = &access };
     }
     hir::ExprVariant operator()(const ast::IndexExpr& index) const {
         return hir::Index{
@@ -203,8 +204,9 @@ struct ExprConverter {
         };
     }
     hir::ExprVariant operator()(const ast::StructExpr& s) const {
-        hir::StructLiteral hir_s;
-        hir_s.struct_def = nullptr;
+        if (s.path->segments.size() != 1) {
+            throw std::logic_error("Struct literal path must have exactly one segment during initial HIR conversion.");
+        }
 
         hir::StructLiteral::SyntacticFields syntactic_fields;
         syntactic_fields.initializers.reserve(s.fields.size());
@@ -216,13 +218,15 @@ struct ExprConverter {
             );
         }
         
-        hir_s.fields = std::move(syntactic_fields);
-        hir_s.ast_node = &s;
-        return hir_s;
+        return hir::StructLiteral{
+            .struct_path = s.path->get_name(0).value(),
+            .fields = std::move(syntactic_fields),
+            .ast_node = &s
+        };
     }
 
     hir::ExprVariant operator()(const ast::CastExpr& cast) const {
-        return hir::Cast{ .expr = converter.convert_expr(*cast.expr), .target_type = std::nullopt, .ast_node = &cast };
+        return hir::Cast{ .expr = converter.convert_expr(*cast.expr), .target_type = convert_type(converter, *cast.type), .ast_node = &cast };
     }
     hir::ExprVariant operator()(const ast::BlockExpr& block) const {
         return converter.convert_block(block);
@@ -235,11 +239,54 @@ struct ExprConverter {
     }
 };
 
+struct TypeConverter {
+    AstToHirConverter& converter;
+    const ast::Type& ast_type;
+
+    hir::TypeNodeVariant operator()(const ast::PathType& path_type) const {
+        if (path_type.path->segments.size() != 1) {
+            throw std::logic_error("Multi-segment paths in types are not yet supported.");
+        }
+        return std::make_unique<hir::DefType>(hir::DefType{
+            .name = path_type.path->get_name(0).value(),
+            .ast_node = &path_type
+        });
+    }
+    hir::TypeNodeVariant operator()(const ast::PrimitiveType& prim_type) const {
+        return std::make_unique<hir::PrimitiveType>(hir::PrimitiveType{
+            .kind = prim_type.kind,
+            .ast_node = &prim_type
+        });
+    }
+    hir::TypeNodeVariant operator()(const ast::ArrayType& array_type) const {
+        return std::make_unique<hir::ArrayType>(hir::ArrayType{
+            .element_type = convert_type(converter, *array_type.element_type), // This now correctly initializes a TypeAnnotation
+            .size = converter.convert_expr(*array_type.size),
+            .ast_node = &array_type
+        });
+    }
+    hir::TypeNodeVariant operator()(const ast::ReferenceType& ref_type) const {
+        return std::make_unique<hir::ReferenceType>(hir::ReferenceType{
+            .referenced_type = convert_type(converter, *ref_type.referenced_type), // This now correctly initializes a TypeAnnotation
+            .is_mutable = ref_type.is_mutable,
+            .ast_node = &ref_type
+        });
+    }
+    hir::TypeNodeVariant operator()(const ast::UnitType& unit_type) const {
+        return std::make_unique<hir::UnitType>(hir::UnitType{ .ast_node = &unit_type });
+    }
+};
+
+static std::unique_ptr<hir::TypeNode> convert_type(AstToHirConverter& converter, const ast::Type& ast_type) {
+    TypeConverter visitor{ converter, ast_type };
+    return std::make_unique<hir::TypeNode>(hir::TypeNode{ .value = std::visit(visitor, ast_type.value) });
+}
+
 static hir::Pattern convert_pattern(const ast::Pattern& ast_pattern) {
     if (const auto* ident_pattern = std::get_if<ast::IdentifierPattern>(&ast_pattern.value)) {
         return hir::Pattern(hir::Binding{
             .is_mutable = ident_pattern->is_mut,
-            .type = std::nullopt,
+            .type_annotation = std::nullopt, // Type annotations on patterns are not yet supported
             .ast_node = ident_pattern
         });
     }
@@ -256,12 +303,21 @@ struct StmtConverter {
     const ast::Statement& ast_stmt;
 
     hir::StmtVariant operator()(const ast::LetStmt& let_stmt) const {
-        return hir::LetStmt {
+        auto hir_let_stmt = hir::LetStmt{
             .pattern = convert_pattern(*let_stmt.pattern),
-            .type = std::nullopt, // Will be resolved later
-            .initializer = let_stmt.initializer ? converter.convert_expr(**let_stmt.initializer) : nullptr,
+            .type_annotation = std::nullopt,
+            .initializer = nullptr,
             .ast_node = &let_stmt
         };
+
+        if (let_stmt.type_annotation) {
+            hir_let_stmt.type_annotation = convert_type(converter, **let_stmt.type_annotation);
+        }
+
+        if (let_stmt.initializer) {
+            hir_let_stmt.initializer = converter.convert_expr(**let_stmt.initializer);
+        }
+        return hir_let_stmt;
     }
     hir::StmtVariant operator()(const ast::ExprStmt& expr_stmt) const {
         return hir::ExprStmt { .expr = converter.convert_expr(*expr_stmt.expr), .ast_node = &expr_stmt };
@@ -290,7 +346,7 @@ struct ItemConverter {
 
         return hir::Function{
             .params = std::move(params),
-            .return_type = std::nullopt, // Will be resolved later
+            .return_type = fn.return_type ? std::optional(convert_type(converter, **fn.return_type)) : std::nullopt,
             .body = fn.body ? std::make_unique<hir::Block>(converter.convert_block(**fn.body)) : nullptr,
             .ast_node = &fn
         };
@@ -313,7 +369,7 @@ struct ItemConverter {
     }
     hir::ItemVariant operator()(const ast::ConstItem& cnst) const {
         return hir::ConstDef{
-            .type = std::nullopt,
+            .type = cnst.type ? std::optional(convert_type(converter, *cnst.type)) : std::nullopt,
             .value = converter.convert_expr(*cnst.value),
             .ast_node = &cnst
         };
@@ -333,8 +389,8 @@ struct ItemConverter {
             assoc_items.push_back(converter.convert_associated_item(*item_ptr));
         }
         return hir::Impl{
-            .trait_symbol = std::nullopt,
-            .for_type = std::nullopt,
+            .trait = *impl.trait_name,
+            .for_type = convert_type(converter, *impl.for_type),
             .items = std::move(assoc_items),
             .ast_node = &impl
         };
@@ -347,8 +403,8 @@ struct ItemConverter {
             assoc_items.push_back(converter.convert_associated_item(*item_ptr));
         }
         return hir::Impl{
-            .trait_symbol = std::nullopt,
-            .for_type = std::nullopt,
+            .trait = std::nullopt,
+            .for_type = convert_type(converter, *impl.for_type),
             .items = std::move(assoc_items),
             .ast_node = &impl
         };
@@ -408,6 +464,7 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
         }
 
         auto body = fn_item->body ? std::make_unique<hir::Block>(convert_block(**fn_item->body)) : nullptr;
+        auto return_type = fn_item->return_type ? std::optional(detail::convert_type(*this, **fn_item->return_type)) : std::nullopt;
 
         if (fn_item->self_param) {
             const auto& self = **fn_item->self_param;
@@ -419,7 +476,7 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
             hir::Method hir_method{
                 .self_param = hir_self,
                 .params = std::move(params),
-                .return_type = std::nullopt,
+                .return_type = std::move(return_type),
                 .body = std::move(body),
                 .ast_node = fn_item
             };
@@ -427,7 +484,7 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
         } else {
             hir::Function hir_fn{
                 .params = std::move(params),
-                .return_type = std::nullopt,
+                .return_type = std::move(return_type),
                 .body = std::move(body),
                 .ast_node = fn_item
             };
@@ -438,7 +495,7 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
     // Handle ConstItem -> hir::ConstDef
     if (const auto* cnst_item = std::get_if<ast::ConstItem>(&item.value)) {
         hir::ConstDef hir_cnst{
-            .type = std::nullopt,
+            .type = cnst_item->type ? std::optional(detail::convert_type(*this, *cnst_item->type)) : std::nullopt,
             .value = convert_expr(*cnst_item->value),
             .ast_node = cnst_item
         };
