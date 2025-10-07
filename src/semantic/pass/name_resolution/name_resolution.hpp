@@ -12,6 +12,7 @@
 #include <stack>
 #include <stdexcept>
 #include <variant>
+#include <type_traits>
 
 
 namespace semantic {
@@ -27,10 +28,19 @@ namespace semantic {
 using namespace hir;
 
 class NameResolver: public HirVisitorBase<NameResolver>{
+	using ExprUpdate = typename HirVisitorBase<NameResolver>::ExprUpdate;
     std::stack<Scope> scopes;
 	ImplTable& impl_table;
 
 	std::vector<TypeStatic*> unresolved_statics; 
+	std::vector<Function*> function_stack;
+
+	Function* current_function() {
+		if (function_stack.empty()) {
+			return nullptr;
+		}
+		return function_stack.back();
+	}
 public:
 	NameResolver(ImplTable& impl_table): impl_table(impl_table) {};
 
@@ -71,8 +81,10 @@ public:
 	void visit(Function& func) {
 		// function scope does not allow capture of outer bindings
 		scopes.push(Scope{&scopes.top(),true});
+		function_stack.push_back(&func);
 		// the body will be treated as a pure block
 		base().visit(func);
+		function_stack.pop_back();
 		scopes.pop();
 	}
 	void visit(Trait& trait) {
@@ -91,7 +103,12 @@ public:
         if (!def_type_ptr) {
             throw std::logic_error("Impl for non-path type is **temporarily** not supported");
         }
-        const auto& type_name = (*def_type_ptr)->name;
+        const auto& type_name_variant = (*def_type_ptr)->def;
+        auto* type_name_ptr = std::get_if<ast::Identifier>(&type_name_variant);
+        if (!type_name_ptr) {
+            throw std::logic_error("Expected DefType to hold an identifier for resolution in impl.");
+        }
+        const auto& type_name = *type_name_ptr;
 
 		auto type_def = scopes.top().lookup_type(type_name);
 		if(!type_def){
@@ -112,15 +129,34 @@ public:
 		scopes.pop();
 	}
 
-	void visit(Binding& binding){
-		scopes.top().define_binding(*binding.ast_node->name,&binding);
+	void visit(BindingDef& binding){
+		if (auto* unresolved = std::get_if<BindingDef::Unresolved>(&binding.local)) {
+			auto* func = current_function();
+			if (!func) {
+				throw std::logic_error("Binding resolved outside of function context is not supported yet");
+			}
+			auto local = std::make_unique<Local>(Local{
+				.name = unresolved->name,
+				.is_mutable = unresolved->is_mutable,
+				.type_annotation = std::nullopt,
+				.def_site = binding.ast_node
+			});
+			auto* local_ptr = local.get();
+			func->locals.push_back(std::move(local));
+			binding.local = local_ptr;
+			scopes.top().define_binding(local_ptr->name, &binding);
+		} else if (auto* resolved_local = std::get_if<Local*>(&binding.local)) {
+			scopes.top().define_binding((*resolved_local)->name, &binding);
+		} else {
+			throw std::logic_error("BindingDef.local holds an unexpected alternative");
+		}
 	}
 
 	//resolve names
-	void visit(TypeStatic& ts){
+	ExprUpdate visit(TypeStatic& ts){
         auto* type_name_ptr = std::get_if<ast::Identifier>(&ts.type);
         if (!type_name_ptr) {
-            return;
+			return std::nullopt;
         }
         const auto& name = *type_name_ptr;
 
@@ -132,26 +168,45 @@ public:
 		ts.type = *type_def;
 		unresolved_statics.push_back(&ts);
 
-		base().visit(ts);
+		return HirVisitorBase<NameResolver>::visit(ts);
 	}
-	void visit(Variable& var){
-        auto* name_ptr = std::get_if<ast::Identifier>(&var.definition);
-        if (!name_ptr) {
-            return;
-        }
-        const auto& name = *name_ptr;
-
-		auto def = scopes.top().lookup_value(name);
+	ExprUpdate visit(UnresolvedIdentifier& ident){
+		auto def = scopes.top().lookup_value(ident.name);
 		if (!def) {
-			throw std::runtime_error("Undefined variable " + name.name);
+			throw std::runtime_error("Undefined identifier " + ident.name.name);
 		}
-		var.definition = *def; // Update the variant to the resolved state
-		base().visit(var);
+		return std::visit([
+			&ident
+		](auto* symbol_ptr) -> ExprUpdate {
+			using T = std::decay_t<decltype(symbol_ptr)>;
+			if constexpr (std::is_same_v<T, hir::BindingDef*>) {
+				auto* local_ptr = std::get_if<Local*>( &symbol_ptr->local );
+				if (!local_ptr || !*local_ptr) {
+					throw std::logic_error("BindingDef resolved without Local assignment");
+				}
+				return ExprVariant{Variable{
+					.local_id = *local_ptr,
+					.ast_node = ident.ast_node
+				}};
+			} else if constexpr (std::is_same_v<T, hir::ConstDef*>) {
+				return ExprVariant{ConstUse{
+					.def = symbol_ptr,
+					.ast_node = ident.ast_node
+				}};
+			} else if constexpr (std::is_same_v<T, hir::Function*>) {
+				return ExprVariant{FuncUse{
+					.def = symbol_ptr,
+					.ast_node = ident.ast_node
+				}};
+			} else {
+				static_assert(std::is_same_v<T, void>, "Unhandled symbol pointer type in name resolution");
+			}
+		}, *def);
 	}
-	void visit(StructLiteral& sl){
+	ExprUpdate visit(StructLiteral& sl){
 		auto* name_ptr = std::get_if<ast::Identifier>(&sl.struct_path);
         if (!name_ptr) {
-            return; // Already resolved
+            return HirVisitorBase<NameResolver>::visit(sl);
         }
         const auto& name = *name_ptr;
 
@@ -188,9 +243,10 @@ public:
 			.initializers = std::move(fields)
 		};
 
-		base().visit(sl);
+		HirVisitorBase<NameResolver>::visit(sl);
+		return std::nullopt;
 	}
-	
+
 
 };
 

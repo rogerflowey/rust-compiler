@@ -42,7 +42,7 @@ public:
     struct DefineVisitor {
       Scope *self;
       const ast::Identifier &name;
-      bool operator()(hir::Binding *def) const {
+      bool operator()(hir::BindingDef *def) const {
         self->define_binding(name, def);
         return true;
       }

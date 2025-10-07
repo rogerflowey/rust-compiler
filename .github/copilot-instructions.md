@@ -78,3 +78,18 @@ When working on a new feature, the typical workflow is:
     *   For **Name Resolution**, update the `NameResolution` pass (`src/semantic/pass/name_resolution/name_resolution.hpp`) to resolve symbols for the new HIR nodes.
     *   For **Type Checking**, update the type checking pass (once it's created) to infer and validate types.
 4.  **Testing:** Add new test cases in `test/semantic/` to validate the new semantic analysis logic.
+
+
+
+* Special: you should Update the Guide whenever the user is updating their design, you should also update the guide if you see an changed of  design in the codebase even if the user don't point it out
+
+* User requirement:
+You must reason thoroughly and gather enough information before you act. You must think clearly before you make actions. All your code must be production-ready, which means that if you are not sure, do not write "simplified logic" to it.
+
+
+
+## Code Style
+this section is to record the users favored style
+1. Variant over Inheritance: the user prefer modern c++ polymorphisms
+2. Pointers not nullable: everything maybe null should be wrapped with optional, including pointers
+3. functors over lambda for visit: lambda create a huge block of code and implicitly use templating

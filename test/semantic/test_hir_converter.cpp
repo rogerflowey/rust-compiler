@@ -308,14 +308,14 @@ TEST_F(HirConverterTest, ConvertsPathExpressions) {
     AstToHirConverter converter;
     
     auto ast_expr = test_helpers::make_path_expr();
+    const auto* original_ast_node = get_node<ast::PathExpr>(ast_expr);
     auto hir_expr = converter.convert_expr(*ast_expr);
     
-    auto* variable = std::get_if<hir::Variable>(&hir_expr->value);
-    ASSERT_NE(variable, nullptr);
+    auto* unresolved = std::get_if<hir::UnresolvedIdentifier>(&hir_expr->value);
+    ASSERT_NE(unresolved, nullptr);
     
-    auto* ident = std::get_if<ast::Identifier>(&variable->definition);
-    ASSERT_NE(ident, nullptr);
-    EXPECT_EQ(ident->name, "x");
+    EXPECT_EQ(unresolved->name.name, "x");
+    EXPECT_EQ(unresolved->ast_node, original_ast_node);
 }
 
 TEST_F(HirConverterTest, ConvertsStaticPathExpressions) {
@@ -405,7 +405,7 @@ TEST_F(HirConverterTest, ConvertsSimpleAssignment) {
     ASSERT_NE(assignment, nullptr);
     EXPECT_EQ(assignment->ast_node, ast_assign_expr);
     
-    auto* lhs_var = std::get_if<hir::Variable>(&assignment->lhs->value);
+    auto* lhs_var = std::get_if<hir::UnresolvedIdentifier>(&assignment->lhs->value);
     ASSERT_NE(lhs_var, nullptr);
     
     auto* rhs_literal = std::get_if<hir::Literal>(&assignment->rhs->value);
@@ -427,7 +427,7 @@ TEST_F(HirConverterTest, ConvertsCompoundAssignment) {
     ASSERT_NE(assignment, nullptr);
     EXPECT_EQ(assignment->ast_node, ast_assign_expr);
     
-    auto* lhs_var = std::get_if<hir::Variable>(&assignment->lhs->value);
+    auto* lhs_var = std::get_if<hir::UnresolvedIdentifier>(&assignment->lhs->value);
     ASSERT_NE(lhs_var, nullptr);
     
     auto* rhs_binary = std::get_if<hir::BinaryOp>(&assignment->rhs->value);
@@ -454,7 +454,7 @@ TEST_F(HirConverterTest, ConvertsCallExpressions) {
     ASSERT_NE(call, nullptr);
     EXPECT_EQ(call->ast_node, ast_call_expr);
 
-    auto* hir_callee = std::get_if<hir::Variable>(&call->callee->value);
+    auto* hir_callee = std::get_if<hir::UnresolvedIdentifier>(&call->callee->value);
     ASSERT_NE(hir_callee, nullptr);
 
     ASSERT_EQ(call->args.size(), 1);
@@ -482,7 +482,7 @@ TEST_F(HirConverterTest, ConvertsMethodCallExpressions) {
     ASSERT_NE(method_ident, nullptr);
     EXPECT_EQ(method_ident->name, "do_thing");
 
-    auto* hir_receiver = std::get_if<hir::Variable>(&method_call->receiver->value);
+    auto* hir_receiver = std::get_if<hir::UnresolvedIdentifier>(&method_call->receiver->value);
     ASSERT_NE(hir_receiver, nullptr);
 
     ASSERT_EQ(method_call->args.size(), 1);
@@ -592,13 +592,19 @@ TEST_F(HirConverterTest, ConvertsLetStatements) {
     ASSERT_NE(let_stmt, nullptr);
     EXPECT_EQ(let_stmt->ast_node, ast_let_stmt);
     
-    auto* binding = std::get_if<hir::Binding>(&let_stmt->pattern.value);
+    ASSERT_NE(let_stmt->pattern, nullptr);
+    auto* binding = std::get_if<hir::BindingDef>(&let_stmt->pattern->value);
     ASSERT_NE(binding, nullptr);
+
+    auto* unresolved = std::get_if<hir::BindingDef::Unresolved>(&binding->local);
+    ASSERT_NE(unresolved, nullptr);
+    EXPECT_EQ(unresolved->name.name, "x");
+    EXPECT_FALSE(unresolved->is_mutable);
+    EXPECT_FALSE(unresolved->is_ref);
+
     ASSERT_NE(binding->ast_node, nullptr);
     ASSERT_NE(binding->ast_node->name, nullptr);
     EXPECT_EQ(binding->ast_node->name->name, "x");
-    EXPECT_FALSE(binding->is_mutable);
-    EXPECT_FALSE(binding->type_annotation.has_value());
 
     ASSERT_NE(let_stmt->initializer, nullptr);
     auto* literal = std::get_if<hir::Literal>(&let_stmt->initializer->value);
@@ -625,7 +631,9 @@ TEST_F(HirConverterTest, ConvertsLetStatementWithType) {
     ASSERT_NE(type_node_ptr, nullptr);
     auto* def_type_ptr_variant = std::get_if<std::unique_ptr<hir::DefType>>(&(*type_node_ptr)->value);
     ASSERT_NE(def_type_ptr_variant, nullptr);
-    EXPECT_EQ((**def_type_ptr_variant).name.name, "i32");
+    auto* ident = std::get_if<ast::Identifier>(&(**def_type_ptr_variant).def);
+    ASSERT_NE(ident, nullptr);
+    EXPECT_EQ(ident->name, "i32");
 }
 
 TEST_F(HirConverterTest, ConvertsExpressionStatements) {
@@ -795,7 +803,9 @@ TEST_F(HirConverterTest, ConvertsTraitImplItems) {
     ASSERT_NE(*type_node_ptr, nullptr);
     auto* def_type_ptr_variant = std::get_if<std::unique_ptr<hir::DefType>>(&(*type_node_ptr)->value);
     ASSERT_NE(def_type_ptr_variant, nullptr);
-    EXPECT_EQ((**def_type_ptr_variant).name.name, "MyType");
+    auto* ident = std::get_if<ast::Identifier>(&(**def_type_ptr_variant).def);
+    ASSERT_NE(ident, nullptr);
+    EXPECT_EQ(ident->name, "MyType");
 
     ASSERT_EQ(impl->items.size(), 1);
     auto* func = std::get_if<hir::Function>(&impl->items[0]->value);
@@ -830,7 +840,9 @@ TEST_F(HirConverterTest, ConvertsInherentImplItems) {
     ASSERT_NE(*type_node_ptr, nullptr);
     auto* def_type_ptr_variant = std::get_if<std::unique_ptr<hir::DefType>>(&(*type_node_ptr)->value);
     ASSERT_NE(def_type_ptr_variant, nullptr);
-    EXPECT_EQ((**def_type_ptr_variant).name.name, "MyType");
+    auto* ident = std::get_if<ast::Identifier>(&(**def_type_ptr_variant).def);
+    ASSERT_NE(ident, nullptr);
+    EXPECT_EQ(ident->name, "MyType");
 
     EXPECT_EQ(std::get<const ast::InherentImplItem*>(impl->ast_node), ast_inherent_impl_node);
     ASSERT_EQ(impl->items.size(), 1);

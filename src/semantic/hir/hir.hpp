@@ -41,6 +41,7 @@ struct EnumDef;
 struct ConstDef;
 struct Trait;
 struct Impl;
+struct Local; // New canonical definition for a local variable
 
 // --- HIR Type System Nodes ---
 struct DefType;
@@ -64,7 +65,7 @@ struct TypeNode {
 using TypeAnnotation = std::variant<std::unique_ptr<TypeNode>, semantic::TypeId>;
 
 struct DefType {
-    ast::Identifier name;
+    std::variant<ast::Identifier, TypeDef> def;
     const ast::PathType* ast_node = nullptr;
 };
 
@@ -89,20 +90,31 @@ struct UnitType {
     const ast::UnitType* ast_node = nullptr;
 };
 
-
-
-
-
-struct Binding {
+// --- HIR Local Variable Abstraction ---
+struct Local {
+    ast::Identifier name;
     bool is_mutable;
-    std::optional<TypeAnnotation> type_annotation; // fill in Type Checking pass
+    std::optional<TypeAnnotation> type_annotation;
+    const ast::IdentifierPattern* def_site = nullptr;
+};
+
+
+struct BindingDef {
+    //Changed
+    struct Unresolved{
+        bool is_mutable;
+        bool is_ref;
+        ast::Identifier name;
+    };
+    std::variant<Unresolved,Local*> local;
     const ast::IdentifierPattern* ast_node = nullptr;
 };
+
 struct WildCardPattern {
     const ast::WildcardPattern* ast_node = nullptr;
 };
 
-using PatternVariant = std::variant<Binding, WildCardPattern>;
+using PatternVariant = std::variant<BindingDef, WildCardPattern>;
 struct Pattern {
     PatternVariant value;
     Pattern(PatternVariant&& val)
@@ -137,8 +149,27 @@ struct Literal {
     AstNode ast_node;
 };
 
+// NEW: Temporary node for an unresolved identifier in an expression.
+struct UnresolvedIdentifier {
+    ast::Identifier name;
+    const ast::PathExpr* ast_node = nullptr;
+};
+
+// REDEFINED: A resolved reference to a local variable.
 struct Variable {
-    std::variant<ast::Identifier, ValueDef> definition;
+    Local* local_id;
+    const ast::PathExpr* ast_node = nullptr;
+};
+
+// NEW: A resolved reference to a constant.
+struct ConstUse {
+    const hir::ConstDef* def = nullptr;
+    const ast::PathExpr* ast_node = nullptr;
+};
+
+// NEW: A resolved reference to a function.
+struct FuncUse {
+    const hir::Function* def = nullptr;
     const ast::PathExpr* ast_node = nullptr;
 };
 
@@ -294,10 +325,13 @@ struct Block {
 
 
 using ExprVariant = std::variant<
-    Literal, Variable, TypeStatic, Underscore, FieldAccess, StructLiteral, ArrayLiteral, ArrayRepeat,
+    Literal, UnresolvedIdentifier, TypeStatic, Underscore, FieldAccess, StructLiteral, ArrayLiteral, ArrayRepeat,
     Index, Assignment, UnaryOp, BinaryOp, Cast, Call, MethodCall, Block, If, Loop, While,
     Break, Continue, Return,
-    // Resolved static items
+    // Resolved uses
+    Variable,
+    ConstUse,
+    FuncUse,
     StructConst, StructStatic, EnumVariant
 >;
 
@@ -315,7 +349,7 @@ struct Expr {
 };
 
 struct LetStmt {
-    Pattern pattern;
+    std::unique_ptr<Pattern> pattern;
     std::optional<TypeAnnotation> type_annotation;
     std::unique_ptr<Expr> initializer;
     const ast::LetStmt* ast_node = nullptr;
@@ -340,9 +374,10 @@ struct Stmt {
 
 
 struct Function {
-    std::vector<Pattern> params;
+    std::vector<std::unique_ptr<Pattern>> params;// Changed
     std::optional<TypeAnnotation> return_type;
     std::unique_ptr<Block> body;
+    std::vector<std::unique_ptr<Local>> locals; // NEW: Owning list of all locals
     const ast::FunctionItem* ast_node = nullptr;
 };
 
@@ -354,7 +389,7 @@ struct Method {
     };
     
     SelfParam self_param;
-    std::vector<Pattern> params;
+    std::vector<std::unique_ptr<Pattern>> params;// changed
     std::optional<TypeAnnotation> return_type;
     std::unique_ptr<Block> body;
     const ast::FunctionItem* ast_node = nullptr;

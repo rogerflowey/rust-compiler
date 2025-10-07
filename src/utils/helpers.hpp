@@ -37,3 +37,5 @@ inline std::optional<ParsedNumeric> separateNumberAndType(const std::string& inp
     result.type = (i < input.size()) ? input.substr(i) : std::string{};
     return result;
 }
+
+

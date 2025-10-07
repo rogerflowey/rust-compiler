@@ -5,7 +5,7 @@
 namespace detail {
 
 // Forward declarations
-static hir::Pattern convert_pattern(const ast::Pattern& ast_pattern);
+static std::unique_ptr<hir::Pattern> convert_pattern(const ast::Pattern& ast_pattern);
 static std::unique_ptr<hir::TypeNode> convert_type(AstToHirConverter& converter, const ast::Type& ast_type);
 
 
@@ -40,7 +40,7 @@ struct ExprConverter {
             throw std::logic_error("Path expression with no segments found.");
         }
         if (path.path->segments.size() == 1) {
-            return hir::Variable{ .definition = path.path->get_name(0).value(), .ast_node = &path };
+            return hir::UnresolvedIdentifier{ .name = path.path->get_name(0).value(), .ast_node = &path };
         }
         if (path.path->segments.size() == 2) {
             const auto& first_segment_id = path.path->get_name(0);
@@ -248,7 +248,7 @@ struct TypeConverter {
             throw std::logic_error("Multi-segment paths in types are not yet supported.");
         }
         return std::make_unique<hir::DefType>(hir::DefType{
-            .name = path_type.path->get_name(0).value(),
+            .def = path_type.path->get_name(0).value(),
             .ast_node = &path_type
         });
     }
@@ -282,17 +282,20 @@ static std::unique_ptr<hir::TypeNode> convert_type(AstToHirConverter& converter,
     return std::make_unique<hir::TypeNode>(hir::TypeNode{ .value = std::visit(visitor, ast_type.value) });
 }
 
-static hir::Pattern convert_pattern(const ast::Pattern& ast_pattern) {
+static std::unique_ptr<hir::Pattern> convert_pattern(const ast::Pattern& ast_pattern) {
     if (const auto* ident_pattern = std::get_if<ast::IdentifierPattern>(&ast_pattern.value)) {
-        return hir::Pattern(hir::Binding{
-            .is_mutable = ident_pattern->is_mut,
-            .type_annotation = std::nullopt, // Type annotations on patterns are not yet supported
-            .ast_node = ident_pattern
+        return std::make_unique<hir::Pattern>(hir::BindingDef{
+            .local = hir::BindingDef::Unresolved{
+                .is_mutable = ident_pattern->is_mut,
+                .is_ref = ident_pattern->is_ref,
+                .name = *ident_pattern->name,
+            },
+            .ast_node = ident_pattern,
         });
     }
 
     if (const auto* wildcard_pattern = std::get_if<ast::WildcardPattern>(&ast_pattern.value)) {
-        return hir::Pattern(hir::WildCardPattern{ .ast_node = wildcard_pattern });
+        return std::make_unique<hir::Pattern>(hir::WildCardPattern{ .ast_node = wildcard_pattern });
     }
     
     throw std::logic_error("Unsupported pattern type in HIR conversion");
@@ -338,7 +341,7 @@ struct ItemConverter {
     const ast::Item& ast_item;
 
     hir::ItemVariant operator()(const ast::FunctionItem& fn) const {
-        std::vector<hir::Pattern> params;
+        std::vector<std::unique_ptr<hir::Pattern>> params;
         params.reserve(fn.params.size());
         for (const auto& p : fn.params) {
             params.push_back(convert_pattern(*p.first));
@@ -348,6 +351,7 @@ struct ItemConverter {
             .params = std::move(params),
             .return_type = fn.return_type ? std::optional(convert_type(converter, **fn.return_type)) : std::nullopt,
             .body = fn.body ? std::make_unique<hir::Block>(converter.convert_block(**fn.body)) : nullptr,
+            .locals = {}, // Initialized empty
             .ast_node = &fn
         };
     }
@@ -457,7 +461,7 @@ std::unique_ptr<hir::Item> AstToHirConverter::convert_item(const ast::Item& item
 std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(const ast::Item& item) {
     // Handle FunctionItem -> hir::Function (associated fn) or hir::Method
     if (const auto* fn_item = std::get_if<ast::FunctionItem>(&item.value)) {
-        std::vector<hir::Pattern> params;
+        std::vector<std::unique_ptr<hir::Pattern>> params;
         params.reserve(fn_item->params.size());
         for (const auto& p : fn_item->params) {
             params.push_back(detail::convert_pattern(*p.first));
@@ -486,6 +490,7 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
                 .params = std::move(params),
                 .return_type = std::move(return_type),
                 .body = std::move(body),
+                .locals = {}, // Initialized empty
                 .ast_node = fn_item
             };
             return std::make_unique<hir::AssociatedItem>(std::move(hir_fn));

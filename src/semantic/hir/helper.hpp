@@ -44,10 +44,7 @@ inline ast::Identifier get_name(const NamedItemPtr& named_item){
     return std::visit(NameVisitor{}, named_item);
 }
 
-inline ast::Identifier get_name(const hir::Binding& binding){
-    return *binding.ast_node->name;
-}
-
 } // namespace helper
 
 } // namespace hir
+
