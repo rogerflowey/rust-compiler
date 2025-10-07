@@ -2,6 +2,7 @@
 
 #include "ast/common.hpp"
 #include "semantic/common.hpp"
+#include "semantic/const/const.hpp"
 #include "semantic/type/type.hpp"
 #include "ast/ast.hpp"
 
@@ -16,7 +17,7 @@ namespace semantic {
 
 struct Field {
     ast::Identifier name;
-    TypeId type;
+    std::optional<TypeId> type;
 };
 
 struct EnumVariant {
@@ -108,6 +109,7 @@ struct BindingDef {
     };
     std::variant<Unresolved,Local*> local;
     const ast::IdentifierPattern* ast_node = nullptr;
+    std::optional<TypeAnnotation> type_annotation;
 };
 
 struct WildCardPattern {
@@ -399,6 +401,7 @@ struct Method {
 
 struct StructDef {
     std::vector<semantic::Field> fields;
+    std::vector<TypeAnnotation> field_type_annotations;
     const ast::StructItem* ast_node = nullptr;
 };
 
@@ -410,6 +413,7 @@ struct EnumDef {
 struct ConstDef {
     std::optional<TypeAnnotation> type;
     std::unique_ptr<Expr> value;
+    std::optional<semantic::ConstVariant> const_value;
     const ast::ConstItem* ast_node = nullptr;
 };
 

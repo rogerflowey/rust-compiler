@@ -152,7 +152,13 @@ struct ExprVisitor {
     }
 
     ConstVariant operator()(const hir::ConstUse &expr) const {
-        if (!expr.def || !expr.def->value) {
+        if (!expr.def) {
+            throw std::logic_error("Const definition is null");
+        }
+        if (expr.def->const_value) {
+            return *expr.def->const_value;
+        }
+        if (!expr.def->value) {
             throw std::logic_error("Const definition has no value");
         }
         return evaluator.evaluate(*expr.def->value);

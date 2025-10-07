@@ -217,6 +217,11 @@ public:
 		local_owner_stack.pop_back();
 		scopes.pop();
 	}
+	void visit(hir::StructDef& struct_def) {
+		for (auto& annotation : struct_def.field_type_annotations) {
+			visit_type_annotation(annotation);
+		}
+	}
 	void visit(hir::Trait& trait) {
 		scopes.push(Scope{&scopes.top(),true});
 		base().visit(trait);
@@ -264,6 +269,9 @@ public:
 	}
 
 	void visit(hir::BindingDef& binding){
+		if (binding.type_annotation) {
+			visit_type_annotation(*binding.type_annotation);
+		}
 		hir::Local* local_ptr = nullptr;
 		if (auto* unresolved = std::get_if<hir::BindingDef::Unresolved>(&binding.local)) {
 			auto* locals = current_locals();

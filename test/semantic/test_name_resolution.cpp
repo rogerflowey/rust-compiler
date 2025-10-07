@@ -91,6 +91,7 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
     arena.struct_items.push_back(std::move(struct_ast));
     program->items.push_back(std::make_unique<hir::Item>(hir::StructDef{
         .fields = {},
+        .field_type_annotations = {},
         .ast_node = struct_ast_ptr
     }));
     auto *struct_def_ptr = &std::get<hir::StructDef>(program->items.back()->value);
@@ -299,6 +300,7 @@ TEST(NameResolutionTest, ResolvesMethodLocals) {
     arena.struct_items.push_back(std::move(struct_ast));
     program->items.push_back(std::make_unique<hir::Item>(hir::StructDef{
         .fields = {},
+        .field_type_annotations = {},
         .ast_node = struct_ast_ptr
     }));
 

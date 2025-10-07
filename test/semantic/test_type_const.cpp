@@ -1,0 +1,204 @@
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "src/ast/ast.hpp"
+#include "src/ast/type.hpp"
+#include "src/semantic/hir/hir.hpp"
+#include "src/semantic/pass/name_resolution/name_resolution.hpp"
+#include "src/semantic/pass/type&const/visitor.hpp"
+#include "src/semantic/type/impl_table.hpp"
+
+namespace {
+
+hir::TypeAnnotation make_primitive_type(ast::PrimitiveType::Kind kind) {
+    auto node = std::make_unique<hir::TypeNode>();
+    node->value = std::make_unique<hir::PrimitiveType>(hir::PrimitiveType{
+        .kind = kind,
+        .ast_node = nullptr
+    });
+    return hir::TypeAnnotation(std::move(node));
+}
+
+hir::TypeAnnotation make_array_type(hir::TypeAnnotation element_type, std::unique_ptr<hir::Expr> size_expr) {
+    auto array_type = std::make_unique<hir::ArrayType>(hir::ArrayType{
+        .element_type = std::move(element_type),
+        .size = std::move(size_expr),
+        .ast_node = nullptr
+    });
+    auto node = std::make_unique<hir::TypeNode>();
+    node->value = std::move(array_type);
+    return hir::TypeAnnotation(std::move(node));
+}
+
+std::unique_ptr<hir::Expr> make_unresolved_identifier_expr(const std::string &name) {
+    return std::make_unique<hir::Expr>(hir::UnresolvedIdentifier{
+        .name = ast::Identifier{name},
+        .ast_node = nullptr
+    });
+}
+
+std::unique_ptr<hir::Expr> make_integer_literal(uint64_t value, ast::IntegerLiteralExpr::Type suffix = ast::IntegerLiteralExpr::NOT_SPECIFIED) {
+    return std::make_unique<hir::Expr>(hir::Literal{
+        .value = hir::Literal::Integer{ .value = value, .suffix_type = suffix },
+        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+    });
+}
+
+std::unique_ptr<hir::Pattern> make_binding_pattern(const std::string &name) {
+    return std::make_unique<hir::Pattern>(hir::BindingDef{
+        .local = hir::BindingDef::Unresolved{
+            .is_mutable = false,
+            .is_ref = false,
+            .name = ast::Identifier{name}
+        },
+        .ast_node = nullptr,
+        .type_annotation = std::nullopt
+    });
+}
+
+struct AstArena {
+    std::vector<std::unique_ptr<ast::StructItem>> structs;
+    std::vector<std::unique_ptr<ast::ConstItem>> consts;
+    std::vector<std::unique_ptr<ast::FunctionItem>> functions;
+};
+
+} // namespace
+
+TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
+    AstArena arena;
+    auto program = std::make_unique<hir::Program>();
+
+    // struct Point { x: i32 }
+    auto struct_ast = std::make_unique<ast::StructItem>();
+    struct_ast->name = std::make_unique<ast::Identifier>("Point");
+    auto *struct_ast_ptr = struct_ast.get();
+    arena.structs.push_back(std::move(struct_ast));
+
+    hir::StructDef struct_def;
+    struct_def.ast_node = struct_ast_ptr;
+    struct_def.fields.push_back(semantic::Field{ .name = ast::Identifier{"x"}, .type = std::nullopt });
+    struct_def.field_type_annotations.emplace_back(make_primitive_type(ast::PrimitiveType::I32));
+    program->items.push_back(std::make_unique<hir::Item>(std::move(struct_def)));
+    auto *struct_def_ptr = &std::get<hir::StructDef>(program->items.back()->value);
+
+    // const LEN: usize = 4;
+    auto const_ast = std::make_unique<ast::ConstItem>();
+    const_ast->name = std::make_unique<ast::Identifier>("LEN");
+    auto *const_ast_ptr = const_ast.get();
+    arena.consts.push_back(std::move(const_ast));
+
+    hir::ConstDef const_def;
+    const_def.type = make_primitive_type(ast::PrimitiveType::USIZE);
+    const_def.value = make_integer_literal(4, ast::IntegerLiteralExpr::USIZE);
+    const_def.const_value = std::nullopt;
+    const_def.ast_node = const_ast_ptr;
+    program->items.push_back(std::make_unique<hir::Item>(std::move(const_def)));
+    auto *const_def_ptr = &std::get<hir::ConstDef>(program->items.back()->value);
+
+    // fn main(param: i32) {
+    //     let arr: [i32; LEN] = [0; LEN];
+    // }
+    auto function_ast = std::make_unique<ast::FunctionItem>();
+    function_ast->name = std::make_unique<ast::Identifier>("main");
+    auto *function_ast_ptr = function_ast.get();
+    arena.functions.push_back(std::move(function_ast));
+
+    std::vector<std::unique_ptr<hir::Pattern>> params;
+    auto param_pattern = make_binding_pattern("param");
+    auto &param_binding = std::get<hir::BindingDef>(param_pattern->value);
+    param_binding.type_annotation = make_primitive_type(ast::PrimitiveType::I32);
+    params.push_back(std::move(param_pattern));
+
+    auto let_pattern = make_binding_pattern("arr");
+    auto array_type = make_array_type(
+        make_primitive_type(ast::PrimitiveType::I32),
+        make_unresolved_identifier_expr("LEN")
+    );
+    auto let_initializer = std::make_unique<hir::Expr>(hir::ArrayRepeat{
+        .value = make_integer_literal(0),
+        .count = make_unresolved_identifier_expr("LEN"),
+        .ast_node = nullptr
+    });
+
+    hir::LetStmt let_stmt;
+    let_stmt.pattern = std::move(let_pattern);
+    let_stmt.type_annotation = std::move(array_type);
+    let_stmt.initializer = std::move(let_initializer);
+    let_stmt.ast_node = nullptr;
+
+    auto body = std::make_unique<hir::Block>();
+    body->stmts.push_back(std::make_unique<hir::Stmt>(std::move(let_stmt)));
+
+    hir::Function function;
+    function.params = std::move(params);
+    function.return_type = std::nullopt;
+    function.body = std::move(body);
+    function.ast_node = function_ast_ptr;
+
+    program->items.push_back(std::make_unique<hir::Item>(std::move(function)));
+    auto *function_ptr = &std::get<hir::Function>(program->items.back()->value);
+
+    semantic::ImplTable impl_table;
+    semantic::NameResolver name_resolver{impl_table};
+    name_resolver.visit_program(*program);
+
+    semantic::TypeConstResolver type_const_resolver;
+    type_const_resolver.visit_program(*program);
+
+    // Struct field types are resolved
+    ASSERT_EQ(struct_def_ptr->fields.size(), 1u);
+    ASSERT_TRUE(struct_def_ptr->fields[0].type.has_value());
+    EXPECT_NE(struct_def_ptr->fields[0].type.value(), nullptr);
+    ASSERT_EQ(struct_def_ptr->field_type_annotations.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<semantic::TypeId>(struct_def_ptr->field_type_annotations[0]));
+    auto field_type_id = std::get<semantic::TypeId>(struct_def_ptr->field_type_annotations[0]);
+    EXPECT_EQ(field_type_id, struct_def_ptr->fields[0].type.value());
+
+    // Const definition has resolved type and value
+    ASSERT_TRUE(const_def_ptr->type.has_value());
+    EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*const_def_ptr->type));
+    ASSERT_TRUE(const_def_ptr->const_value.has_value());
+    auto *len_value = std::get_if<semantic::UintConst>(&*const_def_ptr->const_value);
+    ASSERT_NE(len_value, nullptr);
+    EXPECT_EQ(len_value->value, 4u);
+
+    // Function parameter binding gets TypeId
+    ASSERT_FALSE(function_ptr->params.empty());
+    auto &resolved_param_binding = std::get<hir::BindingDef>(function_ptr->params[0]->value);
+    ASSERT_TRUE(resolved_param_binding.type_annotation.has_value());
+    EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*resolved_param_binding.type_annotation));
+    auto *param_local_ptr = std::get_if<hir::Local*>(&resolved_param_binding.local);
+    ASSERT_NE(param_local_ptr, nullptr);
+    ASSERT_NE(*param_local_ptr, nullptr);
+    ASSERT_TRUE((*param_local_ptr)->type_annotation.has_value());
+    EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*(*param_local_ptr)->type_annotation));
+
+    // Let statement annotation and initializer are finalized
+    ASSERT_NE(function_ptr->body, nullptr);
+    ASSERT_EQ(function_ptr->body->stmts.size(), 1u);
+    auto *let_stmt_ptr = std::get_if<hir::LetStmt>(&function_ptr->body->stmts[0]->value);
+    ASSERT_NE(let_stmt_ptr, nullptr);
+    ASSERT_TRUE(let_stmt_ptr->type_annotation.has_value());
+    EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*let_stmt_ptr->type_annotation));
+
+    auto &let_binding = std::get<hir::BindingDef>(let_stmt_ptr->pattern->value);
+    auto *let_local_ptr = std::get_if<hir::Local*>(&let_binding.local);
+    ASSERT_NE(let_local_ptr, nullptr);
+    ASSERT_NE(*let_local_ptr, nullptr);
+    ASSERT_TRUE(let_binding.type_annotation.has_value());
+    EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*let_binding.type_annotation));
+    ASSERT_TRUE((*let_local_ptr)->type_annotation.has_value());
+    EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*(*let_local_ptr)->type_annotation));
+
+    auto *array_repeat = std::get_if<hir::ArrayRepeat>(&let_stmt_ptr->initializer->value);
+    ASSERT_NE(array_repeat, nullptr);
+    ASSERT_TRUE(std::holds_alternative<size_t>(array_repeat->count));
+    EXPECT_EQ(std::get<size_t>(array_repeat->count), 4u);
+}

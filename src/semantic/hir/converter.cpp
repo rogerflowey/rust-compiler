@@ -344,7 +344,14 @@ struct ItemConverter {
         std::vector<std::unique_ptr<hir::Pattern>> params;
         params.reserve(fn.params.size());
         for (const auto& p : fn.params) {
-            params.push_back(convert_pattern(*p.first));
+            auto pattern = convert_pattern(*p.first);
+            if (auto* binding = std::get_if<hir::BindingDef>(&pattern->value)) {
+                if (p.second) {
+                    auto type_node = detail::convert_type(converter, *p.second);
+                    binding->type_annotation = hir::TypeAnnotation(std::move(type_node));
+                }
+            }
+            params.push_back(std::move(pattern));
         }
 
         return hir::Function{
@@ -357,11 +364,17 @@ struct ItemConverter {
     }
     hir::ItemVariant operator()(const ast::StructItem& s) const {
         std::vector<semantic::Field> fields;
+        std::vector<hir::TypeAnnotation> field_types;
         fields.reserve(s.fields.size());
+        field_types.reserve(s.fields.size());
         for(const auto& f : s.fields) {
-            fields.push_back(semantic::Field{ .name = *f.first, .type = nullptr });
+            if (!f.first || !f.second) {
+                throw std::logic_error("Struct field must have a name and a type");
+            }
+            fields.push_back(semantic::Field{ .name = *f.first, .type = std::nullopt });
+            field_types.emplace_back(hir::TypeAnnotation(detail::convert_type(converter, *f.second)));
         }
-        return hir::StructDef{ .fields = std::move(fields), .ast_node = &s };
+        return hir::StructDef{ .fields = std::move(fields), .field_type_annotations = std::move(field_types), .ast_node = &s };
     }
     hir::ItemVariant operator()(const ast::EnumItem& e) const {
         std::vector<semantic::EnumVariant> variants;
@@ -375,6 +388,7 @@ struct ItemConverter {
         return hir::ConstDef{
             .type = cnst.type ? std::optional(convert_type(converter, *cnst.type)) : std::nullopt,
             .value = converter.convert_expr(*cnst.value),
+            .const_value = std::nullopt,
             .ast_node = &cnst
         };
     }
@@ -464,7 +478,14 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
         std::vector<std::unique_ptr<hir::Pattern>> params;
         params.reserve(fn_item->params.size());
         for (const auto& p : fn_item->params) {
-            params.push_back(detail::convert_pattern(*p.first));
+            auto pattern = detail::convert_pattern(*p.first);
+            if (auto* binding = std::get_if<hir::BindingDef>(&pattern->value)) {
+                if (p.second) {
+                    auto type_node = detail::convert_type(*this, *p.second);
+                    binding->type_annotation = hir::TypeAnnotation(std::move(type_node));
+                }
+            }
+            params.push_back(std::move(pattern));
         }
 
         auto body = fn_item->body ? std::make_unique<hir::Block>(convert_block(**fn_item->body)) : nullptr;
@@ -503,6 +524,7 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
         hir::ConstDef hir_cnst{
             .type = cnst_item->type ? std::optional(detail::convert_type(*this, *cnst_item->type)) : std::nullopt,
             .value = convert_expr(*cnst_item->value),
+            .const_value = std::nullopt,
             .ast_node = cnst_item
         };
         return std::make_unique<hir::AssociatedItem>(std::move(hir_cnst));
