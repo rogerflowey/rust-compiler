@@ -392,6 +392,7 @@ struct Method {
     std::vector<std::unique_ptr<Pattern>> params;// changed
     std::optional<TypeAnnotation> return_type;
     std::unique_ptr<Block> body;
+    std::vector<std::unique_ptr<Local>> locals;
     const ast::FunctionItem* ast_node = nullptr;
 };
 

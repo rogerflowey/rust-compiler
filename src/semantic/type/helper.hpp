@@ -3,6 +3,8 @@
 #include "common.hpp"
 #include "type.hpp"
 #include "semantic/hir/hir.hpp"
+#include "semantic/utils.hpp"
+#include <stdexcept>
 
 namespace semantic{
 namespace helper {
@@ -12,17 +14,17 @@ namespace helper {
  * @return The corresponding Type
 */
 inline Type to_type(const TypeDef& def){
-    struct Visitor{
-        Type operator()(hir::StructDef* sd) const {
+    return std::visit(Overloaded{
+        [](hir::StructDef* sd) -> Type {
             return Type{StructType{.symbol = sd}};
-        }
-        Type operator()(hir::EnumDef* ed) const {
+        },
+        [](hir::EnumDef* ed) -> Type {
             return Type{EnumType{.symbol = ed}};
-        }
-        Type operator()(hir::Trait* td) const {
+        },
+        [](hir::Trait*) -> Type {
             throw std::logic_error("Cannot convert Trait to Type");
         }
-    };
+    }, def);
 }
 
 }

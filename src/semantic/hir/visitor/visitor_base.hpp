@@ -4,6 +4,14 @@
 
 namespace hir {
 
+#define DEFINE_COMPATIBLE_VISIT(NodeType)                                             \
+	void visit(NodeType& node, Expr& container) {                                     \
+		derived().visit(node);                                                       \
+		(void)container;                                                             \
+		base().visit(node);                                                          \
+	}                                                                                \
+	void visit(NodeType& /*node*/) {}
+
 // Forward declare HIR nodes for the visitor
 struct DefType;
 struct PrimitiveType;
@@ -60,8 +68,17 @@ protected:
 	HirVisitorBase& base() { return *this; }
 	const HirVisitorBase& base() const { return *this; }
 
-public:
-    using ExprUpdate = std::optional<ExprVariant>;
+private:
+	template <typename Node>
+	void visit_dispatch(Node& node, Expr& container) {
+		auto& d = derived();
+		if constexpr (requires { d.visit(node, container); }) {
+			d.visit(node, container);
+		} else {
+			(void)container;
+			d.visit(node);
+		}
+	}
 
 protected:
 
@@ -91,21 +108,17 @@ protected:
 		}
 	}
 
-	ExprUpdate visit_expr(std::unique_ptr<Expr>& expr) {
+	void visit_expr(std::unique_ptr<Expr>& expr) {
 		if (!expr) {
-			return std::nullopt;
+			return;
 		}
-		return derived().visit_expr(*expr);
+		derived().visit_expr(*expr);
 	}
 
-	ExprUpdate visit_expr(Expr& expr) {
-		auto replacement = std::visit([this](auto& node) {
-			return derived().visit(node);
+	void visit_expr(Expr& expr) {
+		std::visit([this, &expr](auto& node) {
+			visit_dispatch(node, expr);
 		}, expr.value);
-		if (replacement) {
-			expr.value = std::move(*replacement);
-		}
-		return replacement;
 	}
 
 	void visit_block(std::unique_ptr<Block>& block) {
@@ -235,18 +248,17 @@ public:
 	void visit(WildCardPattern&) {}
 
 	// Expressions
-	ExprUpdate visit(Literal&) { return std::nullopt; }
-	ExprUpdate visit(UnresolvedIdentifier&) { return std::nullopt; }
-	ExprUpdate visit(Variable&) { return std::nullopt; }
-	ExprUpdate visit(ConstUse&) { return std::nullopt; }
-	ExprUpdate visit(FuncUse&) { return std::nullopt; }
-	ExprUpdate visit(TypeStatic&) { return std::nullopt; }
-	ExprUpdate visit(Underscore&) { return std::nullopt; }
-	ExprUpdate visit(FieldAccess& access) {
+	void visit(Literal&) {}
+	void visit(UnresolvedIdentifier&) {}
+	void visit(Variable&) {}
+	void visit(ConstUse&) {}
+	void visit(FuncUse&) {}
+	void visit(TypeStatic&) {}
+	void visit(Underscore&) {}
+	void visit(FieldAccess& access) {
 		derived().visit_expr(access.base);
-		return std::nullopt;
 	}
-	ExprUpdate visit(StructLiteral& literal) {
+	void visit(StructLiteral& literal) {
 		std::visit(
 			[this](auto& fields_variant) {
 				using T = std::decay_t<decltype(fields_variant)>;
@@ -262,89 +274,73 @@ public:
 			},
 			literal.fields
 		);
-		return std::nullopt;
 	}
-	ExprUpdate visit(StructConst&) { return std::nullopt; }
-	ExprUpdate visit(StructStatic&) { return std::nullopt; }
-	ExprUpdate visit(EnumVariant&) { return std::nullopt; }
-	ExprUpdate visit(ArrayLiteral& literal) {
+	void visit(StructConst&) {}
+	void visit(StructStatic&) {}
+	void visit(EnumVariant&) {}
+	void visit(ArrayLiteral& literal) {
 		for (auto& element : literal.elements) {
 			derived().visit_expr(element);
 		}
-		return std::nullopt;
 	}
-	ExprUpdate visit(ArrayRepeat& repeat) {
+	void visit(ArrayRepeat& repeat) {
 		derived().visit_expr(repeat.value);
         if (auto* count_expr = std::get_if<std::unique_ptr<Expr>>(&repeat.count)) {
             derived().visit_expr(*count_expr);
         }
-		return std::nullopt;
 	}
-	ExprUpdate visit(Index& index) {
+	void visit(Index& index) {
 		derived().visit_expr(index.base);
 		derived().visit_expr(index.index);
-		return std::nullopt;
 	}
-	ExprUpdate visit(Assignment& assignment) {
+	void visit(Assignment& assignment) {
 		derived().visit_expr(assignment.lhs);
 		derived().visit_expr(assignment.rhs);
-		return std::nullopt;
 	}
-	ExprUpdate visit(UnaryOp& op) {
+	void visit(UnaryOp& op) {
 		derived().visit_expr(op.rhs);
-		return std::nullopt;
 	}
-	ExprUpdate visit(BinaryOp& op) {
+	void visit(BinaryOp& op) {
 		derived().visit_expr(op.lhs);
 		derived().visit_expr(op.rhs);
-		return std::nullopt;
 	}
-	ExprUpdate visit(Cast& cast) {
+	void visit(Cast& cast) {
 		derived().visit_expr(cast.expr);
 		visit_type_annotation(cast.target_type);
-		return std::nullopt;
 	}
-	ExprUpdate visit(Call& call) {
+	void visit(Call& call) {
 		derived().visit_expr(call.callee);
 		for (auto& arg : call.args) {
 			derived().visit_expr(arg);
 		}
-		return std::nullopt;
 	}
-	ExprUpdate visit(MethodCall& call) {
+	void visit(MethodCall& call) {
 		derived().visit_expr(call.receiver);
 		for (auto& arg : call.args) {
 			derived().visit_expr(arg);
 		}
-		return std::nullopt;
 	}
-	ExprUpdate visit(Block& block_expr) {
+	void visit(Block& block_expr) {
 		derived().visit_block(block_expr);
-		return std::nullopt;
 	}
-	ExprUpdate visit(If& if_expr) {
+	void visit(If& if_expr) {
 		derived().visit_expr(if_expr.condition);
 		derived().visit_block(if_expr.then_block);
 		visit_optional_expr(if_expr.else_expr);
-		return std::nullopt;
 	}
-	ExprUpdate visit(Loop& loop) {
+	void visit(Loop& loop) {
 		derived().visit_block(loop.body);
-		return std::nullopt;
 	}
-	ExprUpdate visit(While& while_expr) {
+	void visit(While& while_expr) {
 		derived().visit_expr(while_expr.condition);
 		derived().visit_block(while_expr.body);
-		return std::nullopt;
 	}
-	ExprUpdate visit(Break& brk) {
+	void visit(Break& brk) {
 		visit_optional_expr(brk.value);
-		return std::nullopt;
 	}
-	ExprUpdate visit(Continue&) { return std::nullopt; }
-	ExprUpdate visit(Return& ret) {
+	void visit(Continue&) {}
+	void visit(Return& ret) {
 		visit_optional_expr(ret.value);
-		return std::nullopt;
 	}
 };
 

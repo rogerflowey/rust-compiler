@@ -15,20 +15,20 @@ struct TypeIdHasher {
 
 class ImplTable {
 private:
-  std::unordered_map<TypeId, std::vector<const hir::Impl*>, TypeIdHasher> type_impls;
+  std::unordered_map<TypeId, std::vector<hir::Impl*>, TypeIdHasher> type_impls;
 
 public:
   ImplTable() = default;
 
-  void add_impl(TypeId type, const hir::Impl& impl_symbol) {
+  void add_impl(TypeId type, hir::Impl& impl_symbol) {
     type_impls[type].push_back(&impl_symbol);
   }
 
-  const std::vector<const hir::Impl*>& get_impls(TypeId type) const {
+  const std::vector<hir::Impl*>& get_impls(TypeId type) const {
     if (auto it = type_impls.find(type); it != type_impls.end()) {
       return it->second;
     }
-    static const std::vector<const hir::Impl*> empty_vec;
+    static const std::vector<hir::Impl*> empty_vec;
     return empty_vec;
   }
 };

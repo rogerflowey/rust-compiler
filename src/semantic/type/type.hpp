@@ -136,6 +136,8 @@ private:
     std::unordered_map<Type, std::unique_ptr<Type>, TypeHash> registered_types;
 };
 
+inline TypeContext::TypeContext() = default;
+
 
 inline TypeId get_typeID(const Type& t){
     return TypeContext::get_instance().get_id(t);

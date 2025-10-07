@@ -482,6 +482,7 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
                 .params = std::move(params),
                 .return_type = std::move(return_type),
                 .body = std::move(body),
+                .locals = {},
                 .ast_node = fn_item
             };
             return std::make_unique<hir::AssociatedItem>(std::move(hir_method));
