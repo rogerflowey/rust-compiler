@@ -19,7 +19,7 @@ struct Type;
 
 using TypeId = const Type*;
 
-enum class PrimitiveKind { I32, U32, ISIZE, USIZE, BOOL, CHAR, STRING};
+enum class PrimitiveKind { I32, U32, ISIZE, USIZE, BOOL, CHAR, STRING, /* Only used as a temporary solution of the integer related type Inference*/ __ANYINT__, __ANYUINT__};
 
 struct StructType {
     const hir::StructDef* symbol;
@@ -142,4 +142,8 @@ inline TypeContext::TypeContext() = default;
 inline TypeId get_typeID(const Type& t){
     return TypeContext::get_instance().get_id(t);
 };
-}
+inline Type get_type_from_id(TypeId id){
+    return *id;
+};
+
+} // namespace semantic

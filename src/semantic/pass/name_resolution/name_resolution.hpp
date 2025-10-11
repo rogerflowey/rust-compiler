@@ -58,32 +58,6 @@ class NameResolver: public hir::HirVisitorBase<NameResolver>{
 		scopes.top().define_binding((*local_ptr)->name, &binding);
 	}
 
-	TypeDef resolve_type_identifier(const ast::Identifier& name) {
-		auto type_def = scopes.top().lookup_type(name);
-		if (!type_def) {
-			throw std::runtime_error("Undefined type " + name.name);
-		}
-		return *type_def;
-	}
-
-	hir::Trait* resolve_trait_identifier(const ast::Identifier& name) {
-		auto type_def = scopes.top().lookup_type(name);
-		if (!type_def) {
-			throw std::runtime_error("Undefined trait " + name.name);
-		}
-		return std::visit(Overloaded{
-			[](hir::StructDef*) -> hir::Trait* {
-				throw std::runtime_error("Struct used where trait expected");
-			},
-			[](hir::EnumDef*) -> hir::Trait* {
-				throw std::runtime_error("Enum used where trait expected");
-			},
-			[](hir::Trait* trait) -> hir::Trait* {
-				return trait;
-			}
-		}, *type_def);
-	}
-
 	hir::ExprVariant resolve_type_static(hir::TypeStatic& node) {
 		auto* resolved_type = std::get_if<TypeDef>(&node.type);
 		if (!resolved_type) {
@@ -95,40 +69,43 @@ class NameResolver: public hir::HirVisitorBase<NameResolver>{
 				TypeDef type_handle = struct_def;
 				auto type_id = get_typeID(semantic::helper::to_type(type_handle));
 				const auto& impls = impl_table.get_impls(type_id);
+				auto matches_target = [&](auto& associated) -> std::optional<hir::ExprVariant> {
+					return std::visit(Overloaded{
+						[&](hir::Function& fn) -> std::optional<hir::ExprVariant> {
+							if (!fn.ast_node || !fn.ast_node->name) {
+								return std::nullopt;
+							}
+							if ((*fn.ast_node->name).name != target_name.name) {
+								return std::nullopt;
+							}
+							return hir::ExprVariant{hir::StructStatic{
+								.struct_def = struct_def,
+								.assoc_fn = &fn
+							}};
+						},
+						[&](hir::ConstDef& constant) -> std::optional<hir::ExprVariant> {
+							if (!constant.ast_node || !constant.ast_node->name) {
+								return std::nullopt;
+							}
+							if ((*constant.ast_node->name).name != target_name.name) {
+								return std::nullopt;
+							}
+							return hir::ExprVariant{hir::StructConst{
+								.struct_def = struct_def,
+								.assoc_const = &constant
+							}};
+						},
+						[](hir::Method&) -> std::optional<hir::ExprVariant> {
+							return std::nullopt;
+						}
+					}, associated.value);
+				};
 				for (auto* impl : impls) {
 					if (impl->trait.has_value()) {
 						continue;
 					}
 					for (auto& associated : impl->items) {
-						auto resolved = std::visit(Overloaded{
-							[&](hir::Function& fn) -> std::optional<hir::ExprVariant> {
-								if (!fn.ast_node || !fn.ast_node->name) {
-									return std::nullopt;
-								}
-								if ((*fn.ast_node->name).name != target_name.name) {
-									return std::nullopt;
-								}
-								return hir::ExprVariant{hir::StructStatic{
-									.struct_def = struct_def,
-									.assoc_fn = &fn
-								}};
-							},
-							[&](hir::ConstDef& constant) -> std::optional<hir::ExprVariant> {
-								if (!constant.ast_node || !constant.ast_node->name) {
-									return std::nullopt;
-								}
-								if ((*constant.ast_node->name).name != target_name.name) {
-									return std::nullopt;
-								}
-								return hir::ExprVariant{hir::StructConst{
-									.struct_def = struct_def,
-									.assoc_const = &constant
-								}};
-							},
-							[](hir::Method&) -> std::optional<hir::ExprVariant> {
-								return std::nullopt;
-							}
-						}, associated->value);
+						auto resolved = matches_target(*associated);
 						if (resolved) {
 							return std::move(*resolved);
 						}
@@ -137,13 +114,14 @@ class NameResolver: public hir::HirVisitorBase<NameResolver>{
 				throw std::runtime_error("Unable to resolve struct associated item " + target_name.name);
 			},
 			[&](hir::EnumDef* enum_def) -> hir::ExprVariant {
-				for (size_t idx = 0; idx < enum_def->variants.size(); ++idx) {
-					if (enum_def->variants[idx].name == target_name) {
-						return hir::ExprVariant{hir::EnumVariant{
-							.enum_def = enum_def,
-							.variant_index = idx
-						}};
-					}
+				auto it = std::find_if(enum_def->variants.begin(), enum_def->variants.end(),
+					[&](const auto& variant) { return variant.name == target_name; });
+				if (it != enum_def->variants.end()) {
+					size_t idx = static_cast<size_t>(std::distance(enum_def->variants.begin(), it));
+					return hir::ExprVariant{hir::EnumVariant{
+						.enum_def = enum_def,
+						.variant_index = idx
+					}};
 				}
 				throw std::runtime_error("Enum variant " + target_name.name + " not found");
 			},
@@ -241,7 +219,12 @@ public:
 
 		auto& def_type = **def_type_ptr;
 		if (auto* ident = std::get_if<ast::Identifier>(&def_type.def)) {
-			def_type.def = resolve_type_identifier(*ident);
+			auto type_def = scopes.top().lookup_type(*ident);
+			if (!type_def) {
+				throw std::runtime_error("Undefined type " + ident->name);
+			}
+			// Record the resolved nominal type so downstream passes see the canonical handle.
+			def_type.def = *type_def;
 		}
 		auto* resolved_def = std::get_if<TypeDef>(&def_type.def);
 		if (!resolved_def) {
@@ -256,7 +239,14 @@ public:
 		if (impl.trait) {
 			auto& trait_variant = *impl.trait;
 			if (auto* trait_ident = std::get_if<ast::Identifier>(&trait_variant)) {
-				trait_variant = resolve_trait_identifier(*trait_ident);
+				auto type_def = scopes.top().lookup_type(*trait_ident);
+				if (!type_def) {
+					throw std::runtime_error("Undefined trait " + trait_ident->name);
+				}
+				if(!std::holds_alternative<hir::Trait*>(*type_def)) {
+					throw std::runtime_error(trait_ident->name + " is not a trait");
+				}
+				trait_variant = std::get<hir::Trait*>(*type_def);
 			}
 		}
 
@@ -332,7 +322,12 @@ public:
 	void visit(hir::TypeStatic& ts, hir::Expr& container){
 		auto* type_name_ptr = std::get_if<ast::Identifier>(&ts.type);
 		if (type_name_ptr) {
-			ts.type = resolve_type_identifier(*type_name_ptr);
+			auto type_def = scopes.top().lookup_type(*type_name_ptr);
+			if (!type_def) {
+				throw std::runtime_error("Undefined type " + type_name_ptr->name);
+			}
+			// Replace the syntactic path with the resolved nominal type handle.
+			ts.type = *type_def;
 		}
 		unresolved_statics.push_back(PendingTypeStatic{&container, &ts});
 		base().visit(ts);
@@ -376,15 +371,16 @@ public:
         }
         const auto& name = *name_ptr;
 
-        auto def = scopes.top().lookup_type(name);
-        if (!def) {
+		auto def = scopes.top().lookup_type(name);
+		if (!def) {
             throw std::runtime_error("Undefined struct " + name.name);
         }
         auto* struct_def = std::get_if<hir::StructDef*>(&def.value());
         if (!struct_def) {
             throw std::runtime_error(name.name + " is not a struct");
         }
-        sl.struct_path = *struct_def;
+		// Swap the identifier for the resolved struct definition pointer.
+		sl.struct_path = *struct_def;
 
 		//reorder the fields to canonical order
 		auto syntactic_fields = std::get_if<hir::StructLiteral::SyntacticFields>(&sl.fields);
@@ -414,7 +410,12 @@ public:
 
 	void visit(hir::DefType& def_type) {
 		if (auto* name = std::get_if<ast::Identifier>(&def_type.def)) {
-			def_type.def = resolve_type_identifier(*name);
+			auto type_def = scopes.top().lookup_type(*name);
+			if (!type_def) {
+				throw std::runtime_error("Undefined type " + name->name);
+			}
+			// Attach the resolved type handle directly to the HIR node.
+			def_type.def = *type_def;
 		}
 	}
 

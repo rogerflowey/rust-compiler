@@ -14,8 +14,16 @@ struct ExprConverter {
     const ast::Expr& ast_expr;
 
     hir::ExprVariant operator()(const ast::IntegerLiteralExpr& lit) const {
+        const bool is_negative = lit.value < 0;
+        const uint64_t magnitude = is_negative
+            ? static_cast<uint64_t>(-(lit.value + 1)) + 1
+            : static_cast<uint64_t>(lit.value);
         return hir::Literal{
-            .value = hir::Literal::Integer{ .value = static_cast<uint64_t>(lit.value), .suffix_type = lit.type },
+            .value = hir::Literal::Integer{
+                .value = magnitude,
+                .suffix_type = lit.type,
+                .is_negative = is_negative
+            },
             .ast_node = &lit
         };
     }

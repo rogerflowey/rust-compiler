@@ -72,3 +72,58 @@ The process is a strict, sequential pipeline. Each pass takes the HIR as input a
     *   It validates all type-related rules: assignment compatibility, operator validity, function call arguments, etc.
     *   It resolves type-dependent entities, such as method calls and field accesses, filling in their final semantic information.
 *   **Output:** The final, fully enriched and validated `hir::Program`, ready for subsequent stages like borrow checking and code generation.
+
+#### **Roadmap for Semantic Checks (Type / Mutability / References)**
+
+This pass owns every user-facing diagnostic listed in the semester guide. To keep it manageable, the implementation should follow a staged mini-pipeline that revisits each HIR expression with progressively stronger invariants.
+
+1. **Prerequisites carried from upstream passes**
+    * Name resolution guarantees that every `hir::Path` already points at a concrete item (`hir::Local`, `hir::StructDef`, `hir::EnumVariant`, etc.). Missing symbols never reach this pass.
+    * Type & const finalization guarantees that every `hir::TypeAnnotation` is a resolved `semantic::TypeId`, and that const expressions embedded in types have literal values available through the Resolver cache.
+    * Control-flow scaffolding (loop stacks, function contexts) created during HIR construction exposes entry/exit nodes for each block, loop, and function body.
+
+2. **Expression typing driver (top-down walk)**
+    * Visit expressions in evaluation order, threading a `TypeContext` that records the expected type (if any) and whether the expression sits in a const context.
+    * For each node, produce both a `semantic::TypeId` and a `ControlFlowOutcome` flag (`Normal`, `Break`, `Continue`, `Return`, `Diverges`). The flag feeds missing-return and loop diagnostics later.
+    * Maintain a worklist of deferred inference variables for patterns (`let` bindings, match arms once implemented) and satisfy them once all operand types are known.
+
+3. **Operator and assignment checks**
+    * Binary/unary operators: verify operand arity, numeric/logical category, and auto-coerce integer literals where permitted. Emit `TypeMismatch` with original AST span on failure.
+    * Assignment: ensure the LHS is addressable and mutable, and that the RHS type is coercible to the LHS type (post auto-deref/auto-ref adjustments).
+    * `if`, `loop`, `while`: enforce boolean condition types; compute branch join types with `!` (never) awareness so dead-end branches coerce correctly.
+
+4. **Mutability and reference enforcement**
+    * Track `hir::Local::mutability` plus struct field mutability in an environment. When encountering `&` or `&mut`, ensure the source place supports the requested capability.
+    * For assignment targets and method receivers, reject writes through immutable bindings or to immutable fields, yielding `Immutable Variable Mutated` diagnostics.
+    * Guard re-borrow rules: `&mut` to `&` is allowed (downgrade), but `&` to `&mut` is rejected unless coming from an owned `self` receiver.
+
+5. **Auto-reference / auto-dereference resolution**
+    * Implement a unified probe (`Adjustments::for_method` / `Adjustments::for_field`) that performs:
+        1. Candidate lookup on the unadjusted receiver type to locate methods, fields, or trait items.
+        2. Iterative deref steps (`Deref` chain limited to references and pointer-like wrappers) until a match is found.
+        3. Once matched, synthesize the minimal borrow required by the callee signature (promote owned → `&` → `&mut`).
+    * Record chosen adjustments on the HIR node so codegen can re-use them, and so diagnostics can surface the implicit borrow/deref sequence when needed.
+    * Apply the same adjustment engine to indexing expressions so that `&[T; N]` seamlessly supports `[]`.
+
+6. **Control-flow validation**
+    * Maintain a stack of `LoopContext` entries; `break`/`continue` statements must hit a loop frame or produce an `Invalid Control Flow` error.
+    * For each function body, aggregate the `ControlFlowOutcome` of the tail expression and every terminating statement. If none are `Return` and the declared return type is non-unit, emit `Missing Return` with the function span.
+    * Ensure `loop` expressions have at least one `break expr`; use the `expr` type as the loop's resulting type.
+
+7. **Const-context enforcement**
+    * When `TypeContext::const_context == true`, restrict evaluation to literals, previously-evaluated const items, arithmetic/bit ops, and parens (matching the constraints documented in `guide.md`).
+    * Reuse the Resolver to evaluate sub-expressions eagerly; report `Invalid Type` when a disallowed construct shows up.
+
+8. **Trait/impl bookkeeping**
+    * After analyzing each `impl`, compare supplied associated items to the trait definition, flagging any missing implementations (`Trait Item Unimplemented`).
+    * Ensure inherent impls do not redefine existing associated items or fields (enforces `Multiple Definition`).
+
+9. **Diagnostics and testing hooks**
+    * Every failure path should attach the originating AST node via the HIR back-pointer for high-fidelity span reporting.
+    * Add focused unit tests under `test/semantic/` covering:
+        - happy paths for auto-borrow/deref (methods, fields, indexing)
+        - mutability violations (assign to immutable, taking `&mut` from shared)
+        - missing return detection
+        - const-context misuse
+        - control-flow errors (`break`/`continue` outside loops)
+    * Update `design_overview.md` when new categories appear so downstream developers know where to plug them into the roadmap.

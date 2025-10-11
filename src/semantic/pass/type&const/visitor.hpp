@@ -16,56 +16,6 @@ class TypeConstResolver : public hir::HirVisitorBase<TypeConstResolver> {
 	TypeResolver type_resolver;
 	ConstEvaluator const_evaluator;
 
-	TypeId resolve_annotation(hir::TypeAnnotation &annotation) {
-		return type_resolver.resolve(annotation);
-	}
-
-	void assign_type_to_local(hir::Local &local, TypeId type_id) {
-		local.type_annotation = hir::TypeAnnotation(type_id);
-	}
-
-	void assign_type_to_binding(hir::BindingDef &binding, TypeId type_id) {
-		binding.type_annotation = hir::TypeAnnotation(type_id);
-		if (auto *local_ptr = std::get_if<hir::Local *>(&binding.local)) {
-			if (!*local_ptr) {
-				throw std::logic_error("Binding resolved without an associated local");
-			}
-			assign_type_to_local(**local_ptr, type_id);
-		}
-	}
-
-	void assign_type_to_pattern(hir::Pattern &pattern, TypeId type_id) {
-		std::visit(
-			[&](auto &node) {
-				using Node = std::decay_t<decltype(node)>;
-				if constexpr (std::is_same_v<Node, hir::BindingDef>) {
-					assign_type_to_binding(node, type_id);
-				}
-			},
-			pattern.value
-		);
-	}
-
-	void ensure_struct_field_annotations_in_sync(const hir::StructDef &struct_def) {
-		if (struct_def.fields.size() != struct_def.field_type_annotations.size()) {
-			throw std::logic_error("Struct field types and annotations are out of sync");
-		}
-	}
-
-	[[nodiscard]] size_t evaluate_array_count(const hir::Expr &expr) {
-		ConstVariant value = const_evaluator.evaluate(expr);
-		if (const auto *uint_value = std::get_if<UintConst>(&value)) {
-			return static_cast<size_t>(uint_value->value);
-		}
-		if (const auto *int_value = std::get_if<IntConst>(&value)) {
-			if (int_value->value < 0) {
-				throw std::logic_error("Array repeat count must be non-negative");
-			}
-			return static_cast<size_t>(int_value->value);
-		}
-		throw std::logic_error("Array repeat count must be an integer constant");
-	}
-
 public:
 	using hir::HirVisitorBase<TypeConstResolver>::visit;
 
@@ -75,35 +25,50 @@ public:
 	}
 
 	void visit(hir::Function &function) {
-		if (function.return_type) {
-			resolve_annotation(*function.return_type);
+		static const TypeId unit_type = get_typeID(Type{UnitType{}});
+		if (!function.return_type) {
+			// Default to the unit return type
+			function.return_type = hir::TypeAnnotation(unit_type);
 		}
+		type_resolver.resolve(*function.return_type);
 		hir::HirVisitorBase<TypeConstResolver>::visit(function);
 	}
 
 	void visit(hir::Method &method) {
-		if (method.return_type) {
-			resolve_annotation(*method.return_type);
+		static const TypeId unit_type = get_typeID(Type{UnitType{}});
+		if (!method.return_type) {
+			// same as function
+			method.return_type = hir::TypeAnnotation(unit_type);
 		}
+		type_resolver.resolve(*method.return_type);
 		hir::HirVisitorBase<TypeConstResolver>::visit(method);
 	}
 
 	void visit(hir::Impl &impl) {
-		resolve_annotation(impl.for_type);
+		type_resolver.resolve(impl.for_type);
 		hir::HirVisitorBase<TypeConstResolver>::visit(impl);
 	}
 
 	void visit(hir::BindingDef &binding) {
 		if (binding.type_annotation) {
-			TypeId type_id = resolve_annotation(*binding.type_annotation);
-			assign_type_to_binding(binding, type_id);
+			TypeId resolved_type = type_resolver.resolve(*binding.type_annotation);
+			binding.type_annotation = hir::TypeAnnotation(resolved_type);
+			if (auto *local_ptr = std::get_if<hir::Local *>(&binding.local)) {
+				if (!*local_ptr) {
+					throw std::logic_error("Binding resolved without an associated local");
+				}
+				// Mirror the binding's resolved type onto the captured local slot.
+				(*local_ptr)->type_annotation = hir::TypeAnnotation(resolved_type);
+			}
 		}
 	}
 
 	void visit(hir::StructDef &struct_def) {
-		ensure_struct_field_annotations_in_sync(struct_def);
+		if (struct_def.fields.size() != struct_def.field_type_annotations.size()) {
+			throw std::logic_error("Struct field types and annotations are out of sync");
+		}
 		for (size_t idx = 0; idx < struct_def.field_type_annotations.size(); ++idx) {
-			TypeId type_id = resolve_annotation(struct_def.field_type_annotations[idx]);
+			TypeId type_id = type_resolver.resolve(struct_def.field_type_annotations[idx]);
 			struct_def.field_type_annotations[idx] = hir::TypeAnnotation(type_id);
 			struct_def.fields[idx].type = type_id;
 		}
@@ -111,20 +76,21 @@ public:
 
 	void visit(hir::ConstDef &constant) {
 		if (constant.type) {
-			TypeId type_id = resolve_annotation(*constant.type);
+			TypeId type_id = type_resolver.resolve(*constant.type);
 			constant.type = hir::TypeAnnotation(type_id);
 		}
 		if (!constant.value) {
 			throw std::logic_error("Const definition missing initializer");
 		}
 		hir::HirVisitorBase<TypeConstResolver>::visit(constant);
+		// Fold the initializer expression into a compile-time constant value.
 		constant.const_value = const_evaluator.evaluate(*constant.value);
 	}
 
 	void visit(hir::LetStmt &stmt) {
 		std::optional<TypeId> explicit_type;
 		if (stmt.type_annotation) {
-			TypeId type_id = resolve_annotation(*stmt.type_annotation);
+			TypeId type_id = type_resolver.resolve(*stmt.type_annotation);
 			stmt.type_annotation = hir::TypeAnnotation(type_id);
 			explicit_type = type_id;
 		}
@@ -132,20 +98,71 @@ public:
 		hir::HirVisitorBase<TypeConstResolver>::visit(stmt);
 
 		if (explicit_type && stmt.pattern) {
-			assign_type_to_pattern(*stmt.pattern, *explicit_type);
+			std::visit(
+				[&](auto &node) {
+					using Node = std::decay_t<decltype(node)>;
+					if constexpr (std::is_same_v<Node, hir::BindingDef>) {
+						// Keep the binding and its local in sync with the explicit annotation.
+						node.type_annotation = hir::TypeAnnotation(*explicit_type);
+						if (auto *local_ptr = std::get_if<hir::Local *>(&node.local)) {
+							if (!*local_ptr) {
+								throw std::logic_error("Binding resolved without an associated local");
+							}
+							(*local_ptr)->type_annotation = hir::TypeAnnotation(*explicit_type);
+						}
+					}
+				},
+				stmt.pattern->value
+			);
 		}
 	}
 
 	void visit(hir::Cast &cast) {
-		resolve_annotation(cast.target_type);
+		// Ensure the target type of the cast is fully resolved before descending.
+		type_resolver.resolve(cast.target_type);
 		hir::HirVisitorBase<TypeConstResolver>::visit(cast);
+	}
+
+	void visit(hir::UnaryOp &op, hir::Expr &expr) {
+		hir::HirVisitorBase<TypeConstResolver>::visit(op);
+		if (op.op != hir::UnaryOp::NEGATE) {
+			return;
+		}
+		if (!op.rhs) {
+			return;
+		}
+		auto *literal_expr = std::get_if<hir::Literal>(&op.rhs->value);
+		if (!literal_expr) {
+			return;
+		}
+		auto *int_literal = std::get_if<hir::Literal::Integer>(&literal_expr->value);
+		if (!int_literal) {
+			return;
+		}
+		int_literal->is_negative = !int_literal->is_negative;
+		hir::Literal merged_literal = std::move(*literal_expr);
+		expr.value = std::move(merged_literal);
 	}
 
 	void visit(hir::ArrayRepeat &repeat) {
 		hir::HirVisitorBase<TypeConstResolver>::visit(repeat);
 		if (auto *count_expr = std::get_if<std::unique_ptr<hir::Expr>>(&repeat.count)) {
 			if (*count_expr) {
-				repeat.count = evaluate_array_count(**count_expr);
+				ConstVariant value = const_evaluator.evaluate(**count_expr);
+				if (const auto *uint_value = std::get_if<UintConst>(&value)) {
+					// Materialize the repeat count from an unsigned constant expression.
+					repeat.count = static_cast<size_t>(uint_value->value);
+					return;
+				}
+				if (const auto *int_value = std::get_if<IntConst>(&value)) {
+					if (int_value->value < 0) {
+						throw std::logic_error("Array repeat count must be non-negative");
+					}
+					// Accept signed integer constants by reinterpreting them as sizes.
+					repeat.count = static_cast<size_t>(int_value->value);
+					return;
+				}
+				throw std::logic_error("Array repeat count must be an integer constant");
 			} else {
 				throw std::logic_error("Array repeat count expression is null");
 			}

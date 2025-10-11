@@ -18,14 +18,19 @@ namespace detail {
 struct LiteralVisitor {
     ConstVariant operator()(const hir::Literal::Integer &lit) const {
         using Type = ast::IntegerLiteralExpr::Type;
+        const int64_t magnitude = static_cast<int64_t>(lit.value);
+        const int64_t signed_value = lit.is_negative ? -magnitude : magnitude;
         switch (lit.suffix_type) {
         case Type::U32:
         case Type::USIZE:
-            return UintConst{static_cast<uint32_t>(lit.value)};
+            if (lit.is_negative) {
+                throw std::logic_error("Negative value provided for unsigned integer literal");
+            }
+            return UintConst{static_cast<uint32_t>(magnitude)};
         case Type::I32:
         case Type::ISIZE:
         case Type::NOT_SPECIFIED:
-            return IntConst{static_cast<int32_t>(lit.value)};
+            return IntConst{static_cast<int32_t>(signed_value)};
         }
         throw std::logic_error("Unsupported integer literal suffix");
     }

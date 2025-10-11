@@ -6,6 +6,8 @@
 #include "semantic/type/type.hpp"
 #include "ast/ast.hpp"
 
+#include "semantic/pass/semantic_check/expr_info.hpp"
+
 #include <memory>
 #include <optional>
 #include <variant>
@@ -129,6 +131,7 @@ struct Literal {
     struct Integer {
         uint64_t value;
         ast::IntegerLiteralExpr::Type suffix_type;
+        bool is_negative = false;
     };
     struct String {
         std::string value;
@@ -339,11 +342,11 @@ using ExprVariant = std::variant<
 
 
 struct Expr {
-    std::optional<semantic::TypeId> type_id; // fill in Type Checking pass
+    std::optional<semantic::ExprInfo> expr_info;
     ExprVariant value;
 
     Expr(ExprVariant&& val)
-        : type_id(std::nullopt), value(std::move(val)) {}
+        : expr_info(std::nullopt), value(std::move(val)) {}
 
     ~Expr();
     Expr(Expr&&) noexcept;
