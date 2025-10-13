@@ -304,15 +304,18 @@ struct While {
 
 struct Break {
     std::optional<std::unique_ptr<Expr>> value;
+    std::optional<std::variant<Loop*, While*>> target = std::nullopt;
     const ast::BreakExpr* ast_node = nullptr;
 };
 
 struct Continue {
+    std::optional<std::variant<Loop*, While*>> target = std::nullopt;
     const ast::ContinueExpr* ast_node = nullptr;
 };
 
 struct Return {
     std::optional<std::unique_ptr<Expr>> value;
+    std::optional<std::variant<Function*, Method*>> target = std::nullopt;
     const ast::ReturnExpr* ast_node = nullptr;
 };
 
@@ -414,9 +417,16 @@ struct EnumDef {
 };
 
 struct ConstDef {
+    struct Unresolved {
+        std::unique_ptr<Expr> value;
+    };
+    
+    struct Resolved {
+        semantic::ConstVariant const_value;
+    };
+    
     std::optional<TypeAnnotation> type;
-    std::unique_ptr<Expr> value;
-    std::optional<semantic::ConstVariant> const_value;
+    std::variant<Unresolved, Resolved> value_state;
     const ast::ConstItem* ast_node = nullptr;
 };
 

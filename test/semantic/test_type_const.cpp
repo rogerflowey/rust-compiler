@@ -96,8 +96,9 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
 
     hir::ConstDef const_def;
     const_def.type = make_primitive_type(ast::PrimitiveType::USIZE);
-    const_def.value = make_integer_literal(4, ast::IntegerLiteralExpr::USIZE);
-    const_def.const_value = std::nullopt;
+    const_def.value_state = hir::ConstDef::Unresolved{
+        .value = make_integer_literal(4, ast::IntegerLiteralExpr::USIZE)
+    };
     const_def.ast_node = const_ast_ptr;
     program->items.push_back(std::make_unique<hir::Item>(std::move(const_def)));
     auto *const_def_ptr = &std::get<hir::ConstDef>(program->items.back()->value);
@@ -164,8 +165,10 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
     // Const definition has resolved type and value
     ASSERT_TRUE(const_def_ptr->type.has_value());
     EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*const_def_ptr->type));
-    ASSERT_TRUE(const_def_ptr->const_value.has_value());
-    auto *len_value = std::get_if<semantic::UintConst>(&*const_def_ptr->const_value);
+    ASSERT_TRUE(std::holds_alternative<hir::ConstDef::Resolved>(const_def_ptr->value_state));
+    auto *resolved_state = std::get_if<hir::ConstDef::Resolved>(&const_def_ptr->value_state);
+    ASSERT_NE(resolved_state, nullptr);
+    auto *len_value = std::get_if<semantic::UintConst>(&resolved_state->const_value);
     ASSERT_NE(len_value, nullptr);
     EXPECT_EQ(len_value->value, 4u);
 

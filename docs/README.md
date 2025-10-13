@@ -1,94 +1,79 @@
-# RCompiler Documentation System
+# RCompiler Documentation
 
-Welcome to the documentation system for the RCompiler project. This guide provides comprehensive information about the compiler architecture, implementation details, and development practices.
+RCompiler is a C++ implementation of a mini-Rust compiler prioritizing readability, development speed, simplicity, and extensibility over performance optimization.
+
+## Quick Navigation
+
+### For New Developers
+1. [Project Overview](./project-overview.md) - Project goals and structure
+2. [Architecture Guide](./architecture.md) - System architecture and design decisions
+3. [Development Guide](./development.md) - Build processes and development practices
+4. [Agent Guide](./agent-guide.md) - Navigation and development protocols
+
+### For Specific Tasks
+- **Adding language features**: Project Overview → Architecture Guide → Development Guide
+- **Semantic analysis**: Semantic Passes → Architecture Guide
+- **Bug fixing**: Agent Guide → Development Guide → Specific component docs
+
+## Core Architecture
+
+```
+Source → Lexer → Parser → AST → HIR Converter → Name Resolution → Type & Const Finalization → Semantic Checking → Control Flow Linking
+```
+
+### Key Design Principles
+- **Single Mutable HIR**: Progressive refinement instead of multiple IRs
+- **Explicit State Transitions**: Using `std::variant` for type-safe state changes
+- **Demand-Driven Resolution**: Types and constants resolved on-demand with memoization
+- **Variant-Based Nodes**: Type safety without inheritance hierarchies
+
+## Source Code Structure
+
+```
+src/
+├── ast/               # Abstract Syntax Tree (variant-based)
+├── lexer/             # Lexical analysis (single-pass)
+├── parser/            # Syntax analysis (Pratt + parsecpp)
+├── semantic/          # Semantic analysis (multi-pass HIR refinement)
+│   ├── hir/          # High-level Intermediate Representation
+│   ├── pass/         # Semantic analysis passes
+│   ├── type/         # Type system
+│   ├── symbol/       # Symbol table management
+│   └── const/        # Constant evaluation
+└── utils/             # Error handling and utilities
+```
 
 ## Documentation Structure
 
-### 📚 Core Documentation
-- [Project Overview](./project-overview.md) - High-level project description and goals
-- [Architecture Guide](./architecture/architecture-guide.md) - System architecture and component relationships
-- [Development Workflow](./development/development-workflow.md) - Build processes and development practices
-- [Code Conventions](./development/code-conventions.md) - Coding standards and patterns
+- **[Project Overview](./project-overview.md)**: Project goals, language subset, and detailed source code structure
+- **[Architecture Guide](./architecture.md)**: System architecture, design decisions, and component interactions
+- **[Development Guide](./development.md)**: Build system, coding standards, and development workflows
+- **[Agent Guide](./agent-guide.md)**: Navigation strategies and development protocols for agents
+- **[Language Features](./language-features.md)**: Supported and unsupported language features
+- **[Glossary](./glossary.md)**: Project-specific terminology
 
-### 🔧 Technical Guides
-- [Build System](./technical/build-system.md) - CMake configuration and build processes
-- [Testing Methodology](./technical/testing-methodology.md) - Testing strategies and frameworks
-- [Performance Guidelines](./technical/performance-guidelines.md) - Performance considerations and optimizations
+## Getting Started
 
-### 📖 Reference Materials
-- [API Reference](./reference/api-reference.md) - Detailed API documentation
-- [Glossary](./reference/glossary.md) - Project-specific terminology
-- [FAQ](./reference/faq.md) - Frequently asked questions
+```bash
+# Clone and configure
+git clone <repository-url>
+cd RCompiler
+mkdir build && cd build
+cmake --preset ninja-debug ..
 
-### 📋 Source Code Documentation
-- [Source Code Guide](./source/) - Detailed documentation of all source files
-- [Test Documentation](./tests/) - Documentation of test suites and scenarios
-
-## Navigation Guide
-
-### For New Contributors
-If you're new to this project, start with:
-1. [Project Overview](./project-overview.md) - Understand the project goals
-2. [Architecture Guide](./architecture/architecture-guide.md) - Learn the system structure
-3. [Development Workflow](./development/development-workflow.md) - Understand how to work with the codebase
-4. [Code Conventions](./development/code-conventions.md) - Learn coding standards
-
-### For Specific Tasks
-- **Adding new language features**: [Architecture Guide](./architecture/architecture-guide.md) → [Language Features](./architecture/language-features.md)
-- **Fixing bugs**: [Testing Methodology](./technical/testing-methodology.md) → [Debugging Guide](./technical/debugging-guide.md)
-- **Performance improvements**: [Performance Guidelines](./technical/performance-guidelines.md)
-- **Documentation updates**: [Documentation Standards](./development/documentation-standards.md)
-
-## Cross-Reference System
-
-This documentation uses a comprehensive cross-referencing system:
-- 🔗 Internal links connect related concepts across documents
-- 📁 File path references point to specific source files
-- 🏷️ Tag references link to related components and concepts
-
-## Search and Discovery
-
-- Use the [Glossary](./reference/glossary.md) to understand project-specific terminology
-- Check the [FAQ](./reference/faq.md) for common questions
-- Use the [API Reference](./reference/api-reference.md) for detailed component documentation
-
-## Contributing to Documentation
-
-When making changes to the codebase:
-1. Update relevant documentation sections
-2. Add new entries to the [Glossary](./reference/glossary.md) for new terminology
-3. Update the [API Reference](./reference/api-reference.md) for new components
-4. Follow the [Documentation Standards](./development/documentation-standards.md)
-
-## Document Maintenance
-
-This documentation system is designed to be:
-- **Modular**: Each section can be updated independently
-- **Searchable**: Comprehensive tagging and cross-referencing
-- **Accessible**: Clear explanations for varying familiarity levels
-- **Maintainable**: Clear standards for updates and contributions
-
-## Project Structure
-
-```
-RCompiler/
-├── src/                    # Source code
-│   ├── ast/               # Abstract Syntax Tree
-│   ├── lexer/             # Lexical analysis
-│   ├── parser/            # Syntax analysis
-│   ├── semantic/          # Semantic analysis
-│   └── utils/             # Utilities
-├── test/                  # Test suites
-├── lib/                   # Internal libraries
-├── docs/                  # Documentation
-├── scripts/               # Build and utility scripts
-└── RCompiler-Spec/        # Language specification
+# Build and test
+cmake --build .
+ctest --test-dir .
 ```
 
-## Getting Help
+## Key Concepts
 
-For questions about this documentation system:
-1. Check the [FAQ](./reference/faq.md)
-2. Review the [Glossary](./reference/glossary.md)
-3. Consult relevant architecture documentation
-4. Check the [Source Code Guide](./source/) for implementation details
+- **AST**: Syntactic representation using variant-based nodes
+- **HIR**: Semantic representation progressively refined through passes
+- **Pass Invariants**: Conditions guaranteed true after each analysis pass
+- **Demand-Driven Resolution**: Resolving types/constants only when needed
+
+## Related Documentation
+
+- [Semantic Passes](./semantic/passes/README.md) - Complete semantic analysis pipeline
+- [Component Reference](./component-cross-reference.md) - Detailed component documentation

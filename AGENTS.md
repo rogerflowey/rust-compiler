@@ -1,112 +1,70 @@
-# RCompiler Project Guide
+# RCompiler Agent Guide
 
-This document provides essential information about the RCompiler project structure, components, and development guidelines.
+**⚠️ IMPORTANT**: Always refer to the documentation system when uncertain. This guide provides entry points, but detailed information is maintained in the documentation system.
 
-## Project Overview
+## Quick Start
 
-RCompiler is a modern C++ compiler implementation that follows a multi-pass architecture for semantic analysis and code generation. The project uses C++23 features and modern development practices.
+We are currently working on the Semantic pass, expr check part.
+- Design: [`expr_check.md`](src/semantic/pass/semantic_check/expr_check.md)
+- Overview: [Semantic Pass Overview](docs/semantic/passes/README.md)
 
-## Project Structure
+## Semantic Pass Architecture
 
-```
-RCompiler/
-├── docs/                   # Documentation system
-├── src/                    # Source code
-│   ├── ast/               # Abstract Syntax Tree
-│   ├── lexer/             # Lexical analysis
-│   ├── parser/            # Syntax analysis
-│   ├── semantic/          # Semantic analysis
-│   └── utils/             # Utilities
-├── test/                  # Test suites
-├── lib/                   # Internal libraries
-├── scripts/               # Build and utility scripts
-└── .kilocode/rules/       # Agent protocols and rules
-```
+The semantic passes create a skeletal HIR from parsed AST, and fulfill it to a fully resolved HIR through passes (transformations on the HIR) by in-place transformations. Each pass ensures something(called "invariants") to later pass.
 
-## Key Components
+### Core Dependencies
+- **HIR**: High-level Intermediate Representation ([`src/semantic/hir/`](src/semantic/hir/)) | [docs](docs/semantic/hir/README.md)
+- **Type**: Type system ([`src/semantic/type/`](src/semantic/type/)) | [docs](docs/semantic/type/README.md)
+- **Symbol**: Symbol table management ([`src/semantic/symbol/`](src/semantic/symbol/)) | [docs](docs/semantic/symbol/scope.md)
 
-### Frontend Components
-- **Lexer** ([`src/lexer/`](src/lexer/)): Tokenizes source code
-- **Parser** ([`src/parser/`](src/parser/)): Builds AST using parsecpp library
-- **AST** ([`src/ast/`](src/ast/)): Syntactic representation
 
-### Semantic Analysis
-- **HIR Converter** ([`src/semantic/hir/converter.cpp`](src/semantic/hir/converter.cpp)): AST to HIR transformation
-- **Name Resolution** ([`src/semantic/pass/name_resolution/`](src/semantic/pass/name_resolution/)): Symbol resolution
-- **Type & Const Finalization** ([`src/semantic/pass/type&const/`](src/semantic/pass/type&const/)): Type resolution
-- **Semantic Checking** ([`src/semantic/pass/semantic_check/`](src/semantic/pass/semantic_check/)): Validation
-
-### Core Infrastructure
-- **Type System** ([`src/semantic/type/`](src/semantic/type/)): Type representation and operations
-- **Symbol Management** ([`src/semantic/symbol/`](src/semantic/symbol/)): Scope and symbol handling
-- **Error Handling** ([`utils/error.hpp`](utils/error.hpp)): Diagnostic system
-
-## Build System
-
-The project uses CMake with presets:
-
+### Frequent Command
+- **Build** 
 ```bash
-# Configure and build
+cd /home/rogerw/project/compiler
 cmake --preset ninja-debug
 cmake --build build/ninja-debug
-
-# Run tests
-ctest --test-dir build/ninja-debug
-
-# Run specific test
-./build/ninja-debug/test_lexer
 ```
+- **Test**
+```bash
+#first build
+cd /home/rogerw/project/compiler
+cmake --preset ninja-debug
+cmake --build build/ninja-debug
+#run test
+ctest --test-dir build --verbose
+```
+\=
 
-## Development Guidelines
+## Quick Navigation
 
-### Code Standards
-- Follow [Code Conventions](docs/development/code-conventions.md) strictly
-- Use C++23 features where appropriate
-- Ensure all code compiles without warnings
-- Write clear, readable code with appropriate comments
+### For Semantic Pass Development
+1. [Semantic Passes Overview](docs/semantic/passes/README.md) - Pass contracts and invariants
+2. [Architecture Guide](docs/architecture.md) - System architecture
+3. [Development Guide](docs/development.md) - Code conventions
+4. [Specific Pass Documentation](docs/semantic/passes/) - Implementation details
 
+### For Current Work (Expression Checking)
+1. [Expression Check Design](src/semantic/pass/semantic_check/expr_check.md) - Current implementation
+2. [Expression Info](src/semantic/pass/semantic_check/expr_info.hpp) - Data structures
+3. [Type System](docs/semantic/type/README.md) - Type operations
+4. [Semantic Checking Overview](docs/semantic/passes/semantic-checking.md) - Context
 
-### Documentation Standards
-- Keep documentation accurate and up-to-date
-- Use clear, accessible language
-- Include working examples
-- Maintain consistent structure and formatting
+## Documentation System
 
-## Essential Documentation
+**For complete information, refer to the documentation system starting at [docs/README.md](docs/README.md).**
 
-- [Project Overview](docs/project-overview.md): Detailed project goals and scope
-- [Architecture Guide](docs/architecture/architecture-guide.md): System architecture and design
-- [Code Conventions](docs/development/code-conventions.md): Coding standards and patterns
-- [Development Workflow](docs/development/development-workflow.md): Step-by-step development process
-- [Testing Methodology](docs/technical/testing-methodology.md): Testing strategies and frameworks
+### Key Documentation Paths
+- **Project Overview**: [docs/project-overview.md](docs/project-overview.md)
+- **Architecture**: [docs/architecture.md](docs/architecture.md)
+- **Development**: [docs/development.md](docs/development.md)
+- **Agent Protocols**: [docs/agent-guide.md](docs/agent-guide.md)
+- **Component Reference**: [docs/component-cross-reference.md](docs/component-cross-reference.md)
 
-## Language Specification
-
-The language specification is maintained in the [`RCompiler-Spec/`](RCompiler-Spec/) directory. When implementing new features, always reference the relevant specification sections.
-
-## Common Development Tasks
-
-### Implementing a New Language Feature
-
-1. **Analysis Phase**
-   - Read language specification in [`RCompiler-Spec/`](RCompiler-Spec/)
-   - Examine existing similar features
-   - Understand impact on all components
-
-2. **Implementation Phase**
-   - Extend AST ([`src/ast/`](src/ast/))
-   - Update parser ([`src/parser/`](src/parser/))
-   - Extend HIR ([`src/semantic/hir/`](src/semantic/hir/))
-   - Update semantic passes ([`src/semantic/pass/`](src/semantic/pass/))
-
-3. **Testing Phase**
-   - Add parser tests ([`test/parser/`](test/parser/))
-   - Add semantic tests ([`test/semantic/`](test/semantic/))
-   - Add integration tests
-
-4. **Documentation Phase**
-   - Update relevant documentation
-   - Add examples
-   - Update API reference
-
-For the most current information, always check the documentation system starting at [docs/README.md](docs/README.md).
+### Semantic Pass Documentation
+- **Overview**: [docs/semantic/passes/README.md](docs/semantic/passes/README.md)
+- **HIR Converter**: [docs/semantic/passes/hir-converter.md](docs/semantic/passes/hir-converter.md)
+- **Name Resolution**: [docs/semantic/passes/name-resolution.md](docs/semantic/passes/name-resolution.md)
+- **Type Resolution**: [docs/semantic/passes/type-resolution.md](docs/semantic/passes/type-resolution.md)
+- **Semantic Checking**: [docs/semantic/passes/semantic-checking.md](docs/semantic/passes/semantic-checking.md)
+- **Control Flow Linking**: [docs/semantic/passes/control-flow-linking.md](docs/semantic/passes/control-flow-linking.md)

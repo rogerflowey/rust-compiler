@@ -214,7 +214,13 @@ public:
 
 	void visit(ConstDef& constant) {
 		visit_optional_type_annotation(constant.type);
-		derived().visit_expr(constant.value);
+		std::visit([&](auto& state) {
+			using State = std::decay_t<decltype(state)>;
+			if constexpr (std::is_same_v<State, ConstDef::Unresolved>) {
+				derived().visit_expr(state.value);
+			}
+			// Resolved state doesn't need visiting as it contains a ConstVariant
+		}, constant.value_state);
 	}
 	void visit(Trait& trait) {
 		for (auto& item : trait.items) {

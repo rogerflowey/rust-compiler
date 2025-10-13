@@ -160,13 +160,19 @@ struct ExprVisitor {
         if (!expr.def) {
             throw std::logic_error("Const definition is null");
         }
-        if (expr.def->const_value) {
-            return *expr.def->const_value;
+        
+        if (auto* resolved = std::get_if<hir::ConstDef::Resolved>(&expr.def->value_state)) {
+            return resolved->const_value;
         }
-        if (!expr.def->value) {
-            throw std::logic_error("Const definition has no value");
+        
+        if (auto* unresolved = std::get_if<hir::ConstDef::Unresolved>(&expr.def->value_state)) {
+            if (!unresolved->value) {
+                throw std::logic_error("Const definition has no value");
+            }
+            return evaluator.evaluate(*unresolved->value);
         }
-        return evaluator.evaluate(*expr.def->value);
+        
+        throw std::logic_error("Const definition is in invalid state");
     }
 
     ConstVariant operator()(const hir::StructConst &) const {

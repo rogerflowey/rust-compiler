@@ -79,12 +79,18 @@ public:
 			TypeId type_id = type_resolver.resolve(*constant.type);
 			constant.type = hir::TypeAnnotation(type_id);
 		}
-		if (!constant.value) {
-			throw std::logic_error("Const definition missing initializer");
+		
+		// Handle the unresolved state
+		if (auto* unresolved = std::get_if<hir::ConstDef::Unresolved>(&constant.value_state)) {
+			if (!unresolved->value) {
+				throw std::logic_error("Const definition missing initializer");
+			}
+			derived().visit_expr(*unresolved->value);
+			// Fold the initializer expression into a compile-time constant value.
+			auto const_value = const_evaluator.evaluate(*unresolved->value);
+			// Transition to resolved state
+			constant.value_state = hir::ConstDef::Resolved{ .const_value = const_value };
 		}
-		hir::HirVisitorBase<TypeConstResolver>::visit(constant);
-		// Fold the initializer expression into a compile-time constant value.
-		constant.const_value = const_evaluator.evaluate(*constant.value);
 	}
 
 	void visit(hir::LetStmt &stmt) {

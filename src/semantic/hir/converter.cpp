@@ -155,23 +155,50 @@ struct ExprConverter {
         };
     }
     hir::ExprVariant operator()(const ast::LoopExpr& loop) const {
-        return hir::Loop{ .body = std::make_unique<hir::Block>(converter.convert_block(*loop.body)), .ast_node = &loop };
+        // Convert the body first without context
+        auto hir_body = converter.convert_block(*loop.body);
+        
+        // Create the loop node
+        hir::Loop hir_loop{
+            .body = std::make_unique<hir::Block>(std::move(hir_body)),
+            .ast_node = &loop
+        };
+        
+        return hir_loop;
     }
     hir::ExprVariant operator()(const ast::WhileExpr& whle) const {
-        return hir::While{
-            .condition = converter.convert_expr(*whle.condition),
-            .body = std::make_unique<hir::Block>(converter.convert_block(*whle.body)),
+        // Convert the condition and body first without context
+        auto hir_condition = converter.convert_expr(*whle.condition);
+        auto hir_body = converter.convert_block(*whle.body);
+        
+        // Create the while loop node
+        hir::While hir_while{
+            .condition = std::move(hir_condition),
+            .body = std::make_unique<hir::Block>(std::move(hir_body)),
             .ast_node = &whle
         };
+        
+        return hir_while;
     }
     hir::ExprVariant operator()(const ast::ReturnExpr& ret) const {
-        return hir::Return{ .value = ret.value ? std::optional(converter.convert_expr(**ret.value)) : std::nullopt, .ast_node = &ret };
+        return hir::Return{
+            .value = ret.value ? std::optional(converter.convert_expr(**ret.value)) : std::nullopt,
+            .target = std::nullopt, // Will be set during post-processing
+            .ast_node = &ret
+        };
     }
     hir::ExprVariant operator()(const ast::BreakExpr& brk) const {
-        return hir::Break{ .value = brk.value ? std::optional(converter.convert_expr(**brk.value)) : std::nullopt, .ast_node = &brk };
+        return hir::Break{
+            .value = brk.value ? std::optional(converter.convert_expr(**brk.value)) : std::nullopt,
+            .target = std::nullopt, // Will be set during post-processing
+            .ast_node = &brk
+        };
     }
     hir::ExprVariant operator()(const ast::ContinueExpr& cont) const {
-        return hir::Continue{ .ast_node = &cont };
+        return hir::Continue{
+            .target = std::nullopt, // Will be set during post-processing
+            .ast_node = &cont
+        };
     }
 
     // --- Function Calls ---
@@ -237,6 +264,7 @@ struct ExprConverter {
         return hir::Cast{ .expr = converter.convert_expr(*cast.expr), .target_type = convert_type(converter, *cast.type), .ast_node = &cast };
     }
     hir::ExprVariant operator()(const ast::BlockExpr& block) const {
+        // Block conversion doesn't need control flow context changes
         return converter.convert_block(block);
     }
     hir::ExprVariant operator()(const ast::GroupedExpr& grouped) const {
@@ -331,7 +359,8 @@ struct StmtConverter {
         return hir_let_stmt;
     }
     hir::StmtVariant operator()(const ast::ExprStmt& expr_stmt) const {
-        return hir::ExprStmt { .expr = converter.convert_expr(*expr_stmt.expr), .ast_node = &expr_stmt };
+        auto hir_expr = converter.convert_expr(*expr_stmt.expr);
+        return hir::ExprStmt { .expr = std::move(hir_expr), .ast_node = &expr_stmt };
     }
     hir::StmtVariant operator()(const ast::ItemStmt&) const {
         // Item statements are handled by hoisting them into the block's item list.
@@ -362,13 +391,20 @@ struct ItemConverter {
             params.push_back(std::move(pattern));
         }
 
-        return hir::Function{
+        hir::Function hir_function{
             .params = std::move(params),
             .return_type = fn.return_type ? std::optional(convert_type(converter, **fn.return_type)) : std::nullopt,
-            .body = fn.body ? std::make_unique<hir::Block>(converter.convert_block(**fn.body)) : nullptr,
+            .body = nullptr, // Will be set after conversion
             .locals = {}, // Initialized empty
             .ast_node = &fn
         };
+        
+        // Convert the body
+        if (fn.body) {
+            hir_function.body = std::make_unique<hir::Block>(converter.convert_block(**fn.body));
+        }
+        
+        return hir_function;
     }
     hir::ItemVariant operator()(const ast::StructItem& s) const {
         std::vector<semantic::Field> fields;
@@ -395,8 +431,9 @@ struct ItemConverter {
     hir::ItemVariant operator()(const ast::ConstItem& cnst) const {
         return hir::ConstDef{
             .type = cnst.type ? std::optional(convert_type(converter, *cnst.type)) : std::nullopt,
-            .value = converter.convert_expr(*cnst.value),
-            .const_value = std::nullopt,
+            .value_state = hir::ConstDef::Unresolved{
+                .value = converter.convert_expr(*cnst.value)
+            },
             .ast_node = &cnst
         };
     }
@@ -471,6 +508,9 @@ std::unique_ptr<hir::Program> AstToHirConverter::convert_program(const ast::Prog
     for (const auto& item : program) {
         hir_program->items.push_back(convert_item(*item));
     }
+    
+    
+    
     return hir_program;
 }
 
@@ -496,7 +536,6 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
             params.push_back(std::move(pattern));
         }
 
-        auto body = fn_item->body ? std::make_unique<hir::Block>(convert_block(**fn_item->body)) : nullptr;
         auto return_type = fn_item->return_type ? std::optional(detail::convert_type(*this, **fn_item->return_type)) : std::nullopt;
 
         if (fn_item->self_param) {
@@ -510,19 +549,31 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
                 .self_param = hir_self,
                 .params = std::move(params),
                 .return_type = std::move(return_type),
-                .body = std::move(body),
+                .body = nullptr, // Will be set after conversion
                 .locals = {},
                 .ast_node = fn_item
             };
+            
+            // Convert the body
+            if (fn_item->body) {
+                hir_method.body = std::make_unique<hir::Block>(convert_block(**fn_item->body));
+            }
+            
             return std::make_unique<hir::AssociatedItem>(std::move(hir_method));
         } else {
             hir::Function hir_fn{
                 .params = std::move(params),
                 .return_type = std::move(return_type),
-                .body = std::move(body),
+                .body = nullptr, // Will be set after conversion
                 .locals = {}, // Initialized empty
                 .ast_node = fn_item
             };
+            
+            // Convert the body
+            if (fn_item->body) {
+                hir_fn.body = std::make_unique<hir::Block>(convert_block(**fn_item->body));
+            }
+            
             return std::make_unique<hir::AssociatedItem>(std::move(hir_fn));
         }
     }
@@ -531,8 +582,9 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
     if (const auto* cnst_item = std::get_if<ast::ConstItem>(&item.value)) {
         hir::ConstDef hir_cnst{
             .type = cnst_item->type ? std::optional(detail::convert_type(*this, *cnst_item->type)) : std::nullopt,
-            .value = convert_expr(*cnst_item->value),
-            .const_value = std::nullopt,
+            .value_state = hir::ConstDef::Unresolved{
+                .value = convert_expr(*cnst_item->value)
+            },
             .ast_node = cnst_item
         };
         return std::make_unique<hir::AssociatedItem>(std::move(hir_cnst));
@@ -572,7 +624,10 @@ hir::Block AstToHirConverter::convert_block(const ast::BlockExpr& block) {
     }
 
     if (block.final_expr) {
-        hir_block.final_expr = convert_expr(**block.final_expr);
+        // Handle final expressions
+        if (auto final_expr = convert_expr(**block.final_expr)) {
+            hir_block.final_expr = std::move(final_expr);
+        }
     }
 
     return hir_block;
@@ -583,3 +638,4 @@ std::unique_ptr<hir::Expr> AstToHirConverter::convert_expr(const ast::Expr& expr
     hir::ExprVariant hir_variant = std::visit(visitor, expr.value);
     return std::make_unique<hir::Expr>(std::move(hir_variant));
 }
+
