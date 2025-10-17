@@ -570,6 +570,6 @@ Tests validate proper input stream handling:
 
 - [Test Suite Overview](../README.md)
 - [Lexer Documentation](../../lexer/README.md)
-- [Lexer Header Documentation](../../lexer/lexer.hpp.md)
+- [Lexer Header Documentation](../../lexer/lexer.md)
 - [Error Handling Documentation](../../utils/error.hpp.md)
 - [Google Test Documentation](https://google.github.io/googletest/)

@@ -1,10 +1,10 @@
 # Stream Header Reference
 
-## File: [`src/lexer/stream.hpp`](../../../src/lexer/stream.hpp)
+## File: [`src/lexer/stream.hpp`](../../src/lexer/stream.hpp)
 
 ## Core Types
 
-### [`Position`](../../../src/lexer/stream.hpp:7)
+### [`Position`](../../src/lexer/stream.hpp:7)
 
 ```cpp
 struct Position {
@@ -20,7 +20,7 @@ Provides precise location information for error reporting. Line/column tracking 
 
 ## PositionedStream Class
 
-### [`PositionedStream`](../../../src/lexer/stream.hpp:18)
+### [`PositionedStream`](../../src/lexer/stream.hpp:18)
 
 Position-aware input stream wrapper with lookahead capabilities.
 
@@ -67,5 +67,5 @@ Used by lexer for tokenization with precise position tracking for error reportin
 
 ## See Also
 
-- [Lexer Documentation](lexer.hpp.md)
+- [Lexer Documentation]../../src/lexer/lexer.hpp
 - [Error Handling](../utils/error.hpp.md)

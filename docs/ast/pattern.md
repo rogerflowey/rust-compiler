@@ -1,6 +1,6 @@
 # AST Pattern Documentation
 
-## File: [`src/ast/pattern.hpp`](../../../src/ast/pattern.hpp)
+## File: [`src/ast/pattern.hpp`](../../src/ast/pattern.hpp)
 
 ### Dependencies
 
@@ -12,7 +12,7 @@
 
 ### Literal Patterns
 
-#### [`LiteralPattern`](../../../src/ast/pattern.hpp:6)
+#### [`LiteralPattern`](../../src/ast/pattern.hpp:6)
 
 ```cpp
 struct LiteralPattern {
@@ -30,7 +30,7 @@ struct LiteralPattern {
 
 ### Identifier Patterns
 
-#### [`IdentifierPattern`](../../../src/ast/pattern.hpp:11)
+#### [`IdentifierPattern`](../../src/ast/pattern.hpp:11)
 
 ```cpp
 struct IdentifierPattern {
@@ -49,7 +49,7 @@ struct IdentifierPattern {
 
 ### Reference Patterns
 
-#### [`ReferencePattern`](../../../src/ast/pattern.hpp:19)
+#### [`ReferencePattern`](../../src/ast/pattern.hpp:19)
 
 ```cpp
 struct ReferencePattern {
@@ -67,7 +67,7 @@ struct ReferencePattern {
 
 ### Path Patterns
 
-#### [`PathPattern`](../../../src/ast/pattern.hpp:24)
+#### [`PathPattern`](../../src/ast/pattern.hpp:24)
 
 ```cpp
 struct PathPattern {
@@ -84,7 +84,7 @@ struct PathPattern {
 
 ## Pattern System Integration
 
-### [`PatternVariant`](../../../src/ast/pattern.hpp:29)
+### [`PatternVariant`](../../src/ast/pattern.hpp:29)
 
 ```cpp
 using PatternVariant = std::variant<
@@ -98,7 +98,7 @@ using PatternVariant = std::variant<
 
 **Design Intent**: Type-safe representation of all pattern categories using `std::variant`, enabling efficient pattern matching and compile-time type checking.
 
-### [`Pattern`](../../../src/ast/pattern.hpp:38)
+### [`Pattern`](../../src/ast/pattern.hpp:38)
 
 ```cpp
 struct Pattern {
@@ -144,5 +144,5 @@ struct Pattern {
 - [AST Item Documentation](item.md)
 - [AST Statement Documentation](stmt.md)
 - [AST Type Documentation](type.md)
-- [Pattern Matching Documentation](../semantic/pattern/README.md)
-- [Type Checker Documentation](../semantic/pass/type&const/README.md)
+- [Pattern Matching Documentation](../semantic/passes/semantic-checking.md)
+- [Type Checker Documentation](../semantic/passes/type-resolution.md)

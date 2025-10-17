@@ -1,6 +1,6 @@
 # AST Expression Documentation
 
-## File: [`src/ast/expr.hpp`](../../../src/ast/expr.hpp)
+## File: [`src/ast/expr.hpp`](../../src/ast/expr.hpp)
 
 ### Dependencies
 
@@ -12,7 +12,7 @@
 
 ### Literal Expressions
 
-#### [`IntegerLiteralExpr`](../../../src/ast/expr.hpp:16)
+#### [`IntegerLiteralExpr`](../../src/ast/expr.hpp:16)
 
 ```cpp
 struct IntegerLiteralExpr {
@@ -24,7 +24,7 @@ struct IntegerLiteralExpr {
 
 **Design Intent**: Supports various integer types with explicit suffixes while allowing type inference when no suffix is provided.
 
-#### [`StringLiteralExpr`](../../../src/ast/expr.hpp:24)
+#### [`StringLiteralExpr`](../../src/ast/expr.hpp:24)
 
 ```cpp
 struct StringLiteralExpr { std::string value; bool is_cstyle = false; };
@@ -34,7 +34,7 @@ struct StringLiteralExpr { std::string value; bool is_cstyle = false; };
 
 ### Unary Operations
 
-#### [`UnaryExpr`](../../../src/ast/expr.hpp:30)
+#### [`UnaryExpr`](../../src/ast/expr.hpp:30)
 
 ```cpp
 struct UnaryExpr {
@@ -48,7 +48,7 @@ struct UnaryExpr {
 
 ### Binary Operations
 
-#### [`BinaryExpr`](../../../src/ast/expr.hpp:36)
+#### [`BinaryExpr`](../../src/ast/expr.hpp:36)
 
 ```cpp
 struct BinaryExpr {
@@ -60,7 +60,7 @@ struct BinaryExpr {
 
 **Precedence Handling**: Parser ensures proper precedence; AST stores the parsed structure.
 
-#### [`AssignExpr`](../../../src/ast/expr.hpp:42)
+#### [`AssignExpr`](../../src/ast/expr.hpp:42)
 
 ```cpp
 struct AssignExpr {
@@ -74,7 +74,7 @@ struct AssignExpr {
 
 ### Control Flow
 
-#### [`IfExpr`](../../../src/ast/expr.hpp:63)
+#### [`IfExpr`](../../src/ast/expr.hpp:63)
 
 ```cpp
 struct IfExpr {
@@ -88,7 +88,7 @@ struct IfExpr {
 - `then_branch`: Always a block expression
 - `else_branch`: Can be expression or block (optional)
 
-#### [`BlockExpr`](../../../src/ast/expr.hpp:7)
+#### [`BlockExpr`](../../src/ast/expr.hpp:7)
 
 ```cpp
 struct BlockExpr {
@@ -104,7 +104,7 @@ struct BlockExpr {
 
 ## Type System Integration
 
-### [`ExprVariant`](../../../src/ast/expr.hpp:75)
+### [`ExprVariant`](../../src/ast/expr.hpp:75)
 
 ```cpp
 using ExprVariant = std::variant<
@@ -118,7 +118,7 @@ using ExprVariant = std::variant<
 
 **Design Intent**: Uses `std::variant` for type-safe expression handling with zero overhead for accessing the concrete type.
 
-### [`Expr`](../../../src/ast/expr.hpp:84)
+### [`Expr`](../../src/ast/expr.hpp:84)
 
 ```cpp
 struct Expr {

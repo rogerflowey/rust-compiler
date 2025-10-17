@@ -63,7 +63,7 @@ cmake --preset ninja-debug ..
 
 # Build and test
 cmake --build .
-ctest --test-dir .
+ctest --test-dir ./ninja-debug
 ```
 
 ## Key Concepts

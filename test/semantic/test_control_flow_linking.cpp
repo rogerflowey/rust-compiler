@@ -19,14 +19,14 @@ TEST_F(ControlFlowLinkingTest, BasicFunctionWithReturn) {
     hir_func.ast_node = nullptr;
     
     // Create a return expression
-    auto return_expr = std::make_unique<hir::Expr>(hir::Return{
-        .value = std::make_unique<hir::Expr>(hir::Literal{
-            .value = true,
-            .ast_node = static_cast<const ast::BoolLiteralExpr*>(nullptr)
-        }),
-        .target = std::nullopt, // Initially not linked
-        .ast_node = nullptr
+    auto return_expr_inner = hir::Return();
+    return_expr_inner.value = std::make_unique<hir::Expr>(hir::Literal{
+        .value = true,
+        .ast_node = static_cast<const ast::BoolLiteralExpr*>(nullptr)
     });
+    return_expr_inner.target = std::nullopt; // Initially not linked
+    return_expr_inner.ast_node = nullptr;
+    auto return_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(return_expr_inner)});
     
     // Create an expression statement
     auto expr_stmt = std::make_unique<hir::Stmt>(hir::ExprStmt{
@@ -72,17 +72,17 @@ TEST_F(ControlFlowLinkingTest, BasicLoopWithBreakAndContinue) {
     hir_func.ast_node = nullptr;
     
     // Create break expression
-    auto break_expr = std::make_unique<hir::Expr>(hir::Break{
-        .value = std::nullopt,
-        .target = std::nullopt, // Initially not linked
-        .ast_node = nullptr
-    });
+    auto break_expr_inner = hir::Break();
+    break_expr_inner.value = std::nullopt;
+    break_expr_inner.target = std::nullopt; // Initially not linked
+    break_expr_inner.ast_node = nullptr;
+    auto break_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(break_expr_inner)});
     
     // Create continue expression
-    auto continue_expr = std::make_unique<hir::Expr>(hir::Continue{
-        .target = std::nullopt, // Initially not linked
-        .ast_node = nullptr
-    });
+    auto continue_expr_inner = hir::Continue();
+    continue_expr_inner.target = std::nullopt; // Initially not linked
+    continue_expr_inner.ast_node = nullptr;
+    auto continue_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(continue_expr_inner)});
     
     // Create expression statements
     auto break_stmt = std::make_unique<hir::Stmt>(hir::ExprStmt{

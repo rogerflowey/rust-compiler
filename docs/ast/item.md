@@ -1,6 +1,6 @@
 # AST Item Documentation
 
-## File: [`src/ast/item.hpp`](../../../src/ast/item.hpp)
+## File: [`src/ast/item.hpp`](../../src/ast/item.hpp)
 
 ### Dependencies
 
@@ -12,7 +12,7 @@
 
 ### Function Items
 
-#### [`FunctionItem`](../../../src/ast/item.hpp:8)
+#### [`FunctionItem`](../../src/ast/item.hpp:8)
 
 ```cpp
 struct FunctionItem {
@@ -41,7 +41,7 @@ struct FunctionItem {
 
 ### Type Definition Items
 
-#### [`StructItem`](../../../src/ast/item.hpp:24)
+#### [`StructItem`](../../src/ast/item.hpp:24)
 
 ```cpp
 struct StructItem {
@@ -57,7 +57,7 @@ struct StructItem {
 - Field types must be valid type expressions
 - Empty structs supported (no fields)
 
-#### [`EnumItem`](../../../src/ast/item.hpp:29)
+#### [`EnumItem`](../../src/ast/item.hpp:29)
 
 ```cpp
 struct EnumItem {
@@ -75,7 +75,7 @@ struct EnumItem {
 
 ### Implementation Items
 
-#### [`TraitImplItem`](../../../src/ast/item.hpp:45)
+#### [`TraitImplItem`](../../src/ast/item.hpp:45)
 
 ```cpp
 struct TraitImplItem {
@@ -92,7 +92,7 @@ struct TraitImplItem {
 - Type must be compatible with trait requirements
 - Generic parameters not yet supported
 
-#### [`InherentImplItem`](../../../src/ast/item.hpp:51)
+#### [`InherentImplItem`](../../src/ast/item.hpp:51)
 
 ```cpp
 struct InherentImplItem {
@@ -110,7 +110,7 @@ struct InherentImplItem {
 
 ## Type System Integration
 
-### [`ItemVariant`](../../../src/ast/item.hpp:57)
+### [`ItemVariant`](../../src/ast/item.hpp:57)
 
 ```cpp
 using ItemVariant = std::variant<
@@ -126,7 +126,7 @@ using ItemVariant = std::variant<
 
 **Design Intent**: Type-safe representation of all possible item types using `std::variant`, enabling efficient pattern matching and compile-time type checking.
 
-### [`Item`](../../../src/ast/item.hpp:68)
+### [`Item`](../../src/ast/item.hpp:68)
 
 ```cpp
 struct Item {
@@ -151,4 +151,4 @@ struct Item {
 - [AST Type Documentation](type.md)
 - [AST Pattern Documentation](pattern.md)
 - [Parser Documentation](../parser/README.md)
-- [Name Resolution Documentation](../semantic/pass/name_resolution/README.md)
+- [Name Resolution Documentation](../semantic/passes/semantic-checking.md)

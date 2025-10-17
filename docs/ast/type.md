@@ -1,6 +1,6 @@
 # AST Type Documentation
 
-## File: [`src/ast/type.hpp`](../../../src/ast/type.hpp)
+## File: [`src/ast/type.hpp`](../../src/ast/type.hpp)
 
 ### Dependencies
 
@@ -12,7 +12,7 @@
 
 ### Path Types
 
-#### [`PathType`](../../../src/ast/type.hpp:6)
+#### [`PathType`](../../src/ast/type.hpp:6)
 
 ```cpp
 struct PathType {
@@ -29,7 +29,7 @@ struct PathType {
 
 ### Primitive Types
 
-#### [`PrimitiveType`](../../../src/ast/type.hpp:10)
+#### [`PrimitiveType`](../../src/ast/type.hpp:10)
 
 ```cpp
 struct PrimitiveType {
@@ -42,7 +42,7 @@ struct PrimitiveType {
 
 ### Composite Types
 
-#### [`ArrayType`](../../../src/ast/type.hpp:15)
+#### [`ArrayType`](../../src/ast/type.hpp:15)
 
 ```cpp
 struct ArrayType {
@@ -58,7 +58,7 @@ struct ArrayType {
 - Size must be non-negative integer
 - Element type can be any valid type
 
-#### [`ReferenceType`](../../../src/ast/type.hpp:20)
+#### [`ReferenceType`](../../src/ast/type.hpp:20)
 
 ```cpp
 struct ReferenceType {
@@ -76,7 +76,7 @@ struct ReferenceType {
 
 ### Special Types
 
-#### [`UnitType`](../../../src/ast/type.hpp:25)
+#### [`UnitType`](../../src/ast/type.hpp:25)
 
 ```cpp
 struct UnitType {};
@@ -86,7 +86,7 @@ struct UnitType {};
 
 ## Type System Integration
 
-### [`TypeVariant`](../../../src/ast/type.hpp:27)
+### [`TypeVariant`](../../src/ast/type.hpp:27)
 
 ```cpp
 using TypeVariant = std::variant<
@@ -100,7 +100,7 @@ using TypeVariant = std::variant<
 
 **Design Intent**: Type-safe representation of all type categories using `std::variant`, enabling efficient pattern matching and compile-time type checking.
 
-### [`Type`](../../../src/ast/type.hpp:35)
+### [`Type`](../../src/ast/type.hpp:35)
 
 ```cpp
 struct Type {
@@ -144,5 +144,5 @@ The type system defines compatibility rules for:
 - [AST Item Documentation](item.md)
 - [AST Statement Documentation](stmt.md)
 - [AST Pattern Documentation](pattern.md)
-- [Type System Documentation](../semantic/type/README.md)
+- [Type System Documentation](../semantic/type/type_system.md)
 - [Type Checker Documentation](../semantic/pass/type&const/README.md)

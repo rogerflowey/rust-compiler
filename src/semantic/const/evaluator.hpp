@@ -30,7 +30,11 @@ struct LiteralVisitor {
         case Type::I32:
         case Type::ISIZE:
         case Type::NOT_SPECIFIED:
-            return IntConst{static_cast<int32_t>(signed_value)};
+            if(lit.is_negative){
+                return IntConst{static_cast<int32_t>(signed_value)};
+            } else {
+                return UintConst{static_cast<uint32_t>(signed_value)};
+            }
         }
         throw std::logic_error("Unsupported integer literal suffix");
     }
@@ -157,22 +161,21 @@ struct ExprVisitor {
     }
 
     ConstVariant operator()(const hir::ConstUse &expr) const {
-        if (!expr.def) {
-            throw std::logic_error("Const definition is null");
-        }
-        
-        if (auto* resolved = std::get_if<hir::ConstDef::Resolved>(&expr.def->value_state)) {
-            return resolved->const_value;
-        }
-        
-        if (auto* unresolved = std::get_if<hir::ConstDef::Unresolved>(&expr.def->value_state)) {
-            if (!unresolved->value) {
-                throw std::logic_error("Const definition has no value");
-            }
-            return evaluator.evaluate(*unresolved->value);
-        }
-        
-        throw std::logic_error("Const definition is in invalid state");
+    	if (!expr.def) {
+    		throw std::logic_error("Const definition is null");
+    	}
+    	
+    	// If const already has evaluated value, use it
+    	if (expr.def->const_value) {
+    		return *expr.def->const_value;
+    	}
+    	
+    	// Otherwise evaluate the expression (should already be done by type resolution)
+    	if (expr.def->expr) {
+    		return evaluator.evaluate(*expr.def->expr);
+    	}
+    	
+    	throw std::logic_error("Const definition has no expression or value");
     }
 
     ConstVariant operator()(const hir::StructConst &) const {

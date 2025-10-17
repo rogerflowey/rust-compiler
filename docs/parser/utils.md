@@ -1,10 +1,10 @@
 # Parser Utilities
 
-## File: [`src/parser/utils.hpp`](../../../src/parser/utils.hpp)
+## File: [`src/parser/utils.hpp`](../../src/parser/utils.hpp)
 
 ## Utility Functions
 
-### [`equal()`](../../../src/parser/utils.hpp:7)
+### [`equal()`](../../src/parser/utils.hpp:7)
 
 Creates a parser that matches a specific token exactly.
 
@@ -65,6 +65,6 @@ auto with_context = equal(T_LBRACE).expected("{ at start of block");
 
 ## See Also
 
-- [Parser Common Types](common.hpp.md)
-- [Parser Registry](parser_registry.hpp.md)
+- [Parser Common Types]../../src/parser/common.hpp
+- [Parser Registry]../../src/parser/parser_registry.hpp
 - [Parsecpp Library](../../../lib/parsecpp/README.md)

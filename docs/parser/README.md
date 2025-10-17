@@ -132,9 +132,9 @@ Modular design enables complex features (generics, macros) without architectural
 - **[Type Parser](type_parse.md)**: Type annotation parsing
 
 ## Related Documentation
-- [Parser Registry](parser_registry.hpp.md)
-- [Parser Types](common.hpp.md)
-- [Parser Utils](utils.hpp.md)
+- [Parser Registry]../../src/parser/parser_registry.hpp
+- [Parser Types]../../src/parser/common.hpp
+- [Parser Utils]../../src/parser/utils.hpp
 - [Main Parser Header](parser.hpp.md)
 - [Parsecpp Integration](../../../lib/parsecpp/README.md)
 - [AST Construction](../ast/README.md)

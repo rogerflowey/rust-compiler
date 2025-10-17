@@ -21,7 +21,7 @@ cmake --preset ninja-debug ..
 
 # Build and test
 cmake --build .
-ctest --test-dir .
+ctest --test-dir ./ninja-debug
 ```
 
 ## Development Workflow
@@ -249,16 +249,16 @@ cmake --build .
 ### Running Tests
 ```bash
 # Run all tests
-ctest --test-dir build
+ctest --test-dir build/ninja-debug
 
 # Verbose output
-ctest --test-dir build --verbose
+ctest --test-dir build/ninja-debug --verbose
 
 # Specific test suite
-ctest --test-dir build -R "test_parser"
+ctest --test-dir build/ninja-debug -R "test_parser"
 
 # Parallel execution
-ctest --test-dir build --parallel 4
+ctest --test-dir build/ninja-debug --parallel 4
 ```
 
 ### Test Structure
@@ -350,7 +350,7 @@ TEST(TypeCheckerTest, InfersIntegerLiteralType);
 # Clean build test
 cmake --preset ninja-debug ..
 cmake --build .
-ctest --test-dir .
+ctest --test-dir ./ninja-debug
 ```
 
 ## Component-Specific Development Protocols

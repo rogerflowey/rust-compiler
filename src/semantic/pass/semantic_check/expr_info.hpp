@@ -124,17 +124,7 @@ struct ExprInfo {
     TypeId type; // the type of the expr
     bool is_mut; // mutability of the expr
     bool is_place;
-    EndpointSet endpoints; // Set of possible exit points from this expression
-    
-    // Convenience constructor for simple expressions
-    ExprInfo(TypeId t, bool mut = false, bool place = false) 
-        : type(t), is_mut(mut), is_place(place) {
-        endpoints.insert(NormalEndpoint{});
-    }
-    
-    // Constructor with custom endpoints
-    ExprInfo(TypeId t, bool mut, bool place, const EndpointSet& eps)
-        : type(t), is_mut(mut), is_place(place), endpoints(eps) {}
+    EndpointSet endpoints = {NormalEndpoint{}}; // Set of possible exit points from this expression
     
     // Check if expression can complete normally
     bool has_normal_endpoint() const {
@@ -146,5 +136,52 @@ struct ExprInfo {
         return !has_normal_endpoint();
     }
 };
+
+// ===== Endpoint Merging Helper Functions =====
+
+/**
+ * @brief Merges endpoints from multiple ExprInfo objects
+ * @param endpoints The target endpoint set to merge into
+ * @param info Source ExprInfo to merge endpoints from
+ *
+ * Convenience function that merges all endpoints from an ExprInfo
+ * into the provided endpoint set. Used when combining results from
+ * multiple sub-expressions (e.g., binary operations, if expressions).
+ */
+inline void merge_endpoints(EndpointSet& endpoints, const ExprInfo& info) {
+    endpoints.insert(info.endpoints.begin(), info.endpoints.end());
+}
+
+/**
+ * @brief Merges endpoints from two ExprInfo objects into a new set
+ * @param info1 First ExprInfo
+ * @param info2 Second ExprInfo
+ * @return New EndpointSet containing endpoints from both ExprInfos
+ *
+ * Convenience function that creates a new endpoint set containing
+ * the union of endpoints from two ExprInfo objects. Used when creating
+ * new ExprInfo objects that combine multiple sub-expressions.
+ */
+inline EndpointSet merge_endpoints(const ExprInfo& info1, const ExprInfo& info2) {
+    EndpointSet result = info1.endpoints;
+    result.insert(info2.endpoints.begin(), info2.endpoints.end());
+    return result;
+}
+
+/**
+ * @brief Merges endpoints from multiple ExprInfo objects into a new set
+ * @param infos Vector of ExprInfo objects to merge
+ * @return New EndpointSet containing endpoints from all ExprInfos
+ *
+ * Convenience function for merging endpoints from multiple ExprInfo objects.
+ * Used when combining results from many sub-expressions (e.g., struct literals).
+ */
+inline EndpointSet merge_endpoints(const std::vector<ExprInfo>& infos) {
+    EndpointSet result;
+    for (const auto& info : infos) {
+        result.insert(info.endpoints.begin(), info.endpoints.end());
+    }
+    return result;
+}
 
 }

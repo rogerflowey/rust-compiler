@@ -2,7 +2,7 @@
 
 ## Overview
 
-[`src/semantic/const/const.hpp`](../../src/semantic/const/const.hpp) defines POD structures for compile-time constant values.
+[`src/semantic/const/const.hpp`](../../../src/semantic/const/const.hpp) defines POD structures for compile-time constant values.
 
 ## Core Types
 

@@ -36,13 +36,13 @@ public:
     return inserted;
   }
 
-  using SymbolDef = hir::helper::NamedItemPtr;
+  using SymbolDef = std::variant<hir::Local*, hir::ConstDef*, hir::Function*, hir::Method*, hir::StructDef*, hir::EnumDef*, hir::Trait*>;
 
   bool define(const ast::Identifier &name, SymbolDef def) {
     struct DefineVisitor {
       Scope *self;
       const ast::Identifier &name;
-      bool operator()(hir::BindingDef *def) const {
+      bool operator()(hir::Local *def) const {
         self->define_binding(name, def);
         return true;
       }
@@ -50,6 +50,9 @@ public:
         return self->define_item(name, def);
       }
       bool operator()(hir::Function *def) const {
+        return self->define_item(name, def);
+      }
+      bool operator()(hir::Method *def) const {
         return self->define_item(name, def);
       }
       bool operator()(hir::StructDef *def) const {

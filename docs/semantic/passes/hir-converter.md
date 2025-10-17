@@ -203,5 +203,5 @@ Supports gradual type resolution: unresolved expressions transition to resolved 
 
 - [Semantic Passes Overview](README.md): Complete pipeline overview
 - [Name Resolution](name-resolution.md): Next pass in pipeline
-- [HIR Documentation](../hir/README.md): HIR design principles
+- [HIR Documentation](../hir/hir.md): HIR design principles
 - [AST Documentation](../../ast/README.md): AST structure details

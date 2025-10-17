@@ -1,10 +1,10 @@
 # Lexer Header Reference
 
-## File: [`src/lexer/lexer.hpp`](../../../src/lexer/lexer.hpp)
+## File: [`src/lexer/lexer.hpp`](../../src/lexer/lexer.hpp)
 
 ## Core Types
 
-### [`TokenType`](../../../src/lexer/lexer.hpp:13)
+### [`TokenType`](../../src/lexer/lexer.hpp:13)
 
 ```cpp
 enum TokenType {
@@ -16,7 +16,7 @@ enum TokenType {
 
 Separate `TOKEN_STRING` and `TOKEN_CSTRING` types enable semantic analysis to handle different string semantics without re-parsing.
 
-### [`Token`](../../../src/lexer/lexer.hpp:27)
+### [`Token`](../../src/lexer/lexer.hpp:27)
 
 ```cpp
 struct Token {
@@ -31,7 +31,7 @@ Lightweight structure preserving original source text for error reporting. Posit
 
 ## Lexer Class
 
-### [`Lexer`](../../../src/lexer/lexer.hpp:42)
+### [`Lexer`](../../src/lexer/lexer.hpp:42)
 
 Main lexical analyzer implementing single-pass tokenization.
 
@@ -44,16 +44,16 @@ const std::vector<Position> &getTokenPositions() const;
 ```
 
 - `tokenize()`: O(n) time, O(m) space where m = number of tokens
-- Throws [`LexerError`](../../../src/utils/error.hpp:6) on invalid input
+- Throws [`LexerError`](../../src/utils/error.hpp:6) on invalid input
 
 #### Private Methods
 
 Token parsing functions:
-- [`parseIdentifierOrKeyword()`](../../../src/lexer/lexer.hpp:69)
-- [`parseNumber()`](../../../src/lexer/lexer.hpp:70): Handles underscores and type suffixes
-- [`parseOperator()`](../../../src/lexer/lexer.hpp:71): Implements maximal munch
-- [`parseString()`](../../../src/lexer/lexer.hpp:75): Processes escape sequences
-- [`parseChar()`](../../../src/lexer/lexer.hpp:76)
+- [`parseIdentifierOrKeyword()`](../../src/lexer/lexer.hpp:69)
+- [`parseNumber()`](../../src/lexer/lexer.hpp:70): Handles underscores and type suffixes
+- [`parseOperator()`](../../src/lexer/lexer.hpp:71): Implements maximal munch
+- [`parseString()`](../../src/lexer/lexer.hpp:75): Processes escape sequences
+- [`parseChar()`](../../src/lexer/lexer.hpp:76)
 
 ## Implementation Details
 
@@ -80,10 +80,10 @@ Fail-fast strategy with immediate error detection and precise location reporting
 
 ## Dependencies
 
-- [`PositionedStream`](stream.hpp) for position tracking
+- [`PositionedStream`]../../src/lexer/stream.hpp for position tracking
 - [`LexerError`](../utils/error.hpp:6) for structured errors
 
 ## See Also
 
-- [Stream Documentation](stream.hpp.md)
+- [Stream Documentation]../../src/lexer/stream.hpp
 - [Error Handling](../utils/error.hpp.md)

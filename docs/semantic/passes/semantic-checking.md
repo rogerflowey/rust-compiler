@@ -49,6 +49,7 @@ Each expression annotated with `ExprInfo` containing:
 2. **Mutability Rules**: Const correctness and mutability constraints
 3. **Control Flow**: Divergence analysis and termination validation
 4. **Safety Checks**: Memory safety and runtime guarantees
+5. **Const Type Validation**: Ensuring const expressions match their declared types
 
 ## Variant Transformations
 
@@ -125,6 +126,7 @@ hir::BinaryOp{
 - ✅ Type coercion for primitive types
 - ✅ Expression checker framework with caching
 - ✅ Expression info structure
+- ✅ Const type checking with expression preservation
 
 #### In Progress
 - 🔄 Basic expression type validation
@@ -181,5 +183,6 @@ inline const ExprInfo& get_expr_info(const hir::Expr& expr) {
 - [Semantic Passes Overview](README.md): Complete pipeline overview
 - [Type & Const Finalization](type-resolution.md): Previous pass in pipeline
 - [Control Flow Linking](control-flow-linking.md): Next pass in pipeline
-- [Type System](../type/README.md): Type system implementation
-- [Expression Check Design](../../src/semantic/pass/semantic_check/expr_check.md): Current implementation
+- [Type System](../type/type_system.md): Type system implementation
+- [Expression Check Design](../../../src/semantic/pass/semantic_check/expr_check.md): Current implementation
+- [Const Type Checking](const-type-checking.md): Detailed const type validation implementation

@@ -132,4 +132,4 @@ The identifier hash strategy provides:
 
 - [AST Architecture](./README.md) - Variant-based node design
 - [Parser Construction](../parser/README.md) - Type construction patterns
-- [Symbol Resolution](../semantic/symbol/README.md) - Usage in semantic analysis
+- [Symbol Resolution](../semantic/symbol/scope.md) - Usage in semantic analysis

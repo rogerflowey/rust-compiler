@@ -2,21 +2,21 @@
 
 ## Overview
 
-[`src/ast/visitor/visitor_base.hpp`](../../src/ast/visitor/visitor_base.hpp) defines a generic, recursive AST visitor base class using the Curiously Recurring Template Pattern (CRTP).
+[`src/ast/visitor/visitor_base.hpp`](../../../src/ast/visitor/visitor_base.hpp) defines a generic, recursive AST visitor base class using the Curiously Recurring Template Pattern (CRTP).
 
 ## Template Class
 
 ### AstVisitor
 
-[`AstVisitor`](../../src/ast/visitor/visitor_base.hpp:22) is a CRTP-based visitor template:
+[`AstVisitor`](../../../src/ast/visitor/visitor_base.hpp:22) is a CRTP-based visitor template:
 
 #### Template Parameters
 - `Derived`: The derived visitor class
 - `T`: The return type of visit methods (use `void` for stateful visitors)
 
 #### CRTP Helpers
-- [`derived()`](../../src/ast/visitor/visitor_base.hpp:26): Returns reference to derived instance
-- [`base()`](../../src/ast/visitor/visitor_base.hpp:29): Returns reference to base instance
+- [`derived()`](../../../src/ast/visitor/visitor_base.hpp:26): Returns reference to derived instance
+- [`base()`](../../../src/ast/visitor/visitor_base.hpp:29): Returns reference to base instance
 
 ## Public Interface
 
@@ -24,12 +24,12 @@
 
 #### Required Children (Ptr&)
 Methods that assume non-null pointers:
-- [`visit_item()`](../../src/ast/visitor/visitor_base.hpp:40): Visit ItemPtr
-- [`visit_expr()`](../../src/ast/visitor/visitor_base.hpp:43): Visit ExprPtr
-- [`visit_stmt()`](../../src/ast/visitor/visitor_base.hpp:46): Visit StmtPtr
-- [`visit_pattern()`](../../src/ast/visitor/visitor_base.hpp:49): Visit PatternPtr
-- [`visit_type()`](../../src/ast/visitor/visitor_base.hpp:52): Visit TypePtr
-- [`visit_block()`](../../src/ast/visitor/visitor_base.hpp:55): Visit BlockExprPtr
+- [`visit_item()`](../../../src/ast/visitor/visitor_base.hpp:40): Visit ItemPtr
+- [`visit_expr()`](../../../src/ast/visitor/visitor_base.hpp:43): Visit ExprPtr
+- [`visit_stmt()`](../../../src/ast/visitor/visitor_base.hpp:46): Visit StmtPtr
+- [`visit_pattern()`](../../../src/ast/visitor/visitor_base.hpp:49): Visit PatternPtr
+- [`visit_type()`](../../../src/ast/visitor/visitor_base.hpp:52): Visit TypePtr
+- [`visit_block()`](../../../src/ast/visitor/visitor_base.hpp:55): Visit BlockExprPtr
 
 #### Optional Children (std::optional<Ptr>&)
 Methods using SFINAE to handle optional pointers:

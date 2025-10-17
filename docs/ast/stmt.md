@@ -1,6 +1,6 @@
 # AST Statement Documentation
 
-## File: [`src/ast/stmt.hpp`](../../../src/ast/stmt.hpp)
+## File: [`src/ast/stmt.hpp`](../../src/ast/stmt.hpp)
 
 ### Dependencies
 
@@ -12,7 +12,7 @@
 
 ### Variable Declarations
 
-#### [`LetStmt`](../../../src/ast/stmt.hpp:6)
+#### [`LetStmt`](../../src/ast/stmt.hpp:6)
 
 ```cpp
 struct LetStmt {
@@ -31,7 +31,7 @@ struct LetStmt {
 
 ### Expression Statements
 
-#### [`ExprStmt`](../../../src/ast/stmt.hpp:12)
+#### [`ExprStmt`](../../src/ast/stmt.hpp:12)
 
 ```cpp
 struct ExprStmt {
@@ -47,7 +47,7 @@ struct ExprStmt {
 
 ### Item Statements
 
-#### [`ItemStmt`](../../../src/ast/stmt.hpp:18)
+#### [`ItemStmt`](../../src/ast/stmt.hpp:18)
 
 ```cpp
 struct ItemStmt {
@@ -64,7 +64,7 @@ struct ItemStmt {
 
 ## Type System Integration
 
-### [`StmtVariant`](../../../src/ast/stmt.hpp:23)
+### [`StmtVariant`](../../src/ast/stmt.hpp:23)
 
 ```cpp
 using StmtVariant = std::variant<
@@ -77,7 +77,7 @@ using StmtVariant = std::variant<
 
 **Design Intent**: Type-safe representation of all statement types using `std::variant`, enabling efficient pattern matching and compile-time type checking.
 
-### [`Statement`](../../../src/ast/stmt.hpp:31)
+### [`Statement`](../../src/ast/stmt.hpp:31)
 
 ```cpp
 struct Statement {
@@ -129,4 +129,4 @@ Statements interact with control flow structures:
 - [AST Type Documentation](type.md)
 - [AST Pattern Documentation](pattern.md)
 - [Parser Documentation](../parser/README.md)
-- [Semantic Analysis Documentation](../semantic/README.md)
+- [Semantic Analysis Documentation](../semantic/passes/semantic-checking.md)

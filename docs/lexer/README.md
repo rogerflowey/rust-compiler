@@ -85,7 +85,7 @@ Separate vectors enable organized parser access while maintaining clear data str
 
 - **[`Lexer`](lexer.hpp:42)**: Main tokenization orchestrator
 - **[`Token`](lexer.hpp:27)**: Lightweight token representation
-- **[`PositionedStream`](stream.hpp)**: Position-tracked input wrapper
+- **[`PositionedStream`]../../src/lexer/stream.hpp**: Position-tracked input wrapper
 
 ## Related Documentation
 - [Token Definitions](lexer.md)

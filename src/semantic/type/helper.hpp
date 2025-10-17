@@ -52,12 +52,19 @@ inline TypeId get_referenced_type(TypeId ref_type) {
  * @brief Check if a type is numeric
  */
 inline bool is_numeric_type(TypeId type) {
-    if (auto prim = std::get_if<PrimitiveKind>(&type->value)) {
-        return *prim == PrimitiveKind::I32 || *prim == PrimitiveKind::U32 || 
-               *prim == PrimitiveKind::ISIZE || *prim == PrimitiveKind::USIZE ||
-               *prim == PrimitiveKind::__ANYINT__ || *prim == PrimitiveKind::__ANYUINT__;
+    auto prim = std::get_if<PrimitiveKind>(&type->value);
+    if(!prim) return false;
+    switch (*prim) {
+        case PrimitiveKind::I32:
+        case PrimitiveKind::ISIZE:
+        case PrimitiveKind::U32:
+        case PrimitiveKind::USIZE:
+        case PrimitiveKind::__ANYINT__:
+        case PrimitiveKind::__ANYUINT__:
+            return true;
+        default:
+            return false;
     }
-    return false;
 }
 
 /**
@@ -88,20 +95,46 @@ inline TypeId get_element_type(TypeId array_type) {
 }
 
 /**
- * @brief Check if types are compatible for assignment
+ * @brief Check if a type is a mutable reference
  */
-inline bool is_assignable(TypeId target_type, TypeId source_type) {
-    return target_type == source_type; // Simplified for now
+inline bool is_mutable_reference(TypeId type) {
+    if (auto ref = std::get_if<ReferenceType>(&type->value)) {
+        return ref->is_mutable;
+    }
+    return false;
 }
 
 /**
- * @brief Find common type for binary operations
+ * @brief Get the mutability of a reference type
  */
-inline std::optional<TypeId> find_common_type(TypeId left_type, TypeId right_type) {
-    if (left_type == right_type) {
-        return left_type;
+inline bool get_reference_mutability(TypeId ref_type) {
+    if (auto ref = std::get_if<ReferenceType>(&ref_type->value)) {
+        return ref->is_mutable;
     }
-    return std::nullopt; // Simplified for now
+    throw std::logic_error("Not a reference type");
+}
+
+/**
+ * @brief Create a reference type
+ */
+inline TypeId create_reference_type(TypeId referenced_type, bool is_mutable) {
+    return get_typeID(Type{ReferenceType{
+        .referenced_type = referenced_type,
+        .is_mutable = is_mutable
+    }});
+}
+
+/**
+ * @brief Extract the base type from a reference type (handles nested references)
+ * @param type The type to extract base type from
+ * @return The base type (non-reference type)
+ */
+inline TypeId get_base_type(TypeId type) {
+    TypeId current = type;
+    while (auto ref = std::get_if<ReferenceType>(&current->value)) {
+        current = ref->referenced_type;
+    }
+    return current;
 }
 
 } // namespace type_helper

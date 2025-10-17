@@ -95,10 +95,19 @@ struct UnitType {
 
 // --- HIR Local Variable Abstraction ---
 struct Local {
-    ast::Identifier name;
+    ast::Identifier name; // not really neccesary
     bool is_mutable;
     std::optional<TypeAnnotation> type_annotation;
-    const ast::IdentifierPattern* def_site = nullptr;
+    const ast::IdentifierPattern* def_site = nullptr;// not too
+    
+    // Disable copy to prevent dangling pointers
+    Local(const Local&) = delete;
+    Local& operator=(const Local&) = delete;
+    Local(Local&&) noexcept = default;
+    Local& operator=(Local&&) noexcept = default;
+    Local() = default;
+    Local(ast::Identifier name_, bool is_mutable_, std::optional<TypeAnnotation> type_annotation_, const ast::IdentifierPattern* def_site_)
+        : name(std::move(name_)), is_mutable(is_mutable_), type_annotation(std::move(type_annotation_)), def_site(def_site_) {}
 };
 
 
@@ -111,37 +120,53 @@ struct BindingDef {
     };
     std::variant<Unresolved,Local*> local;
     const ast::IdentifierPattern* ast_node = nullptr;
-    std::optional<TypeAnnotation> type_annotation;
+    
+    // Disable copy to prevent dangling pointers
+    BindingDef(const BindingDef&) = delete;
+    BindingDef& operator=(const BindingDef&) = delete;
+    BindingDef(BindingDef&&) noexcept = default;
+    BindingDef& operator=(BindingDef&&) noexcept = default;
+    BindingDef() = default;
+    BindingDef(BindingDef::Unresolved&& unresolved, const ast::IdentifierPattern* ast_node_)
+        : local(std::move(unresolved)), ast_node(ast_node_) {}
 };
 
-struct WildCardPattern {
-    const ast::WildcardPattern* ast_node = nullptr;
+struct ReferencePattern {
+    std::unique_ptr<Pattern> subpattern;
+    bool is_mutable;
+    const ast::ReferencePattern* ast_node = nullptr;
 };
 
-using PatternVariant = std::variant<BindingDef, WildCardPattern>;
+using PatternVariant = std::variant<BindingDef, ReferencePattern>;
 struct Pattern {
     PatternVariant value;
     Pattern(PatternVariant&& val)
         : value(std::move(val)) {}
+    
+    // Disable copy to prevent dangling pointers
+    Pattern(const Pattern&) = delete;
+    Pattern& operator=(const Pattern&) = delete;
+    Pattern(Pattern&&) noexcept = default;
+    Pattern& operator=(Pattern&&) noexcept = default;
 };
 
 // --- HIR Expression Variants ---
 
 struct Literal {
     struct Integer {
-        uint64_t value;
-        ast::IntegerLiteralExpr::Type suffix_type;
+        uint64_t value = 0;
+        ast::IntegerLiteralExpr::Type suffix_type = ast::IntegerLiteralExpr::NOT_SPECIFIED;
         bool is_negative = false;
     };
     struct String {
-        std::string value;
-        bool is_cstyle;
+        std::string value{};
+        bool is_cstyle = false;
     };
     using Value = std::variant<
         Integer,
-        bool,  
-        char,  
-        String 
+        bool,
+        char,
+        String
     >;
 
     Value value;
@@ -164,22 +189,48 @@ struct UnresolvedIdentifier {
 struct Variable {
     Local* local_id;
     const ast::PathExpr* ast_node = nullptr;
+    
+    // Disable copy to prevent dangling pointers
+    Variable(const Variable&) = delete;
+    Variable& operator=(const Variable&) = delete;
+    Variable(Variable&&) noexcept = default;
+    Variable& operator=(Variable&&) noexcept = default;
+    Variable() = default;
+    Variable(Local* local_id_, const ast::PathExpr* ast_node_)
+        : local_id(local_id_), ast_node(ast_node_) {}
 };
 
 // NEW: A resolved reference to a constant.
 struct ConstUse {
     const hir::ConstDef* def = nullptr;
     const ast::PathExpr* ast_node = nullptr;
+    
+    // Disable copy to prevent dangling pointers
+    ConstUse(const ConstUse&) = delete;
+    ConstUse& operator=(const ConstUse&) = delete;
+    ConstUse(ConstUse&&) noexcept = default;
+    ConstUse& operator=(ConstUse&&) noexcept = default;
+    ConstUse() = default;
+    ConstUse(const hir::ConstDef* def_, const ast::PathExpr* ast_node_)
+        : def(def_), ast_node(ast_node_) {}
 };
 
 // NEW: A resolved reference to a function.
 struct FuncUse {
     const hir::Function* def = nullptr;
     const ast::PathExpr* ast_node = nullptr;
+    
+    // Disable copy to prevent dangling pointers
+    FuncUse(const FuncUse&) = delete;
+    FuncUse& operator=(const FuncUse&) = delete;
+    FuncUse(FuncUse&&) noexcept = default;
+    FuncUse& operator=(FuncUse&&) noexcept = default;
+    FuncUse() = default;
+    FuncUse(const hir::Function* def_, const ast::PathExpr* ast_node_)
+        : def(def_), ast_node(ast_node_) {}
 };
 
 // Represents a path with two segments, like `MyType::something`.
-// Will be resolved into a more specific node like `StructStatic` during name resolution.
 struct TypeStatic {
     std::variant<ast::Identifier, TypeDef> type; // The first segment of the path, e.g., `MyType`
     ast::Identifier name;
@@ -214,16 +265,29 @@ struct StructLiteral {
 struct StructConst {
     hir::StructDef* struct_def = nullptr;
     hir::ConstDef* assoc_const = nullptr;
-};
-
-struct StructStatic {
-    hir::StructDef* struct_def = nullptr;
-    hir::Function* assoc_fn = nullptr;
+    
+    // Disable copy to prevent dangling pointers
+    StructConst(const StructConst&) = delete;
+    StructConst& operator=(const StructConst&) = delete;
+    StructConst(StructConst&&) noexcept = default;
+    StructConst& operator=(StructConst&&) noexcept = default;
+    StructConst() = default;
+    StructConst(hir::StructDef* struct_def_, hir::ConstDef* assoc_const_)
+        : struct_def(struct_def_), assoc_const(assoc_const_) {}
 };
 
 struct EnumVariant {
     hir::EnumDef* enum_def = nullptr;
     size_t variant_index;
+    
+    // Disable copy to prevent dangling pointers
+    EnumVariant(const EnumVariant&) = delete;
+    EnumVariant& operator=(const EnumVariant&) = delete;
+    EnumVariant(EnumVariant&&) noexcept = default;
+    EnumVariant& operator=(EnumVariant&&) noexcept = default;
+    EnumVariant() = default;
+    EnumVariant(hir::EnumDef* enum_def_, size_t variant_index_)
+        : enum_def(enum_def_), variant_index(variant_index_) {}
 };
 
 struct ArrayLiteral {
@@ -293,12 +357,14 @@ struct If {
 
 struct Loop {
     std::unique_ptr<Block> body;
+    std::optional<semantic::TypeId> break_type = std::nullopt;
     const ast::LoopExpr* ast_node = nullptr;
 };
 
 struct While {
     std::unique_ptr<Expr> condition;
     std::unique_ptr<Block> body;
+    std::optional<semantic::TypeId> break_type = std::nullopt;
     const ast::WhileExpr* ast_node = nullptr;
 };
 
@@ -340,7 +406,7 @@ using ExprVariant = std::variant<
     Variable,
     ConstUse,
     FuncUse,
-    StructConst, StructStatic, EnumVariant
+    StructConst, EnumVariant
 >;
 
 
@@ -354,6 +420,10 @@ struct Expr {
     ~Expr();
     Expr(Expr&&) noexcept;
     Expr& operator=(Expr&&) noexcept;
+    
+    // Disable copy to prevent dangling pointers
+    Expr(const Expr&) = delete;
+    Expr& operator=(const Expr&) = delete;
 };
 
 struct LetStmt {
@@ -383,10 +453,30 @@ struct Stmt {
 
 struct Function {
     std::vector<std::unique_ptr<Pattern>> params;// Changed
+    std::vector<std::optional<TypeAnnotation>> param_type_annotations; // NEW: Parameter type annotations
     std::optional<TypeAnnotation> return_type;
     std::unique_ptr<Block> body;
     std::vector<std::unique_ptr<Local>> locals; // NEW: Owning list of all locals
     const ast::FunctionItem* ast_node = nullptr;
+    
+    // Disable copy to prevent dangling pointers
+    Function(const Function&) = delete;
+    Function& operator=(const Function&) = delete;
+    Function(Function&&) noexcept = default;
+    Function& operator=(Function&&) noexcept = default;
+    Function() = default;
+    Function(std::vector<std::unique_ptr<Pattern>>&& params_,
+             std::vector<std::optional<TypeAnnotation>>&& param_type_annotations_,
+             std::optional<TypeAnnotation>&& return_type_,
+             std::unique_ptr<Block>&& body_,
+             std::vector<std::unique_ptr<Local>>&& locals_,
+             const ast::FunctionItem* ast_node_)
+        : params(std::move(params_)),
+          param_type_annotations(std::move(param_type_annotations_)),
+          return_type(std::move(return_type_)),
+          body(std::move(body_)),
+          locals(std::move(locals_)),
+          ast_node(ast_node_) {}
 };
 
 struct Method {
@@ -394,14 +484,44 @@ struct Method {
         bool is_reference;
         bool is_mutable;
         const ast::FunctionItem::SelfParam* ast_node = nullptr;
+        
+        // Disable copy to prevent dangling pointers
+        SelfParam(const SelfParam&) = delete;
+        SelfParam& operator=(const SelfParam&) = delete;
+        SelfParam(SelfParam&&) noexcept = default;
+        SelfParam& operator=(SelfParam&&) noexcept = default;
+        SelfParam() = default;
     };
     
     SelfParam self_param;
     std::vector<std::unique_ptr<Pattern>> params;// changed
+    std::vector<std::optional<TypeAnnotation>> param_type_annotations; // NEW: Parameter type annotations
     std::optional<TypeAnnotation> return_type;
     std::unique_ptr<Block> body;
+    std::unique_ptr<Local> self_local;
     std::vector<std::unique_ptr<Local>> locals;
     const ast::FunctionItem* ast_node = nullptr;
+    
+    // Disable copy to prevent dangling pointers
+    Method(const Method&) = delete;
+    Method& operator=(const Method&) = delete;
+    Method(Method&&) noexcept = default;
+    Method& operator=(Method&&) noexcept = default;
+    Method() = default;
+    Method(SelfParam&& self_param_,
+           std::vector<std::unique_ptr<Pattern>>&& params_,
+           std::vector<std::optional<TypeAnnotation>>&& param_type_annotations_,
+           std::optional<TypeAnnotation>&& return_type_,
+           std::unique_ptr<Block>&& body_,
+           const ast::FunctionItem* ast_node_)
+        : self_param(std::move(self_param_)),
+          params(std::move(params_)),
+          param_type_annotations(std::move(param_type_annotations_)),
+          return_type(std::move(return_type_)),
+          body(std::move(body_)),
+          self_local(nullptr),
+          locals(),
+          ast_node(ast_node_) {}
 };
 
 
@@ -409,6 +529,15 @@ struct StructDef {
     std::vector<semantic::Field> fields;
     std::vector<TypeAnnotation> field_type_annotations;
     const ast::StructItem* ast_node = nullptr;
+
+    std::optional<size_t> find_field(const ast::Identifier& name) const {
+        for (size_t i = 0; i < fields.size(); ++i) {
+            if (fields[i].name == name) {
+                return i;
+            }
+        }
+        return std::nullopt;
+    };
 };
 
 struct EnumDef {
@@ -417,16 +546,9 @@ struct EnumDef {
 };
 
 struct ConstDef {
-    struct Unresolved {
-        std::unique_ptr<Expr> value;
-    };
-    
-    struct Resolved {
-        semantic::ConstVariant const_value;
-    };
-    
+    std::unique_ptr<Expr> expr;
+    std::optional<semantic::ConstVariant> const_value; 
     std::optional<TypeAnnotation> type;
-    std::variant<Unresolved, Resolved> value_state;
     const ast::ConstItem* ast_node = nullptr;
 };
 
@@ -447,6 +569,21 @@ struct Impl {
     std::vector<std::unique_ptr<AssociatedItem>> items;
     using AstNode = std::variant<const ast::TraitImplItem*, const ast::InherentImplItem*>;
     AstNode ast_node;
+    
+    // Disable copy to prevent dangling pointers
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
+    Impl(Impl&&) noexcept = default;
+    Impl& operator=(Impl&&) noexcept = default;
+    Impl() = default;
+    Impl(std::optional<std::variant<ast::Identifier, const Trait*>>&& trait_,
+         TypeAnnotation&& for_type_,
+         std::vector<std::unique_ptr<AssociatedItem>>&& items_,
+         AstNode&& ast_node_)
+        : trait(std::move(trait_)),
+          for_type(std::move(for_type_)),
+          items(std::move(items_)),
+          ast_node(std::move(ast_node_)) {}
 };
 
 using ItemVariant = std::variant<Function, StructDef, EnumDef, ConstDef, Trait, Impl>;

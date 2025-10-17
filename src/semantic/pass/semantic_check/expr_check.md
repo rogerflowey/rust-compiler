@@ -67,8 +67,47 @@ Each expression evaluation produces:
 - Return: variable's type, variable's mutability, place, normal endpoint
 
 #### ConstUse (Resolved Constant)
-- Ensure constant is fully evaluated
-- Return: constant's type, non-mutable, non-place, normal endpoint
+- Basic validation: ensure constant definition is not null
+- Extract declared type from const definition
+- Perform type validation on const expression:
+  - Check the always-present original expression
+  - Validate expression type matches declared type using `is_assignable_to`
+  - Use existing type compatibility infrastructure for coercion
+  - Resolve inference placeholders if present
+- Return: constant's declared type, non-mutable, non-place, normal endpoint
+
+**Implementation Details**:
+```cpp
+ExprInfo ExprChecker::check(hir::ConstUse& expr) {
+    // Basic validation
+    if (!expr.def) {
+        throw std::logic_error("Const definition is null");
+    }
+    
+    // Get const's declared type
+    TypeId declared_type = hir::helper::get_resolved_type(*expr.def->type);
+    
+    // Perform type validation on const expression
+    if (expr.def->expr) {
+        // Check the original expression's type matches declared type
+        ExprInfo expr_info = check(*expr.def->expr);
+        
+        // Validate type compatibility using existing infrastructure
+        if (!is_assignable_to(expr_info.type, declared_type)) {
+            throw std::runtime_error("Const expression type doesn't match declared type");
+        }
+    } else {
+        throw std::logic_error("Const definition missing expression");
+    }
+    
+    return ExprInfo{
+        .type = declared_type,
+        .is_mut = false,
+        .is_place = false,
+        .endpoints = {NormalEndpoint{}}
+    };
+}
+```
 
 #### FuncUse (Resolved Function)
 - Functions are not first-class values
@@ -141,9 +180,8 @@ Each expression evaluation produces:
 
 #### MethodCall
 - Determine receiver type first
-- Resolve method in impl table
-- Apply auto-reference if method not found and receiver is not reference
-- Try `(&receiver).method()` then `(&mut receiver).method()` as needed
+- Resolve method in impl table, get the desired self type
+- Based on current receiver type, decide if/which auto-reference is needed
 - Return: method's return type, non-mutable, non-place, normal plus return endpoints
 
 #### If
@@ -222,18 +260,105 @@ Each expression evaluation produces:
 - Call expressions resolve directly from function definitions
 - No lambda/functor support
 
-## Dependencies
-
-- **Name Resolution**: Must complete before expression checking
-- **Type System**: Requires type comparison and compatibility operations
-- **Constant Evaluation**: Must be available for compile-time expressions
-- **Control Flow Linking**: Provides targets for break/continue/return
-
-## Error handle
-Currently, we **Don't Have** a sophisiticated error report&handling, nor will you need to consider extensible for it. That will be the task of next stage.
+## Error Handling
+Do **minimum** error handling, just make sure everything invalid will cause an error, but do not try to produce very detailed error messages
 
 
-## Files to create
+## TODO List
+
+### Critical Implementation Issues
+
+1. **Incomplete Function Implementations**
+   - All expression types are now fully implemented
+
+2. **Block Expression Implementation**
+   - [`Block::check()`](src/semantic/pass/semantic_check/expr_check.cpp:501) - Incomplete StatementVisitor implementation
+   - Missing LetStmt and ExprStmt visitor implementations
+   - No handling of block's final expression
+
+3. **Type Coercion Issues**
+   - [`StructLiteral::check()`](src/semantic/pass/semantic_check/expr_check.cpp:160) - Direct type comparison instead of coercion
+   - [`ArrayLiteral::check()`](src/semantic/pass/semantic_check/expr_check.cpp:184) - Direct type comparison instead of coercion
+   - [`BinaryOp::check()`](src/semantic/pass/semantic_check/expr_check.cpp:269) - Missing coercion for arithmetic operations
+   - [`BinaryOp::check()`](src/semantic/pass/semantic_check/expr_check.cpp:298) - Missing coercion for bitwise operations
+
+4. **Control Flow Issues**
+   - [`Break::check()`](src/semantic/pass/semantic_check/expr_check.cpp:428) - Uses uninitialized `value_info` when value is present
+   - [`Break::check()`](src/semantic/pass/semantic_check/expr_check.cpp:450) - Potentially uses uninitialized `value_info` for endpoints
+   - [`Return::check()`](src/semantic/pass/semantic_check/expr_check.cpp:472) - Missing endpoint collection from value expression
+
+5. **Auto-Dereference Implementation Issues**
+   - [`FieldAccess::check()`](src/semantic/pass/semantic_check/expr_check.cpp:101) - Checks base twice after transformation
+   - [`Index::check()`](src/semantic/pass/semantic_check/expr_check.cpp:127) - Checks base twice after transformation
+   - No proper error handling when field access/indexing fails after dereference
+
+6. **Assignment Type Checking**
+   - [`Assignment::check()`](src/semantic/pass/semantic_check/expr_check.cpp:322) - Missing type compatibility check
+
+7. **Cast Validation**
+   - [`Cast::check()`](src/semantic/pass/semantic_check/expr_check.cpp:336) - Missing cast validity check
+
+8. **Comparison Operations**
+   - [`BinaryOp::check()`](src/semantic/pass/semantic_check/expr_check.cpp:279) - Missing operand comparability check
+
+### Design Inconsistencies
+
+1. **Endpoint Handling**
+   - Inconsistent endpoint collection patterns across different expression types
+   - Some expressions merge endpoints from sub-expressions, others don't
+   - Missing endpoint handling in several control flow expressions
+
+2. **Type System Integration**
+   - Inconsistent use of type helpers across the implementation
+   - Some places directly compare types instead of using helper functions
+   - Missing integration with the coercion system
+
+3. **Error Handling**
+   - Mix of `std::logic_error` and `std::runtime_error` without clear distinction
+   - Missing error context information in many places
+
+## Future Work
+
+- Function param type validation
+- Auto-reference implementation for method calls
+
+## Change Log
+
+- 2025-10-13: Visitor Pattern Refactoring
+   - Refactored the `check()` method in `expr_check.cpp` to use the `Overloaded` helper instead of `if constexpr` chains
+   - Replaced the 55-line `if constexpr` chain (lines 36-90) with a cleaner `Overloaded` pattern using combined lambdas
+- 2025-10-13: TODO List Addition
+   - Added comprehensive TODO list identifying critical implementation issues, design inconsistencies, and performance considerations
+   - Categorized issues into: Critical Implementation Issues, Design Inconsistencies, and Performance Considerations
+- 2025-10-15: Const Type Checking Implementation
+   - Implemented const type validation in `ConstUse::check()` method
+   - Added type compatibility checking between const expressions and declared types
+   - Integrated with existing type coercion infrastructure
+   - Added support for inference placeholder resolution in const expressions
+- 2025-10-15: Const Expression Type Inference Fix
+   - Fixed missing inference type resolution in `ConstUse::check()` method
+   - Added proper handling of `__ANYINT__` and `__ANYUINT__` inference types
+   - Made const checking consistent with other expression type checking
+   - Fixed failing test `ConstUseWithCoercibleType`
+- 2025-10-15: Double Checking Issue Fix
+   - Fixed double checking issue in `FieldAccess::check()` and `Index::check()` methods
+   - Added comments to clarify that re-checking only happens after applying dereference transformation
+   - Improved efficiency by avoiding redundant checks when no transformation is needed
+- 2025-10-15: Error Handling Standardization
+   - Standardized error handling throughout the file according to style guide
+   - Changed `FuncUse::check()` to use `std::runtime_error` for user-facing error
+   - Ensured `std::logic_error` is used for internal errors that should never happen
+   - Ensured `std::runtime_error` is used for user-facing errors that should be reported to users
+- 2025-10-16: MethodCall Implementation Completion
+   - Implemented complete `MethodCall::check()` function with full method resolution
+   - Added auto-reference handling based on method's self parameter requirements
+   - Implemented argument type checking with proper type coercion
+   - Added endpoint merging from receiver and arguments
+   - Integrated with impl table for method lookup and resolution
+   - Full compliance with design specification for method call semantics
+
+
+## Files affected
 
 - [`expr_info.hpp`](expr_info.hpp): ExprInfo and endpoint implementation
 - [`expr_check.hpp`](expr_check.hpp): Main checker interface

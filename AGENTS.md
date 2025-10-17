@@ -32,7 +32,7 @@ cd /home/rogerw/project/compiler
 cmake --preset ninja-debug
 cmake --build build/ninja-debug
 #run test
-ctest --test-dir build --verbose
+ctest --test-dir build/ninja-debug --verbose
 ```
 \=
 

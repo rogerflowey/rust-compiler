@@ -79,5 +79,5 @@ struct Path {
 
 ## Related Documentation
 - [Parser Integration](../parser/README.md): AST construction patterns
-- [HIR Conversion](../semantic/hir/README.md): Transformation strategies
-- [Visitor Implementation](./visitor/visitor_base.hpp.md): Traversal patterns
+- [HIR Conversion](../semantic/hir/hir.md): Transformation strategies
+- [Visitor Implementation](./visitor/visitor_base.md): Traversal patterns

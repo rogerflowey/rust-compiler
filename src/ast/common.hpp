@@ -28,6 +28,7 @@ using BlockExprPtr = std::unique_ptr<BlockExpr>;
 
 struct Identifier {
     std::string name;
+    Identifier() = default;
     Identifier(std::string name) : name(std::move(name)) {};
     Identifier(const char* name) : name(name) {};
 

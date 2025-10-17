@@ -1,10 +1,10 @@
 # HIR (High-Level Intermediate Representation)
 
 ## Files
-- Header: [`src/semantic/hir/hir.hpp`](../../src/semantic/hir/hir.hpp)
-- Converter Header: [`src/semantic/hir/converter.hpp`](../../src/semantic/hir/converter.hpp)
-- Converter Implementation: [`src/semantic/hir/converter.cpp`](../../src/semantic/hir/converter.cpp)
-- Helper: [`src/semantic/hir/helper.hpp`](../../src/semantic/hir/helper.hpp)
+- Header: [`src/semantic/hir/hir.hpp`](../../../src/semantic/hir/hir.hpp)
+- Converter Header: [`src/semantic/hir/converter.hpp`](../../../src/semantic/hir/converter.hpp)
+- Converter Implementation: [`src/semantic/hir/converter.cpp`](../../../src/semantic/hir/converter.cpp)
+- Helper: [`src/semantic/hir/helper.hpp`](../../../src/semantic/hir/helper.hpp)
 
 ## Architecture
 
@@ -30,7 +30,7 @@ HIR bridges AST and lower-level compiler phases with semantically-rich, normaliz
 
 ### AST to HIR Converter Interface
 
-The [`AstToHirConverter`](../../src/semantic/hir/converter.hpp) class provides the main interface for transforming AST to HIR:
+The [`AstToHirConverter`](../../../src/semantic/hir/converter.hpp) class provides the main interface for transforming AST to HIR:
 
 ```cpp
 class AstToHirConverter {
@@ -55,7 +55,7 @@ private:
 
 ### HIR Node Definitions
 
-The [`hir.hpp`](../../src/semantic/hir/hir.hpp) file defines the complete HIR node hierarchy with semantically-rich representations.
+The [`hir.hpp`](../../../src/semantic/hir/hir.hpp) file defines the complete HIR node hierarchy with semantically-rich representations.
 
 #### Core Design Patterns
 
@@ -67,18 +67,18 @@ The [`hir.hpp`](../../src/semantic/hir/hir.hpp) file defines the complete HIR no
 
 ##### Expression Nodes
 - **Literals**: Primitive values with type information
-- **References**: [`Variable`](../../src/semantic/hir/hir.hpp:164), [`ConstUse`](../../src/semantic/hir/hir.hpp:170), [`FuncUse`](../../src/semantic/hir/hir.hpp:176), [`TypeStatic`](../../src/semantic/hir/hir.hpp:183)
-- **Operations**: [`UnaryOp`](../../src/semantic/hir/hir.hpp:252), [`BinaryOp`](../../src/semantic/hir/hir.hpp:259), [`Cast`](../../src/semantic/hir/hir.hpp:268), [`Assignment`](../../src/semantic/hir/hir.hpp:246)
-- **Calls**: [`Call`](../../src/semantic/hir/hir.hpp:275), [`MethodCall`](../../src/semantic/hir/hir.hpp:281)
-- **Data Structures**: [`StructLiteral`](../../src/semantic/hir/hir.hpp:199), [`ArrayLiteral`](../../src/semantic/hir/hir.hpp:229), [`Index`](../../src/semantic/hir/hir.hpp:240), [`FieldAccess`](../../src/semantic/hir/hir.hpp:193)
-- **Control Flow**: [`If`](../../src/semantic/hir/hir.hpp:287), [`Loop`](../../src/semantic/hir/hir.hpp:294), [`While`](../../src/semantic/hir/hir.hpp:299), [`Break`](../../src/semantic/hir/hir.hpp:305), [`Continue`](../../src/semantic/hir/hir.hpp:310), [`Return`](../../src/semantic/hir/hir.hpp:314)
-- **Blocks**: [`Block`](../../src/semantic/hir/hir.hpp:319) with items, statements, and optional value
+- **References**: [`Variable`](../../../src/semantic/hir/hir.hpp:164), [`ConstUse`](../../../src/semantic/hir/hir.hpp:170), [`FuncUse`](../../../src/semantic/hir/hir.hpp:176), [`TypeStatic`](../../../src/semantic/hir/hir.hpp:183)
+- **Operations**: [`UnaryOp`](../../../src/semantic/hir/hir.hpp:252), [`BinaryOp`](../../../src/semantic/hir/hir.hpp:259), [`Cast`](../../../src/semantic/hir/hir.hpp:268), [`Assignment`](../../../src/semantic/hir/hir.hpp:246)
+- **Calls**: [`Call`](../../../src/semantic/hir/hir.hpp:275), [`MethodCall`](../../../src/semantic/hir/hir.hpp:281)
+- **Data Structures**: [`StructLiteral`](../../../src/semantic/hir/hir.hpp:199), [`ArrayLiteral`](../../../src/semantic/hir/hir.hpp:229), [`Index`](../../../src/semantic/hir/hir.hpp:240), [`FieldAccess`](../../../src/semantic/hir/hir.hpp:193)
+- **Control Flow**: [`If`](../../../src/semantic/hir/hir.hpp:287), [`Loop`](../../../src/semantic/hir/hir.hpp:294), [`While`](../../../src/semantic/hir/hir.hpp:299), [`Break`](../../../src/semantic/hir/hir.hpp:305), [`Continue`](../../../src/semantic/hir/hir.hpp:310), [`Return`](../../../src/semantic/hir/hir.hpp:314)
+- **Blocks**: [`Block`](../../../src/semantic/hir/hir.hpp:319) with items, statements, and optional value
 
 ##### Item Nodes
-- **Functions**: [`Function`](../../src/semantic/hir/hir.hpp:382), [`Method`](../../src/semantic/hir/hir.hpp:393)
-- **Types**: [`StructDef`](../../src/semantic/hir/hir.hpp:405), [`EnumDef`](../../src/semantic/hir/hir.hpp:411)
-- **Constants**: [`ConstDef`](../../src/semantic/hir/hir.hpp:416)
-- **Traits**: [`Trait`](../../src/semantic/hir/hir.hpp:423), [`Impl`](../../src/semantic/hir/hir.hpp:434)
+- **Functions**: [`Function`](../../../src/semantic/hir/hir.hpp:382), [`Method`](../../../src/semantic/hir/hir.hpp:393)
+- **Types**: [`StructDef`](../../../src/semantic/hir/hir.hpp:405), [`EnumDef`](../../../src/semantic/hir/hir.hpp:411)
+- **Constants**: [`ConstDef`](../../../src/semantic/hir/hir.hpp:416)
+- **Traits**: [`Trait`](../../../src/semantic/hir/hir.hpp:423), [`Impl`](../../../src/semantic/hir/hir.hpp:434)
 
 ##### Pattern Nodes
 - **Local**: Canonical definition for local variables
@@ -86,7 +86,7 @@ The [`hir.hpp`](../../src/semantic/hir/hir.hpp) file defines the complete HIR no
 
 ### HIR Utility Functions
 
-The [`helper.hpp`](../../src/semantic/hir/helper.hpp) provides utilities for HIR item manipulation and name extraction.
+The [`helper.hpp`](../../../src/semantic/hir/helper.hpp) provides utilities for HIR item manipulation and name extraction.
 
 #### Core Types
 ```cpp
@@ -101,7 +101,7 @@ using NamedItemPtr = std::variant<Function*, StructDef*, EnumDef*, ConstDef*, Tr
 
 ### Converter Implementation
 
-The [`converter.cpp`](../../src/semantic/hir/converter.cpp) implements transformation from syntactic AST to semantic HIR using specialized converter classes.
+The [`converter.cpp`](../../../src/semantic/hir/converter.cpp) implements transformation from syntactic AST to semantic HIR using specialized converter classes.
 
 #### Converter Hierarchy
 - **Main Converter**: Orchestrates the conversion process

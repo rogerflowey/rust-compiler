@@ -1,6 +1,6 @@
 # Parser Common Types
 
-## File: [`src/parser/common.hpp`](../../../src/parser/common.hpp)
+## File: [`src/parser/common.hpp`](../../src/parser/common.hpp)
 
 ## Parser Type Aliases
 
@@ -17,7 +17,7 @@ Type-safe parser definitions for each AST node category. Input type is always `T
 
 ## Parser Registry
 
-### [`ParserRegistry`](../../../src/parser/common.hpp:22)
+### [`ParserRegistry`](../../src/parser/common.hpp:22)
 
 Central container for all finalized parser instances.
 
@@ -93,6 +93,6 @@ pratt_parser.infix(T_ASSIGN, precedence, parse_binary_right);
 
 ## See Also
 
-- [Parser Registry](parser_registry.hpp.md)
-- [Parser Utils](utils.hpp.md)
+- [Parser Registry]../../src/parser/parser_registry.hpp
+- [Parser Utils]../../src/parser/utils.hpp
 - [Parsecpp Library](../../../lib/parsecpp/README.md)

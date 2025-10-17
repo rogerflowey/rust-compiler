@@ -26,10 +26,11 @@ struct EnumDef;
 struct ConstDef;
 struct Trait;
 struct Impl;
+struct Local;
 struct LetStmt;
 struct ExprStmt;
 struct BindingDef;
-struct WildCardPattern;
+struct ReferencePattern;
 struct Literal;
 struct UnresolvedIdentifier;
 struct Variable;
@@ -40,7 +41,6 @@ struct Underscore;
 struct FieldAccess;
 struct StructLiteral;
 struct StructConst;
-struct StructStatic;
 struct EnumVariant;
 struct ArrayLiteral;
 struct ArrayRepeat;
@@ -190,14 +190,25 @@ public:
 	void visit(ReferenceType& ref_type) {
 		derived().visit_type_annotation(ref_type.referenced_type);
 	}
+	void visit(Local& local) {
+		visit_optional_type_annotation(local.type_annotation);
+	}
 
 	// Items
 	void visit(Function& function) {
 		for (auto& param : function.params) {
 			derived().visit_pattern(param);
 		}
+		for (auto& annotation : function.param_type_annotations) {
+			visit_optional_type_annotation(annotation);
+		}
 		visit_optional_type_annotation(function.return_type);
 		derived().visit_block(function.body);
+		for (auto& local : function.locals) {
+			if (local) {
+				derived().visit(*local);
+			}
+		}
 	}
 
 	void visit(Method& method) {
@@ -205,22 +216,33 @@ public:
 		for (auto& param : method.params) {
 			derived().visit_pattern(param);
 		}
+		for (auto& annotation : method.param_type_annotations) {
+			visit_optional_type_annotation(annotation);
+		}
 		visit_optional_type_annotation(method.return_type);
 		derived().visit_block(method.body);
+		if (method.self_local) {
+			derived().visit(*method.self_local);
+		}
+		for (auto& local : method.locals) {
+			if (local) {
+				derived().visit(*local);
+			}
+		}
 	}
 
-	void visit(StructDef&) {}
+	void visit(StructDef& struct_def) {
+		for (auto& annotation : struct_def.field_type_annotations) {
+			visit_type_annotation(annotation);
+		}
+	}
 	void visit(EnumDef&) {}
 
 	void visit(ConstDef& constant) {
 		visit_optional_type_annotation(constant.type);
-		std::visit([&](auto& state) {
-			using State = std::decay_t<decltype(state)>;
-			if constexpr (std::is_same_v<State, ConstDef::Unresolved>) {
-				derived().visit_expr(state.value);
-			}
-			// Resolved state doesn't need visiting as it contains a ConstVariant
-		}, constant.value_state);
+		if (constant.expr) {
+			derived().visit_expr(*constant.expr);
+		}
 	}
 	void visit(Trait& trait) {
 		for (auto& item : trait.items) {
@@ -251,7 +273,9 @@ public:
 
 	// Patterns
 	void visit(BindingDef&) {}
-	void visit(WildCardPattern&) {}
+	void visit(ReferencePattern& ref_pattern) {
+		derived().visit_pattern(ref_pattern.subpattern);
+	}
 
 	// Expressions
 	void visit(Literal&) {}
@@ -282,7 +306,6 @@ public:
 		);
 	}
 	void visit(StructConst&) {}
-	void visit(StructStatic&) {}
 	void visit(EnumVariant&) {}
 	void visit(ArrayLiteral& literal) {
 		for (auto& element : literal.elements) {

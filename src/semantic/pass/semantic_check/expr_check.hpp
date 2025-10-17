@@ -1,112 +1,77 @@
 #pragma once
 
 #include "expr_info.hpp"
-#include "semantic/type/type.hpp"
-#include "semantic/symbol/scope.hpp"
-#include "semantic/type/impl_table.hpp"
 #include "semantic/hir/hir.hpp"
-#include "utils/error.hpp"
-#include "ast/expr.hpp"
-#include <memory>
-#include <optional>
+#include "semantic/type/type.hpp"
+#include "semantic/utils.hpp"
+#include "type/impl_table.hpp"
 #include <stdexcept>
 
 namespace semantic {
 
-/**
- * @brief Exception class for semantic checking errors
- */
-class SemanticError : public std::runtime_error {
-public:
-    explicit SemanticError(const std::string& message) : std::runtime_error(message) {}
-};
-
-/**
- * @brief Main expression checker class
- * 
- * This class implements semantic checking for HIR expressions using a visitor pattern.
- * It traverses the expression tree top-down, computing ExprInfo for each node.
- * It handles type checking, mutability validation, place expressions, and control flow analysis.
- */
 class ExprChecker {
+    ImplTable& impl_table;
 public:
-    /**
-     * @brief Constructor for ExprChecker
-     *
-     * @param current_scope The current symbol scope for name resolution
-     * @param impl_table The implementation table for method resolution
-     * @param current_function The current function being checked (for return type validation)
-     * @param current_loop The current loop being checked (for break/continue targets)
-     */
-    ExprChecker(
-        Scope* current_scope,
-        const ImplTable* impl_table,
-        hir::Function* current_function = nullptr,
-        std::variant<hir::Loop*, hir::While*, std::monostate> current_loop = std::monostate{}
-    );
+    explicit ExprChecker(ImplTable& impl_table) : impl_table(impl_table) {}
 
-    /**
-     * @brief Main entry point for expression checking
-     * 
-     * @param expr The HIR expression to check
-     * @return ExprInfo containing type, mutability, place status, and control flow information
-     */
-    ExprInfo check(hir::Expr& expr);
-
-private:
-    // Dependencies
-    Scope* current_scope;
-    const ImplTable* impl_table;
-    hir::Function* current_function;
-    std::variant<hir::Loop*, hir::While*, std::monostate> current_loop;
-
-    // Visitor methods for each HIR expression type
+    // Main entry point for checking an expression
+    ExprInfo check(hir::Expr& expr){
+        if(expr.expr_info){
+            return *expr.expr_info;
+        }
+        auto info = std::visit([this](auto&& arg) { return this->check(arg); }, expr.value);
+        expr.expr_info = info;
+        return info;
+    };
     
+    // Visitor methods for each expression type
     // Literal expressions
-    ExprInfo check_literal(hir::Literal& literal);
-    ExprInfo visitIntegerLiteral(const hir::Literal::Integer& integer);
-    ExprInfo visitBooleanLiteral(bool boolean);
-    ExprInfo visitCharacterLiteral(char character);
-    ExprInfo visitStringLiteral(const hir::Literal::String& string);
-    ExprInfo check_variable(hir::Variable& variable);
-    ExprInfo check_const_use(hir::ConstUse& const_use);
-    ExprInfo check_func_use(hir::FuncUse& func_use);
-    ExprInfo check_type_static(hir::TypeStatic& type_static);
-    ExprInfo check_underscore(hir::Underscore& underscore);
+    ExprInfo check(hir::Literal& expr);
+    ExprInfo check(hir::UnresolvedIdentifier& expr){
+        (void)expr; // Suppress unused parameter warning
+        throw std::logic_error("UnresolvedIdentifier should be resolved");
+    };
+    ExprInfo check(hir::Underscore& expr);
+    
+    // Reference expressions
+    ExprInfo check(hir::Variable& expr);
+    ExprInfo check(hir::ConstUse& expr);
+    ExprInfo check(hir::FuncUse& expr);
+    ExprInfo check(hir::TypeStatic& expr){
+        (void)expr; // Suppress unused parameter warning
+        throw std::logic_error("TypeStatic should be resolved");
+    };
     
     // Composite expressions
-    ExprInfo check_field_access(hir::FieldAccess& field_access);
-    ExprInfo resolve_field_access(hir::FieldAccess& field_access, TypeId base_type);
-    ExprInfo check_struct_literal(hir::StructLiteral& struct_literal);
-    ExprInfo check_array_literal(hir::ArrayLiteral& array_literal);
-    ExprInfo check_array_repeat(hir::ArrayRepeat& array_repeat);
-    ExprInfo check_index(hir::Index& index);
-    ExprInfo resolve_index(hir::Index& index, TypeId base_type, const ExprInfo& base_info);
+    ExprInfo check(hir::FieldAccess& expr);
+    ExprInfo check(hir::Index& expr);
+    ExprInfo check(hir::StructLiteral& expr);
+    ExprInfo check(hir::ArrayLiteral& expr);
+    ExprInfo check(hir::ArrayRepeat& expr);
     
     // Operations
-    ExprInfo check_assignment(hir::Assignment& assignment);
-    ExprInfo check_unary_op(hir::UnaryOp& unary_op);
-    ExprInfo check_binary_op(hir::BinaryOp& binary_op);
-    ExprInfo check_cast(hir::Cast& cast);
+    ExprInfo check(hir::UnaryOp& expr);
+    ExprInfo check(hir::BinaryOp& expr);
+    ExprInfo check(hir::Assignment& expr);
+    ExprInfo check(hir::Cast& expr);
     
     // Control flow expressions
-    ExprInfo check_call(hir::Call& call);
-    ExprInfo check_method_call(hir::MethodCall& method_call);
-    ExprInfo check_if(hir::If& if_expr);
-    ExprInfo check_loop(hir::Loop& loop);
-    ExprInfo check_while(hir::While& while_expr);
-    ExprInfo check_break(hir::Break& break_expr);
-    ExprInfo check_continue(hir::Continue& continue_expr);
-    ExprInfo check_return(hir::Return& return_expr);
+    ExprInfo check(hir::Call& expr);
+    ExprInfo check(hir::MethodCall& expr);
+    ExprInfo check(hir::If& expr);
+    ExprInfo check(hir::Loop& expr);
+    ExprInfo check(hir::While& expr);
+    ExprInfo check(hir::Break& expr);
+    ExprInfo check(hir::Continue& expr);
+    ExprInfo check(hir::Return& expr);
     
     // Block expressions
-    ExprInfo check_block(hir::Block& block);
+    ExprInfo check(hir::Block& expr);
     
-    // Helper methods are now in separate header files:
-    // - Type operations: semantic::helper::type_helper
-    // - Control flow: semantic::control_flow_helper
-    // - HIR transformations: hir::helper::transform_helper
-    // - Error reporting: error_helper
+    // Static variants (should be resolved by name resolution)
+    ExprInfo check(hir::StructConst& expr);
+    ExprInfo check(hir::EnumVariant& expr);
+
 };
 
 } // namespace semantic

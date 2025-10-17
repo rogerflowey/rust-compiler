@@ -320,18 +320,22 @@ static std::unique_ptr<hir::TypeNode> convert_type(AstToHirConverter& converter,
 
 static std::unique_ptr<hir::Pattern> convert_pattern(const ast::Pattern& ast_pattern) {
     if (const auto* ident_pattern = std::get_if<ast::IdentifierPattern>(&ast_pattern.value)) {
-        return std::make_unique<hir::Pattern>(hir::BindingDef{
-            .local = hir::BindingDef::Unresolved{
+        return std::make_unique<hir::Pattern>(hir::BindingDef(
+            hir::BindingDef::Unresolved{
                 .is_mutable = ident_pattern->is_mut,
                 .is_ref = ident_pattern->is_ref,
                 .name = *ident_pattern->name,
             },
-            .ast_node = ident_pattern,
-        });
+            ident_pattern
+        ));
     }
 
-    if (const auto* wildcard_pattern = std::get_if<ast::WildcardPattern>(&ast_pattern.value)) {
-        return std::make_unique<hir::Pattern>(hir::WildCardPattern{ .ast_node = wildcard_pattern });
+    if (const auto* ref_pattern = std::get_if<ast::ReferencePattern>(&ast_pattern.value)) {
+        return std::make_unique<hir::Pattern>(hir::ReferencePattern{
+            .subpattern = convert_pattern(*ref_pattern->subpattern),
+            .is_mutable = ref_pattern->is_mut,
+            .ast_node = ref_pattern,
+        });
     }
     
     throw std::logic_error("Unsupported pattern type in HIR conversion");
@@ -379,25 +383,29 @@ struct ItemConverter {
 
     hir::ItemVariant operator()(const ast::FunctionItem& fn) const {
         std::vector<std::unique_ptr<hir::Pattern>> params;
+        std::vector<std::optional<hir::TypeAnnotation>> param_type_annotations;
         params.reserve(fn.params.size());
+        param_type_annotations.reserve(fn.params.size());
+        
         for (const auto& p : fn.params) {
             auto pattern = convert_pattern(*p.first);
-            if (auto* binding = std::get_if<hir::BindingDef>(&pattern->value)) {
-                if (p.second) {
-                    auto type_node = detail::convert_type(converter, *p.second);
-                    binding->type_annotation = hir::TypeAnnotation(std::move(type_node));
-                }
+            // Convert type annotation if present
+            std::optional<hir::TypeAnnotation> type_annotation;
+            if (p.second) {
+                type_annotation = hir::TypeAnnotation(convert_type(converter, *p.second));
             }
             params.push_back(std::move(pattern));
+            param_type_annotations.push_back(std::move(type_annotation));
         }
 
-        hir::Function hir_function{
-            .params = std::move(params),
-            .return_type = fn.return_type ? std::optional(convert_type(converter, **fn.return_type)) : std::nullopt,
-            .body = nullptr, // Will be set after conversion
-            .locals = {}, // Initialized empty
-            .ast_node = &fn
-        };
+        hir::Function hir_function(
+            std::move(params),
+            std::move(param_type_annotations),
+            fn.return_type ? std::optional(convert_type(converter, **fn.return_type)) : std::nullopt,
+            nullptr, // Will be set after conversion
+            {}, // Initialized empty
+            &fn
+        );
         
         // Convert the body
         if (fn.body) {
@@ -430,10 +438,9 @@ struct ItemConverter {
     }
     hir::ItemVariant operator()(const ast::ConstItem& cnst) const {
         return hir::ConstDef{
+            .expr = converter.convert_expr(*cnst.value),
+            .const_value = std::nullopt, // Initialize as empty, will be filled later
             .type = cnst.type ? std::optional(convert_type(converter, *cnst.type)) : std::nullopt,
-            .value_state = hir::ConstDef::Unresolved{
-                .value = converter.convert_expr(*cnst.value)
-            },
             .ast_node = &cnst
         };
     }
@@ -451,12 +458,12 @@ struct ItemConverter {
         for (const auto& item_ptr : impl.items) {
             assoc_items.push_back(converter.convert_associated_item(*item_ptr));
         }
-        return hir::Impl{
-            .trait = *impl.trait_name,
-            .for_type = convert_type(converter, *impl.for_type),
-            .items = std::move(assoc_items),
-            .ast_node = &impl
-        };
+        return hir::Impl(
+            *impl.trait_name,
+            convert_type(converter, *impl.for_type),
+            std::move(assoc_items),
+            &impl
+        );
     }
 
     hir::ItemVariant operator()(const ast::InherentImplItem& impl) const {
@@ -465,12 +472,12 @@ struct ItemConverter {
         for (const auto& item_ptr : impl.items) {
             assoc_items.push_back(converter.convert_associated_item(*item_ptr));
         }
-        return hir::Impl{
-            .trait = std::nullopt,
-            .for_type = convert_type(converter, *impl.for_type),
-            .items = std::move(assoc_items),
-            .ast_node = &impl
-        };
+        return hir::Impl(
+            std::nullopt,
+            convert_type(converter, *impl.for_type),
+            std::move(assoc_items),
+            &impl
+        );
     }
 
     template<typename T>
@@ -523,68 +530,71 @@ std::unique_ptr<hir::Item> AstToHirConverter::convert_item(const ast::Item& item
 std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(const ast::Item& item) {
     // Handle FunctionItem -> hir::Function (associated fn) or hir::Method
     if (const auto* fn_item = std::get_if<ast::FunctionItem>(&item.value)) {
-        std::vector<std::unique_ptr<hir::Pattern>> params;
-        params.reserve(fn_item->params.size());
-        for (const auto& p : fn_item->params) {
-            auto pattern = detail::convert_pattern(*p.first);
-            if (auto* binding = std::get_if<hir::BindingDef>(&pattern->value)) {
-                if (p.second) {
-                    auto type_node = detail::convert_type(*this, *p.second);
-                    binding->type_annotation = hir::TypeAnnotation(std::move(type_node));
-                }
-            }
-            params.push_back(std::move(pattern));
+    std::vector<std::unique_ptr<hir::Pattern>> params;
+    std::vector<std::optional<hir::TypeAnnotation>> param_type_annotations;
+    params.reserve(fn_item->params.size());
+    param_type_annotations.reserve(fn_item->params.size());
+    
+    for (const auto& p : fn_item->params) {
+        auto pattern = detail::convert_pattern(*p.first);
+        // Convert type annotation if present
+        std::optional<hir::TypeAnnotation> type_annotation;
+        if (p.second) {
+            type_annotation = hir::TypeAnnotation(detail::convert_type(*this, *p.second));
         }
-
-        auto return_type = fn_item->return_type ? std::optional(detail::convert_type(*this, **fn_item->return_type)) : std::nullopt;
-
-        if (fn_item->self_param) {
-            const auto& self = **fn_item->self_param;
-            hir::Method::SelfParam hir_self{
-                .is_reference = self.is_reference,
-                .is_mutable = self.is_mutable,
-                .ast_node = &self
-            };
-            hir::Method hir_method{
-                .self_param = hir_self,
-                .params = std::move(params),
-                .return_type = std::move(return_type),
-                .body = nullptr, // Will be set after conversion
-                .locals = {},
-                .ast_node = fn_item
-            };
-            
-            // Convert the body
-            if (fn_item->body) {
-                hir_method.body = std::make_unique<hir::Block>(convert_block(**fn_item->body));
-            }
-            
-            return std::make_unique<hir::AssociatedItem>(std::move(hir_method));
-        } else {
-            hir::Function hir_fn{
-                .params = std::move(params),
-                .return_type = std::move(return_type),
-                .body = nullptr, // Will be set after conversion
-                .locals = {}, // Initialized empty
-                .ast_node = fn_item
-            };
-            
-            // Convert the body
-            if (fn_item->body) {
-                hir_fn.body = std::make_unique<hir::Block>(convert_block(**fn_item->body));
-            }
-            
-            return std::make_unique<hir::AssociatedItem>(std::move(hir_fn));
-        }
+        params.push_back(std::move(pattern));
+        param_type_annotations.push_back(std::move(type_annotation));
     }
+
+    auto return_type = fn_item->return_type ? std::optional(detail::convert_type(*this, **fn_item->return_type)) : std::nullopt;
+
+    if (fn_item->self_param) {
+        const auto& self = **fn_item->self_param;
+        hir::Method::SelfParam hir_self;
+        hir_self.is_reference = self.is_reference;
+        hir_self.is_mutable = self.is_mutable;
+        hir_self.ast_node = &self;
+
+        hir::Method hir_method(
+            std::move(hir_self),
+            std::move(params),
+            std::move(param_type_annotations),
+            std::move(return_type),
+            nullptr, // Will be set after conversion
+            fn_item
+        );
+        
+        // Convert the body
+        if (fn_item->body) {
+            hir_method.body = std::make_unique<hir::Block>(convert_block(**fn_item->body));
+        }
+        
+        return std::make_unique<hir::AssociatedItem>(std::move(hir_method));
+    } else {
+        hir::Function hir_fn(
+            std::move(params),
+            std::move(param_type_annotations),
+            std::move(return_type),
+            nullptr, // Will be set after conversion
+            {}, // Initialized empty
+            fn_item
+        );
+        
+        // Convert the body
+        if (fn_item->body) {
+            hir_fn.body = std::make_unique<hir::Block>(convert_block(**fn_item->body));
+        }
+        
+        return std::make_unique<hir::AssociatedItem>(std::move(hir_fn));
+    }
+}
 
     // Handle ConstItem -> hir::ConstDef
     if (const auto* cnst_item = std::get_if<ast::ConstItem>(&item.value)) {
         hir::ConstDef hir_cnst{
+            .expr = convert_expr(*cnst_item->value),
+            .const_value = std::nullopt, // Initialize as empty, will be filled later
             .type = cnst_item->type ? std::optional(detail::convert_type(*this, *cnst_item->type)) : std::nullopt,
-            .value_state = hir::ConstDef::Unresolved{
-                .value = convert_expr(*cnst_item->value)
-            },
             .ast_node = cnst_item
         };
         return std::make_unique<hir::AssociatedItem>(std::move(hir_cnst));
@@ -638,4 +648,3 @@ std::unique_ptr<hir::Expr> AstToHirConverter::convert_expr(const ast::Expr& expr
     hir::ExprVariant hir_variant = std::visit(visitor, expr.value);
     return std::make_unique<hir::Expr>(std::move(hir_variant));
 }
-

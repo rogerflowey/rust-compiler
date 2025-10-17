@@ -2,7 +2,7 @@
 
 ## Overview
 
-[`src/semantic/const/evaluator.hpp`](../../src/semantic/const/evaluator.hpp) implements compile-time evaluation of HIR expressions.
+[`src/semantic/const/evaluator.hpp`](../../../src/semantic/const/evaluator.hpp) implements compile-time evaluation of HIR expressions.
 
 ## Architecture
 

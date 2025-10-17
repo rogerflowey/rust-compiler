@@ -47,6 +47,7 @@ add_subdirectory(lib/parsecpp)
 # and create the 'parser' target.
 add_subdirectory(src/parser)
 add_subdirectory(src/semantic)
+add_subdirectory(cmd)
 
 
 # --- Main Executable ---

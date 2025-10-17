@@ -1,33 +1,70 @@
-# Mini-Rust Compiler (`RCompiler`) AI Assistant Guide
+# RCompiler Agent Guide
 
-## Big picture & key directories
-- C++ mini-Rust compiler: lex/parse into `ast/`, convert to mutable HIR in `semantic/hir/`, refine through passes under `semantic/pass/`.
-- Parser stack relies on the in-tree `lib/parsecpp` combinators; study `parser/parser_registry.hpp` for entry points.
-- Language spec lives in `RCompiler-Spec/`; `design_overview.md` explains the semantic refinement pipeline and pass invariants.
+**⚠️ IMPORTANT**: Always refer to the documentation system when uncertain. This guide provides entry points, but detailed information is maintained in the documentation system.
 
-## Build & validation workflow
-- Use the `CMake: build` VS Code task (ninja-debug preset) to configure+build; main binary lands in `build/ninja-debug/compiler` and tests in the same folder.
-- After a build, run `ctest --test-dir build` to execute all GoogleTest suites (each `test/**/*.cpp` produces its own executable).
-- For staged regression suites, run `python scripts/run_tests.py [stage]` against `RCompiler-Testcases/`; promote expected output with `--update-baseline`. `generate_report.py --analyze` funnels failures through the Zhipu AI helper (requires `ZHIPU_API_KEY`).
+## Quick Start
 
-## Semantic pipeline essentials
-- `hir/converter.cpp` performs the AST→HIR skeleton pass. Every semantic field starts unresolved (variants usually hold `std::unique_ptr<hir::TypeNode>` etc.).
-- `pass/name_resolution/` resolves paths using `semantic::Scope` stacks, populates locals (`hir::Local`), and defers type statics until `finalize_type_statics`.
-- `pass/type&const/` drives the demand-based Resolver service so each `hir::TypeAnnotation` moves from syntactic node → `semantic::TypeId`; const expressions for array sizes live alongside this pass.
-- `semantic/hir/visitor/HirVisitorBase` is the CRTP entry point for tree walks; extend visitors by overriding functor overloads and calling the base class when you still need default traversal.
+We are currently working on the Semantic pass, expr check part.
+- Design: [`expr_check.md`](src/semantic/pass/semantic_check/expr_check.md)
+- Overview: [Semantic Pass Overview](docs/semantic/passes/README.md)
 
-## Coding patterns & conventions
-- Favor `std::variant`-based “sealed” unions over inheritance across AST/HIR; when you add a variant alternative, update all functor visitors so builds stay exhaustive.
-- Never pass raw nulls—wrap optional data in `std::optional` (including pointer-like members) and assert invariants early.
-- Prefer named functor structs for `std::visit` rather than ad-hoc lambdas (see `semantic/utils.hpp::Overloaded`).
-- Maintain HIR invariants: passes must only consume states they are guaranteed to receive (e.g., `TypeAnnotation` resolved before type checking). Document new invariants in `design_overview.md` when they shift.
-- Tests belong under the matching `test/{lexer,parser,semantic}` subtree; mirror production filenames for clarity when adding cases.
+## Semantic Pass Architecture
 
-## Integration touchpoints
-- `lib/parsecpp/README.md` documents parser combinators; replicate existing grammar style when extending syntax.
-- `scripts/` automates regression tracking and AI triage—keep `test-output/` tree clean and version-control only intentional baselines.
-- Struct/enum/trait definitions interact through `semantic/type/impl_table.hpp`; ensure new passes register impls so downstream queries succeed.
+The semantic passes create a skeletal HIR from parsed AST, and fulfill it to a fully resolved HIR through passes (transformations on the HIR) by in-place transformations. Each pass ensures something(called "invariants") to later pass.
 
-## Keep this guide fresh
-- Update this file whenever architectural plans change or new passes/services appear—especially when design documents or invariants move.
-- When uncertain, gather context first; production-ready code only—no “temporary” shortcuts without TODOs describing follow-up.
+### Core Dependencies
+- **HIR**: High-level Intermediate Representation ([`src/semantic/hir/`](src/semantic/hir/)) | [docs](docs/semantic/hir/README.md)
+- **Type**: Type system ([`src/semantic/type/`](src/semantic/type/)) | [docs](docs/semantic/type/README.md)
+- **Symbol**: Symbol table management ([`src/semantic/symbol/`](src/semantic/symbol/)) | [docs](docs/semantic/symbol/scope.md)
+
+
+### Frequent Command
+- **Build** 
+```bash
+cd /home/rogerw/project/compiler
+cmake --preset ninja-debug
+cmake --build build/ninja-debug
+```
+- **Test**
+```bash
+#first build
+cd /home/rogerw/project/compiler
+cmake --preset ninja-debug
+cmake --build build/ninja-debug
+#run test
+ctest --test-dir build/ninja-debug --verbose
+```
+\=
+
+## Quick Navigation
+
+### For Semantic Pass Development
+1. [Semantic Passes Overview](docs/semantic/passes/README.md) - Pass contracts and invariants
+2. [Architecture Guide](docs/architecture.md) - System architecture
+3. [Development Guide](docs/development.md) - Code conventions
+4. [Specific Pass Documentation](docs/semantic/passes/) - Implementation details
+
+### For Current Work (Expression Checking)
+1. [Expression Check Design](src/semantic/pass/semantic_check/expr_check.md) - Current implementation
+2. [Expression Info](src/semantic/pass/semantic_check/expr_info.hpp) - Data structures
+3. [Type System](docs/semantic/type/README.md) - Type operations
+4. [Semantic Checking Overview](docs/semantic/passes/semantic-checking.md) - Context
+
+## Documentation System
+
+**For complete information, refer to the documentation system starting at [docs/README.md](docs/README.md).**
+
+### Key Documentation Paths
+- **Project Overview**: [docs/project-overview.md](docs/project-overview.md)
+- **Architecture**: [docs/architecture.md](docs/architecture.md)
+- **Development**: [docs/development.md](docs/development.md)
+- **Agent Protocols**: [docs/agent-guide.md](docs/agent-guide.md)
+- **Component Reference**: [docs/component-cross-reference.md](docs/component-cross-reference.md)
+
+### Semantic Pass Documentation
+- **Overview**: [docs/semantic/passes/README.md](docs/semantic/passes/README.md)
+- **HIR Converter**: [docs/semantic/passes/hir-converter.md](docs/semantic/passes/hir-converter.md)
+- **Name Resolution**: [docs/semantic/passes/name-resolution.md](docs/semantic/passes/name-resolution.md)
+- **Type Resolution**: [docs/semantic/passes/type-resolution.md](docs/semantic/passes/type-resolution.md)
+- **Semantic Checking**: [docs/semantic/passes/semantic-checking.md](docs/semantic/passes/semantic-checking.md)
+- **Control Flow Linking**: [docs/semantic/passes/control-flow-linking.md](docs/semantic/passes/control-flow-linking.md)

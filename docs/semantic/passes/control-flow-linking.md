@@ -200,4 +200,4 @@ inline auto get_return_target(const hir::Return& return_stmt) {
 
 - [Semantic Passes Overview](README.md): Complete pipeline overview
 - [Semantic Checking](semantic-checking.md): Previous pass in pipeline
-- [Control Flow Implementation](../../src/semantic/pass/control_flow_linking/control_flow_linking.hpp): Implementation details
+- [Control Flow Implementation](../../../src/semantic/pass/control_flow_linking/control_flow_linking.hpp): Implementation details
