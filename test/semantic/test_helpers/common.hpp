@@ -78,6 +78,7 @@ protected:
         string_type = semantic::get_typeID(SemanticType{semantic::PrimitiveKind::STRING});
         unit_type = semantic::get_typeID(SemanticType{semantic::UnitType{}});
         never_type = semantic::get_typeID(SemanticType{semantic::NeverType{}});
+        underscore_type = semantic::get_typeID(SemanticType{semantic::UnderscoreType{}});
         
         // Initialize inference types
         anyint_type = semantic::get_typeID(SemanticType{semantic::PrimitiveKind::__ANYINT__});
@@ -438,7 +439,7 @@ static std::unique_ptr<hir::Expr> createReturn(std::unique_ptr<hir::Expr> value 
     // Primitive types
     semantic::TypeId i32_type, u32_type, isize_type, usize_type;
     semantic::TypeId bool_type, char_type, string_type;
-    semantic::TypeId unit_type, never_type;
+    semantic::TypeId unit_type, never_type, underscore_type;
     
     // Inference types
     semantic::TypeId anyint_type, anyuint_type;

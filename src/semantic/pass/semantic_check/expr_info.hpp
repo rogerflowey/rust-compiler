@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <optional>
 #include <functional>
+#include <iostream>
 
 namespace hir {
     struct Loop;
@@ -112,7 +113,7 @@ struct EndpointHash {
 struct EndpointEqual {
     bool operator()(const Endpoint& lhs, const Endpoint& rhs) const {
         if (lhs.index() != rhs.index()) return false;
-        return std::visit([this, &rhs](const auto& left_endpoint) {
+        return std::visit([&rhs](const auto& left_endpoint) {
             return left_endpoint == std::get<std::decay_t<decltype(left_endpoint)>>(rhs);
         }, lhs);
     }
@@ -182,6 +183,36 @@ inline EndpointSet merge_endpoints(const std::vector<ExprInfo>& infos) {
         result.insert(info.endpoints.begin(), info.endpoints.end());
     }
     return result;
+}
+
+// ===== Sequential Endpoint Helpers =====
+
+inline EndpointSet sequence_endpoints(const std::vector<ExprInfo>& infos) {
+    EndpointSet current_endpoints = {NormalEndpoint{}};
+    for (const auto& info : infos) {
+        if (!current_endpoints.contains(NormalEndpoint{})) {
+            std::cerr<<"[WARNING] dead code detected"<<std::endl;
+            break;
+        }
+        current_endpoints.erase(NormalEndpoint{});
+        current_endpoints.insert(info.endpoints.begin(), info.endpoints.end());
+    }
+    return current_endpoints;
+}
+
+inline EndpointSet sequence_endpoints(const ExprInfo& first,
+                                      const ExprInfo& second) {
+    EndpointSet current_endpoints = {NormalEndpoint{}};
+
+    current_endpoints.erase(NormalEndpoint{});
+    current_endpoints.insert(first.endpoints.begin(), first.endpoints.end());
+
+    if (current_endpoints.contains(NormalEndpoint{})) {
+        current_endpoints.erase(NormalEndpoint{});
+        current_endpoints.insert(second.endpoints.begin(),
+                                 second.endpoints.end());
+    }
+    return current_endpoints;
 }
 
 }

@@ -7,7 +7,7 @@ The semantic analysis phase transforms the AST through a series of passes, each 
 ## Pipeline
 
 ```
-AST → HIR Converter → Name Resolution → Type & Const Finalization → Semantic Checking → Control Flow Linking
+AST → HIR Converter → Name Resolution → Type & Const Finalization → Trait Validation → Control Flow Linking → Semantic Checking → Exit Check
 ```
 
 ## Pass Contracts and Goals
@@ -39,8 +39,17 @@ AST → HIR Converter → Name Resolution → Type & Const Finalization → Sema
 - Evaluate constant expressions to compile-time values
 - Materialize array repeat counts and default function return types
 
-### 4. Semantic Checking
+### 4. Control Flow Linking
 **Input**: HIR with resolved types and constants from Type & Const Finalization
+**Output**: HIR with linked control flow
+
+**Goal**: Resolve and ensure all control flow statements have valid targets
+- Link `break`, `continue`, and `return` statements to their destinations
+- Validate control flow contexts and jump validity
+- Handle nested control flow structures correctly
+
+### 5. Semantic Checking
+**Input**: HIR with linked control flow from Control Flow Linking
 **Output**: Fully validated HIR
 
 **Goal**: Resolve and ensure all expressions have complete semantic information
@@ -49,14 +58,14 @@ AST → HIR Converter → Name Resolution → Type & Const Finalization → Sema
 - Annotate expressions with `ExprInfo` (type, mutability, place, divergence)
 - Validate type safety and ownership rules
 
-### 5. Control Flow Linking
-**Input**: Validated HIR from Semantic Checking
-**Output**: HIR with linked control flow
+### 6. Exit Check
+**Input**: Fully validated HIR from Semantic Checking
+**Output**: HIR with validated exit() usage
 
-**Goal**: Resolve and ensure all control flow statements have valid targets
-- Link `break`, `continue`, and `return` statements to their destinations
-- Validate control flow contexts and jump validity
-- Handle nested control flow structures correctly
+**Goal**: Validate exit() function usage according to language rules
+- Ensure exit() is only used in the top-level main() function
+- Verify exit() is the final statement in main()
+- Disallow exit() in non-main functions and methods
 
 ## Variant State Transitions
 
@@ -161,6 +170,7 @@ inline std::optional<TypeId> try_get_resolved_type(const TypeAnnotation& annotat
 - [Type & Const Finalization](type-resolution.md)
 - [Semantic Checking](semantic-checking.md)
 - [Control Flow Linking](control-flow-linking.md)
+- [Exit Check](../../src/semantic/pass/exit_check.md)
 
 ## Related Documentation
 

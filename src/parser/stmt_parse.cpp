@@ -41,7 +41,9 @@ StmtParser StmtParserBuilder::buildExprStmt(const ExprParser& exprParser, const 
 
     auto p_with_block_stmt = (withBlockExprParser >> equal({TOKEN_SEPARATOR, ";"}).optional())
         .map([](auto&& t) -> StmtPtr {
-            return std::make_unique<Statement>(Statement{ ExprStmt{std::move(std::get<0>(t))} });
+            auto expr = std::move(std::get<0>(t));
+            bool has_semicolon = std::get<1>(t).has_value();
+            return std::make_unique<Statement>(Statement{ ExprStmt{std::move(expr), has_semicolon} });
         });
 
     return (p_with_block_stmt | p_any_expr_then_semi).label("an expression statement");

@@ -1,8 +1,13 @@
 #pragma once
 #include "semantic/type/type.hpp"
-#include "pass/semantic_check/expr_info.hpp"
+#include "semantic/type/helper.hpp"
+#include "semantic/utils.hpp"
+#include "hir/helper.hpp"
+#include "utils/debug_context.hpp"
 #include <optional>
-#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
 
 namespace semantic {
 
@@ -29,11 +34,64 @@ namespace semantic {
 /**
  * @brief Checks if a type is an inference placeholder (__ANYINT__ or __ANYUINT__)
  */
+inline std::string describe_type(TypeId type);
+
 inline bool is_inference_type(TypeId type) {
     if (auto prim = std::get_if<PrimitiveKind>(&type->value)) {
         return *prim == PrimitiveKind::__ANYINT__ || *prim == PrimitiveKind::__ANYUINT__;
     }
     return false;
+}
+
+inline std::string describe_type(TypeId type) {
+    return std::visit(
+        Overloaded{
+            [](PrimitiveKind kind) -> std::string {
+                switch (kind) {
+                case PrimitiveKind::I32:
+                    return "i32";
+                case PrimitiveKind::U32:
+                    return "u32";
+                case PrimitiveKind::ISIZE:
+                    return "isize";
+                case PrimitiveKind::USIZE:
+                    return "usize";
+                case PrimitiveKind::BOOL:
+                    return "bool";
+                case PrimitiveKind::CHAR:
+                    return "char";
+                case PrimitiveKind::STRING:
+                    return "string";
+                case PrimitiveKind::__ANYINT__:
+                    return "<any-int>";
+                case PrimitiveKind::__ANYUINT__:
+                    return "<any-uint>";
+                }
+                return "<primitive>";
+            },
+            [](const StructType& st) -> std::string {
+                return "struct " + hir::helper::get_name(*st.symbol).name;
+            },
+            [](const EnumType& en) -> std::string {
+                return "enum " + hir::helper::get_name(*en.symbol).name;
+            },
+            [](const ReferenceType& ref) -> std::string {
+                return std::string(ref.is_mutable ? "&mut " : "&") + describe_type(ref.referenced_type);
+            },
+            [](const ArrayType& array) -> std::string {
+                return "[" + std::to_string(array.size) + "] " + describe_type(array.element_type);
+            },
+            [](const UnitType&) -> std::string {
+                return "unit";
+            },
+            [](const NeverType&) -> std::string {
+                return "never";
+            },
+            [](const UnderscoreType&) -> std::string {
+                return "_";
+            }
+        },
+        type->value);
 }
 
 /**
@@ -114,6 +172,16 @@ inline std::optional<TypeId> try_coerce_to(TypeId from, TypeId to) {
     if (from == to) {
         return to;
     }
+
+    if (helper::type_helper::is_underscore_type(from) ||
+        helper::type_helper::is_underscore_type(to)) {
+        return std::nullopt;
+    }
+    
+    // NeverType can coerce to any type (bottom type)
+    if (std::holds_alternative<NeverType>(from->value)) {
+        return to;
+    }
     
     // Handle primitive type coercion
     if (auto from_prim = std::get_if<PrimitiveKind>(&from->value)) {
@@ -155,6 +223,14 @@ inline std::optional<TypeId> try_coerce_to(TypeId from, TypeId to) {
 inline std::optional<TypeId> find_common_type(TypeId left, TypeId right) {
     // Early return for identical types
     if (left == right) {
+        return left;
+    }
+    
+    // If one operand is NeverType, return the other type
+    if (std::holds_alternative<NeverType>(left->value)) {
+        return right;
+    }
+    if (std::holds_alternative<NeverType>(right->value)) {
         return left;
     }
     
@@ -210,6 +286,14 @@ inline std::optional<TypeId> find_common_type(TypeId left, TypeId right) {
  * - Reference types require compatible mutability
  */
 inline bool is_assignable_to(TypeId from, TypeId to) {
+    if (helper::type_helper::is_underscore_type(to)) {
+        return true;
+    }
+
+    if (helper::type_helper::is_underscore_type(from)) {
+        return helper::type_helper::is_underscore_type(to);
+    }
+
     return from == to || try_coerce_to(from, to).has_value();
 }
 
@@ -233,9 +317,19 @@ inline bool is_castable_to(TypeId from, TypeId to) {
     if (from == to) {
         return true;
     }
+
+    if (helper::type_helper::is_underscore_type(from) ||
+        helper::type_helper::is_underscore_type(to)) {
+        return false;
+    }
+    
+    // NeverType can be cast to any type (as a bottom type)
+    if (helper::type_helper::is_never_type(from)) {
+        return true;
+    }
     
     // All primitive types can be cast to each other (with potential data loss)
-    if (std::holds_alternative<PrimitiveKind>(from->value) && 
+    if (std::holds_alternative<PrimitiveKind>(from->value) &&
         std::holds_alternative<PrimitiveKind>(to->value)) {
         return true;
     }
@@ -302,7 +396,9 @@ inline TypeId resolve_inference_type(TypeId inference_type, TypeId expected_type
             }
             
             const char* inf_name = (*inf_prim == PrimitiveKind::__ANYINT__) ? "__ANYINT__" : "__ANYUINT__";
-            throw std::logic_error(std::string("Cannot resolve ") + inf_name + " to incompatible type");
+            throw std::runtime_error(
+                debug::format_with_context(
+                    std::string("Cannot resolve ") + inf_name + " to type '" + describe_type(expected_type) + "'"));
         }
     }
     

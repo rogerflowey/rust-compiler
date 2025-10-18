@@ -221,25 +221,31 @@ ExprInfo ExprChecker::check(hir::ConstUse& expr) {
 ### 7. Special Expressions
 
 #### Underscore
+
 - Only valid in specific contexts (patterns, function arguments)
-- Return: context-dependent type, mutability, place(actually assignee, but we don't have this), normal endpoint
+- Return: underscore type `_`, mutable place (assignment sink), normal endpoint
+- Accept any assignment into `_`, but `_` never coerces to other types
 
 #### TypeStatic
+
 - Should be resolved during name resolution
 - Return: based on resolved item, typically non-mutable, non-place, normal endpoint
 
 ## Auto Reference/Dereference Implementation
 
 ### Field Access Auto-Dereference
+
 1. If base is reference type, automatically dereference
 2. Transform HIR to insert explicit dereference operation
 3. field access with dereferenced base
 
 ### Method Call Auto-Reference
+
 1. look on the base type for method, get its self param requirement
 2. if it can, Transform HIR to insert explicit reference operation when needed
 
 ### Array Indexing Auto-Dereference
+
 1. If base is reference type, automatically dereference
 2. Transform HIR to insert explicit dereference operation
 3. Retry indexing with dereferenced base
@@ -247,22 +253,24 @@ ExprInfo ExprChecker::check(hir::ConstUse& expr) {
 ## Implementation Challenges
 
 ### Type Inference
+
 - Limited support: only integer literals via `__ANYINT__`/`__ANYUINT__`
 - Full type inference not yet implemented
 
 ### Deferred Name Resolution
+
 - Field access and method calls require type information first
 - Expression checker need to do name resolution after resolving the base expr type
 
-
 ### Function Resolution
+
 - Functions are not first-class values
 - Call expressions resolve directly from function definitions
 - No lambda/functor support
 
 ## Error Handling
-Do **minimum** error handling, just make sure everything invalid will cause an error, but do not try to produce very detailed error messages
 
+Do **minimum** error handling, just make sure everything invalid will cause an error, but do not try to produce very detailed error messages
 
 ## TODO List
 
@@ -356,7 +364,6 @@ Do **minimum** error handling, just make sure everything invalid will cause an e
    - Added endpoint merging from receiver and arguments
    - Integrated with impl table for method lookup and resolution
    - Full compliance with design specification for method call semantics
-
 
 ## Files affected
 

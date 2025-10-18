@@ -11,6 +11,7 @@ struct LetStmt {
 
 struct ExprStmt {
     ExprPtr expr;
+    bool has_trailing_semicolon = true;
 };
 
 struct EmptyStmt {};

@@ -3,6 +3,7 @@
 #include "../ast/expr.hpp" // For BlockExpr
 #include "parser_registry.hpp"
 #include "utils.hpp"
+#include <variant>
 
 using namespace parsec;
 using namespace ast;
@@ -37,9 +38,30 @@ ItemParserBuilder::buildBlockParser(const StmtParser &stmtParser,
           equal({TOKEN_DELIMITER, "}"}))
       .map([](auto &&tp) -> BlockExprPtr {
         auto stmts = std::move(std::get<0>(tp));
-        auto opt = std::move(std::get<1>(tp));
+        auto final_expr = std::move(std::get<1>(tp));
+
+        if (!final_expr && !stmts.empty()) {
+          auto &last_stmt_ptr = stmts.back();
+          if (last_stmt_ptr) {
+            if (auto *expr_stmt = std::get_if<ExprStmt>(&last_stmt_ptr->value);
+                expr_stmt && !expr_stmt->has_trailing_semicolon &&
+                expr_stmt->expr) {
+              const auto &variant = expr_stmt->expr->value;
+              const bool is_with_block_expr =
+                  std::holds_alternative<BlockExpr>(variant) ||
+                  std::holds_alternative<IfExpr>(variant) ||
+                  std::holds_alternative<WhileExpr>(variant) ||
+                  std::holds_alternative<LoopExpr>(variant);
+              if (is_with_block_expr) {
+                final_expr = std::move(expr_stmt->expr);
+                stmts.pop_back();
+              }
+            }
+          }
+        }
+
         return std::make_unique<BlockExpr>(
-            BlockExpr{std::move(stmts), std::move(opt)});
+            BlockExpr{std::move(stmts), std::move(final_expr)});
       });
 }
 

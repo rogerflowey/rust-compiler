@@ -1,328 +1,244 @@
-#include <gtest/gtest.h>
-#include <stdexcept>
-#include <optional>
+#include "gtest/gtest.h"
+#include "semantic/type/type.hpp"
+#include "semantic/type/helper.hpp"
+#include "semantic/pass/semantic_check/type_compatibility.hpp"
+#include "test_helpers/common.hpp"
 
-
-
-#include "src/semantic/type/type.hpp"
-#include "src/semantic/pass/semantic_check/type_compatibility.hpp"
-
-/**
- * @brief Test suite for type compatibility helpers
- * 
- * This test suite verifies the behavior of critical helper functions in
- * type_compatibility.hpp that are essential for expression checking.
- * 
- * Test Scenarios:
- * 1. Inference Type Detection
- *    - Verifies is_inference_type() correctly identifies __ANYINT__ and __ANYUINT__
- *    - Ensures non-inference types are rejected
- * 
- * 2. Inference Type Coercion
- *    - Tests can_inference_coerce_to() with valid coercions (__ANYINT__ -> I32/ISIZE)
- *    - Tests can_inference_coerce_to() with valid coercions (__ANYUINT__ -> U32/USIZE/__ANYINT__)
- *    - Verifies invalid coercions are rejected
- * 
- * 3. Type Coercion (try_coerce_to)
- *    - Identical types should always succeed
- *    - Inference to concrete type coercion
- *    - Array type coercion with size matching and element compatibility
- *    - Reference type coercion with mutability rules
- *    - Invalid coercion attempts
- * 
- * 4. Common Type Finding (find_common_type)
- *    - Identical types return themselves
- *    - Inference placeholder resolution (__ANYUINT__ + __ANYINT__ -> __ANYINT__)
- *    - Array common types with compatible elements and matching sizes
- *    - Cases where no common type exists
- * 
- * 5. Assignment Compatibility (is_assignable_to)
- *    - Identical types are assignable
- *    - Coercible types are assignable
- *    - Non-coercible types are not assignable
- * 
- * 6. Cast Validation (is_castable_to)
- *    - Same types are always castable
- *    - All primitive types can be cast to each other
- *    - Reference type casting with underlying type compatibility
- *    - Array casting with element compatibility and size matching
- * 
- * 7. Type Comparability (are_comparable)
- *    - Identical types are comparable
- *    - Types with common types are comparable
- *    - Non-comparable type pairs
- * 
- * 8. Inference Type Resolution
- *    - resolve_inference_type() with valid target types
- *    - resolve_inference_type() throws on incompatible types
- *    - resolve_inference_if_needed() updates source type when needed
- *    - resolve_inference_if_needed() leaves non-inference types unchanged
- */
+using namespace semantic;
+using namespace semantic::helper::type_helper;
+using namespace test::helpers;
 
 namespace {
-
-// Bring all the needed symbols into scope for the test
-using namespace semantic;
 
 class TypeCompatibilityTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Initialize common primitive types
-        i32_type = get_typeID(Type{PrimitiveKind::I32});
-        u32_type = get_typeID(Type{PrimitiveKind::U32});
-        isize_type = get_typeID(Type{PrimitiveKind::ISIZE});
-        usize_type = get_typeID(Type{PrimitiveKind::USIZE});
-        bool_type = get_typeID(Type{PrimitiveKind::BOOL});
-        char_type = get_typeID(Type{PrimitiveKind::CHAR});
-        string_type = get_typeID(Type{PrimitiveKind::STRING});
+        // Initialize common types for testing
+        i32_type = get_typeID(SemanticType{PrimitiveKind::I32});
+        u32_type = get_typeID(SemanticType{PrimitiveKind::U32});
+        isize_type = get_typeID(SemanticType{PrimitiveKind::ISIZE});
+        usize_type = get_typeID(SemanticType{PrimitiveKind::USIZE});
+        bool_type = get_typeID(SemanticType{PrimitiveKind::BOOL});
+        char_type = get_typeID(SemanticType{PrimitiveKind::CHAR});
+        string_type = get_typeID(SemanticType{PrimitiveKind::STRING});
         
-        // Initialize inference types
-        anyint_type = get_typeID(Type{PrimitiveKind::__ANYINT__});
-        anyuint_type = get_typeID(Type{PrimitiveKind::__ANYUINT__});
+        // Inference types
+        anyint_type = get_typeID(SemanticType{PrimitiveKind::__ANYINT__});
+        anyuint_type = get_typeID(SemanticType{PrimitiveKind::__ANYUINT__});
         
-        // Initialize array types
-        i32_array_5_type = get_typeID(Type{ArrayType{i32_type, 5}});
-        u32_array_5_type = get_typeID(Type{ArrayType{u32_type, 5}});
-        i32_array_10_type = get_typeID(Type{ArrayType{i32_type, 10}});
+        // Never type
+        never_type = get_typeID(SemanticType{NeverType{}});
         
-        // Initialize reference types
-        i32_ref_type = get_typeID(Type{ReferenceType{i32_type, false}});
-        i32_mut_ref_type = get_typeID(Type{ReferenceType{i32_type, true}});
-        u32_ref_type = get_typeID(Type{ReferenceType{u32_type, false}});
+        // Unit type
+        unit_type = get_typeID(SemanticType{semantic::UnitType{}});
+        
+        // Array types
+        i32_array_5_type = get_typeID(SemanticType{semantic::ArrayType{i32_type, 5}});
+        u32_array_5_type = get_typeID(SemanticType{semantic::ArrayType{u32_type, 5}});
+        i32_array_10_type = get_typeID(SemanticType{semantic::ArrayType{i32_type, 10}});
+        i32_array_8_type = get_typeID(SemanticType{semantic::ArrayType{i32_type, 8}});
+        anyint_array_8_type = get_typeID(SemanticType{semantic::ArrayType{anyint_type, 8}});
+        anyuint_array_8_type = get_typeID(SemanticType{semantic::ArrayType{anyuint_type, 8}});
+        
+        // Reference types
+        i32_ref_type = get_typeID(SemanticType{semantic::ReferenceType{i32_type, false}});
+        i32_mut_ref_type = get_typeID(SemanticType{semantic::ReferenceType{i32_type, true}});
+        u32_ref_type = get_typeID(SemanticType{semantic::ReferenceType{u32_type, false}});
     }
     
-    // Primitive types
+    // Common test types
     TypeId i32_type, u32_type, isize_type, usize_type;
     TypeId bool_type, char_type, string_type;
-    
-    // Inference types
     TypeId anyint_type, anyuint_type;
-    
-    // Array types
+    TypeId never_type, unit_type;
     TypeId i32_array_5_type, u32_array_5_type, i32_array_10_type;
-    
-    // Reference types
+    TypeId i32_array_8_type, anyint_array_8_type, anyuint_array_8_type;
     TypeId i32_ref_type, i32_mut_ref_type, u32_ref_type;
 };
 
-// Test 1: Inference Type Detection
-TEST_F(TypeCompatibilityTest, IsInferenceType) {
-    // Positive cases
-    EXPECT_TRUE(is_inference_type(anyint_type));
-    EXPECT_TRUE(is_inference_type(anyuint_type));
-    
-    // Negative cases
-    EXPECT_FALSE(is_inference_type(i32_type));
-    EXPECT_FALSE(is_inference_type(u32_type));
-    EXPECT_FALSE(is_inference_type(bool_type));
-    EXPECT_FALSE(is_inference_type(i32_array_5_type));
-    EXPECT_FALSE(is_inference_type(i32_ref_type));
-}
-
-// Test 2: Inference Type Coercion
-TEST_F(TypeCompatibilityTest, CanInferenceCoerceTo) {
-    // __ANYINT__ coercion
-    EXPECT_TRUE(can_inference_coerce_to(PrimitiveKind::__ANYINT__, PrimitiveKind::I32));
-    EXPECT_TRUE(can_inference_coerce_to(PrimitiveKind::__ANYINT__, PrimitiveKind::ISIZE));
-    EXPECT_FALSE(can_inference_coerce_to(PrimitiveKind::__ANYINT__, PrimitiveKind::U32));
-    EXPECT_FALSE(can_inference_coerce_to(PrimitiveKind::__ANYINT__, PrimitiveKind::USIZE));
-    EXPECT_FALSE(can_inference_coerce_to(PrimitiveKind::__ANYINT__, PrimitiveKind::BOOL));
-    
-    // __ANYUINT__ coercion
-    EXPECT_TRUE(can_inference_coerce_to(PrimitiveKind::__ANYUINT__, PrimitiveKind::U32));
-    EXPECT_TRUE(can_inference_coerce_to(PrimitiveKind::__ANYUINT__, PrimitiveKind::USIZE));
-    EXPECT_TRUE(can_inference_coerce_to(PrimitiveKind::__ANYUINT__, PrimitiveKind::__ANYINT__));
-    EXPECT_TRUE(can_inference_coerce_to(PrimitiveKind::__ANYUINT__, PrimitiveKind::I32));
-    EXPECT_TRUE(can_inference_coerce_to(PrimitiveKind::__ANYUINT__, PrimitiveKind::ISIZE));
-    EXPECT_FALSE(can_inference_coerce_to(PrimitiveKind::__ANYUINT__, PrimitiveKind::BOOL));
-    
-    // Non-inference types
-    EXPECT_FALSE(can_inference_coerce_to(PrimitiveKind::I32, PrimitiveKind::U32));
-    EXPECT_FALSE(can_inference_coerce_to(PrimitiveKind::U32, PrimitiveKind::I32));
-}
-
-// Test 3: Type Coercion (try_coerce_to)
-TEST_F(TypeCompatibilityTest, TryCoerceTo) {
-    // Identical types
-    EXPECT_EQ(try_coerce_to(i32_type, i32_type), i32_type);
-    EXPECT_EQ(try_coerce_to(anyint_type, anyint_type), anyint_type);
-    
-    // Inference to concrete
-    EXPECT_EQ(try_coerce_to(anyint_type, i32_type), i32_type);
-    EXPECT_EQ(try_coerce_to(anyint_type, isize_type), isize_type);
-    EXPECT_EQ(try_coerce_to(anyuint_type, u32_type), u32_type);
-    EXPECT_EQ(try_coerce_to(anyuint_type, usize_type), usize_type);
-    EXPECT_EQ(try_coerce_to(anyuint_type, anyint_type), anyint_type);
-    
-    // Invalid inference coercion
-    EXPECT_EQ(try_coerce_to(anyint_type, u32_type), std::nullopt);
-    EXPECT_EQ(try_coerce_to(anyuint_type, i32_type), i32_type);
-    
-    // Array coercion - same size, compatible elements
-    EXPECT_EQ(try_coerce_to(i32_array_5_type, i32_array_5_type), i32_array_5_type);
-    EXPECT_EQ(try_coerce_to(i32_array_5_type, u32_array_5_type), std::nullopt); // Different element types
-    
-    // Array coercion - different sizes
-    EXPECT_EQ(try_coerce_to(i32_array_5_type, i32_array_10_type), std::nullopt);
-    
-    // Reference coercion - same mutability
-    EXPECT_EQ(try_coerce_to(i32_ref_type, i32_ref_type), i32_ref_type);
-    
-    // Reference coercion - mutable to immutable succeeds (implementation allows this)
-    EXPECT_EQ(try_coerce_to(i32_mut_ref_type, i32_ref_type), i32_ref_type);
-    
-    // Reference coercion - immutable to mutable fails (implementation doesn't allow this)
-    EXPECT_EQ(try_coerce_to(i32_ref_type, i32_mut_ref_type), std::nullopt);
-    
-    // Different reference types
-    EXPECT_EQ(try_coerce_to(i32_ref_type, u32_ref_type), std::nullopt);
-}
-
-// Test 4: Common Type Finding (find_common_type)
-TEST_F(TypeCompatibilityTest, FindCommonType) {
-    // Identical types
-    EXPECT_EQ(find_common_type(i32_type, i32_type), i32_type);
-    EXPECT_EQ(find_common_type(anyint_type, anyint_type), anyint_type);
-    
-    // Inference placeholder resolution
-    EXPECT_EQ(find_common_type(anyuint_type, anyint_type), anyint_type);
-    EXPECT_EQ(find_common_type(anyint_type, anyuint_type), anyint_type);
-    
-    // Coercible types
-    EXPECT_EQ(find_common_type(anyint_type, i32_type), i32_type);
-    EXPECT_EQ(find_common_type(anyuint_type, u32_type), u32_type);
-    
-    // Non-coercible primitive types
-    EXPECT_EQ(find_common_type(i32_type, u32_type), std::nullopt);
-    EXPECT_EQ(find_common_type(i32_type, bool_type), std::nullopt);
-    
-    // Array common types
-    EXPECT_EQ(find_common_type(i32_array_5_type, i32_array_5_type), i32_array_5_type);
-    EXPECT_EQ(find_common_type(i32_array_5_type, u32_array_5_type), std::nullopt); // Different elements
-    EXPECT_EQ(find_common_type(i32_array_5_type, i32_array_10_type), std::nullopt); // Different sizes
-}
-
-// Test 5: Assignment Compatibility (is_assignable_to)
-TEST_F(TypeCompatibilityTest, IsAssignableFrom) {
-    // Identical types
+// Test basic type compatibility
+TEST_F(TypeCompatibilityTest, BasicTypeCompatibility) {
+    // Identical types should be assignable
     EXPECT_TRUE(is_assignable_to(i32_type, i32_type));
-    EXPECT_TRUE(is_assignable_to(anyint_type, anyint_type));
+    EXPECT_TRUE(is_assignable_to(u32_type, u32_type));
+    EXPECT_TRUE(is_assignable_to(bool_type, bool_type));
     
-    // Coercible types
-    EXPECT_TRUE(is_assignable_to(anyint_type, i32_type));
-    EXPECT_TRUE(is_assignable_to(anyuint_type, u32_type));
-    
-    // Non-coercible types
+    // Different primitive types should not be assignable
     EXPECT_FALSE(is_assignable_to(i32_type, u32_type));
-    EXPECT_FALSE(is_assignable_to(anyint_type, u32_type));
+    EXPECT_FALSE(is_assignable_to(i32_type, bool_type));
+    EXPECT_FALSE(is_assignable_to(u32_type, bool_type));
+}
+
+// Test inference type compatibility
+TEST_F(TypeCompatibilityTest, InferenceTypeCompatibility) {
+    // __ANYINT__ should coerce to I32 and ISIZE
+    EXPECT_TRUE(is_assignable_to(anyint_type, i32_type));
+    EXPECT_TRUE(is_assignable_to(anyint_type, isize_type));
     
-    // Array types
+    // __ANYUINT__ should coerce to U32 and USIZE
+    EXPECT_TRUE(is_assignable_to(anyuint_type, u32_type));
+    EXPECT_TRUE(is_assignable_to(anyuint_type, usize_type));
+    
+    // __ANYUINT__ should also coerce to __ANYINT__
+    EXPECT_TRUE(is_assignable_to(anyuint_type, anyint_type));
+    
+    // But not the other way around
+    EXPECT_FALSE(is_assignable_to(i32_type, anyint_type));
+    EXPECT_FALSE(is_assignable_to(anyint_type, anyuint_type));
+}
+
+// Test array type compatibility
+TEST_F(TypeCompatibilityTest, ArrayTypeCompatibility) {
+    // Same element type and size should be assignable
     EXPECT_TRUE(is_assignable_to(i32_array_5_type, i32_array_5_type));
-    EXPECT_FALSE(is_assignable_to(i32_array_5_type, u32_array_5_type));
+    
+    // Different sizes should not be assignable
     EXPECT_FALSE(is_assignable_to(i32_array_5_type, i32_array_10_type));
     
-    // Reference types
+    // Compatible element types with same size should be assignable
+    EXPECT_TRUE(is_assignable_to(anyint_array_8_type, i32_array_8_type));
+    EXPECT_TRUE(is_assignable_to(anyuint_array_8_type, i32_array_8_type));
+    
+    // Incompatible element types should not be assignable
+    EXPECT_FALSE(is_assignable_to(i32_array_5_type, u32_array_5_type));
+}
+
+// Test reference type compatibility
+TEST_F(TypeCompatibilityTest, ReferenceTypeCompatibility) {
+    // Same reference types should be assignable
     EXPECT_TRUE(is_assignable_to(i32_ref_type, i32_ref_type));
-    EXPECT_FALSE(is_assignable_to(i32_ref_type, i32_mut_ref_type)); // immutable to mutable fails
-    EXPECT_TRUE(is_assignable_to(i32_mut_ref_type, i32_ref_type)); // mutable to immutable succeeds
+    
+    // Immutable to mutable reference should not be assignable
+    EXPECT_FALSE(is_assignable_to(i32_ref_type, i32_mut_ref_type));
+    
+    // Mutable to immutable reference should be assignable
+    EXPECT_TRUE(is_assignable_to(i32_mut_ref_type, i32_ref_type));
+    
+    // Different base types should not be assignable
+    EXPECT_FALSE(is_assignable_to(i32_ref_type, u32_ref_type));
 }
 
-// Test 6: Cast Validation (is_castable_to)
-TEST_F(TypeCompatibilityTest, IsCastableTo) {
-    // Same types
-    EXPECT_TRUE(is_castable_to(i32_type, i32_type));
-    EXPECT_TRUE(is_castable_to(anyint_type, anyint_type));
+// Test common type finding
+TEST_F(TypeCompatibilityTest, CommonTypeFinding) {
+    // Identical types should have common type
+    auto common = find_common_type(i32_type, i32_type);
+    ASSERT_TRUE(common.has_value());
+    EXPECT_EQ(*common, i32_type);
     
-    // All primitive types can be cast to each other
-    EXPECT_TRUE(is_castable_to(i32_type, u32_type));
-    EXPECT_TRUE(is_castable_to(u32_type, i32_type));
-    EXPECT_TRUE(is_castable_to(i32_type, bool_type));
-    EXPECT_TRUE(is_castable_to(bool_type, i32_type));
-    EXPECT_TRUE(is_castable_to(anyint_type, u32_type));
-    EXPECT_TRUE(is_castable_to(anyuint_type, i32_type));
+    // Inference types should find common types
+    common = find_common_type(anyint_type, i32_type);
+    ASSERT_TRUE(common.has_value());
+    EXPECT_EQ(*common, i32_type);
     
-    // Reference types
-    EXPECT_TRUE(is_castable_to(i32_ref_type, i32_ref_type));
-    EXPECT_TRUE(is_castable_to(i32_ref_type, u32_ref_type)); // Different underlying types
-    EXPECT_TRUE(is_castable_to(i32_mut_ref_type, i32_ref_type));
-    EXPECT_TRUE(is_castable_to(i32_ref_type, i32_mut_ref_type));
+    common = find_common_type(anyuint_type, anyint_type);
+    ASSERT_TRUE(common.has_value());
+    EXPECT_EQ(*common, anyint_type);
     
-    // Array types
-    EXPECT_TRUE(is_castable_to(i32_array_5_type, i32_array_5_type));
-    EXPECT_TRUE(is_castable_to(i32_array_5_type, u32_array_5_type)); // Different element types
-    EXPECT_FALSE(is_castable_to(i32_array_5_type, i32_array_10_type)); // Different sizes
+    // Incompatible types should not have common type
+    common = find_common_type(i32_type, u32_type);
+    EXPECT_FALSE(common.has_value());
     
-    // Mixed types
-    EXPECT_FALSE(is_castable_to(i32_type, i32_ref_type));
-    EXPECT_FALSE(is_castable_to(i32_ref_type, i32_type));
-    EXPECT_FALSE(is_castable_to(i32_type, i32_array_5_type));
-    EXPECT_FALSE(is_castable_to(i32_array_5_type, i32_type));
+    common = find_common_type(i32_type, bool_type);
+    EXPECT_FALSE(common.has_value());
 }
 
-// Test 7: Type Comparability (are_comparable)
-TEST_F(TypeCompatibilityTest, AreComparable) {
-    // Identical types
+// Test array common type finding
+TEST_F(TypeCompatibilityTest, ArrayCommonTypeFinding) {
+    // Same array types should have common type
+    auto common = find_common_type(i32_array_5_type, i32_array_5_type);
+    ASSERT_TRUE(common.has_value());
+    EXPECT_EQ(*common, i32_array_5_type);
+    
+    // Compatible element types should find common type
+    common = find_common_type(anyint_array_8_type, i32_array_8_type);
+    ASSERT_TRUE(common.has_value());
+    EXPECT_EQ(*common, i32_array_8_type);
+    
+    // Different sizes should not have common type
+    common = find_common_type(i32_array_5_type, i32_array_10_type);
+    EXPECT_FALSE(common.has_value());
+}
+
+// Test type comparability
+TEST_F(TypeCompatibilityTest, TypeComparability) {
+    // Identical types should be comparable
     EXPECT_TRUE(are_comparable(i32_type, i32_type));
-    EXPECT_TRUE(are_comparable(anyint_type, anyint_type));
+    EXPECT_TRUE(are_comparable(u32_type, u32_type));
+    EXPECT_TRUE(are_comparable(bool_type, bool_type));
     
-    // Types with common types
+    // Types with common type should be comparable
     EXPECT_TRUE(are_comparable(anyint_type, i32_type));
     EXPECT_TRUE(are_comparable(anyuint_type, u32_type));
-    EXPECT_TRUE(are_comparable(anyuint_type, anyint_type));
     
-    // Non-comparable types
+    // Incompatible types should not be comparable
     EXPECT_FALSE(are_comparable(i32_type, u32_type));
     EXPECT_FALSE(are_comparable(i32_type, bool_type));
-    EXPECT_FALSE(are_comparable(anyint_type, u32_type));
-    
-    // Array types
-    EXPECT_TRUE(are_comparable(i32_array_5_type, i32_array_5_type));
-    EXPECT_FALSE(are_comparable(i32_array_5_type, u32_array_5_type));
-    EXPECT_FALSE(are_comparable(i32_array_5_type, i32_array_10_type));
 }
 
-// Test 8: Inference Type Resolution
-TEST_F(TypeCompatibilityTest, ResolveInferenceType) {
-    // Valid resolutions
-    EXPECT_EQ(resolve_inference_type(anyint_type, i32_type), i32_type);
-    EXPECT_EQ(resolve_inference_type(anyint_type, isize_type), isize_type);
-    EXPECT_EQ(resolve_inference_type(anyuint_type, u32_type), u32_type);
-    EXPECT_EQ(resolve_inference_type(anyuint_type, usize_type), usize_type);
-    // This should work since __ANYUINT__ can coerce to __ANYINT__
-    EXPECT_EQ(resolve_inference_type(anyuint_type, anyint_type), anyint_type);
+// Test castability
+TEST_F(TypeCompatibilityTest, TypeCastability) {
+    // Same types should be castable
+    EXPECT_TRUE(is_castable_to(i32_type, i32_type));
+    EXPECT_TRUE(is_castable_to(u32_type, u32_type));
     
-    // Invalid resolutions should throw
-    EXPECT_THROW(resolve_inference_type(anyint_type, u32_type), std::logic_error);
-    EXPECT_THROW(resolve_inference_type(anyint_type, bool_type), std::logic_error);
+    // All primitive types should be castable to each other
+    EXPECT_TRUE(is_castable_to(i32_type, u32_type));
+    EXPECT_TRUE(is_castable_to(i32_type, bool_type));
+    EXPECT_TRUE(is_castable_to(bool_type, i32_type));
+    
+    // Array types with same size and castable elements should be castable
+    EXPECT_TRUE(is_castable_to(i32_array_5_type, u32_array_5_type));
+    
+    // Array types with different sizes should not be castable
+    EXPECT_FALSE(is_castable_to(i32_array_5_type, i32_array_10_type));
 }
 
-TEST_F(TypeCompatibilityTest, ResolveInferenceIfNeeded) {
-    // Resolution should happen when source is inference type
-    TypeId source = anyint_type;
-    resolve_inference_if_needed(source, i32_type);
-    EXPECT_EQ(source, i32_type);
+// Test NeverType behavior
+TEST_F(TypeCompatibilityTest, NeverTypeBehavior) {
+    // Test is_never_type helper function
+    EXPECT_TRUE(semantic::helper::type_helper::is_never_type(never_type));
+    EXPECT_FALSE(semantic::helper::type_helper::is_never_type(i32_type));
+    EXPECT_FALSE(semantic::helper::type_helper::is_never_type(anyint_type));
+    EXPECT_FALSE(semantic::helper::type_helper::is_never_type(unit_type));
+    EXPECT_FALSE(semantic::helper::type_helper::is_never_type(i32_array_5_type));
+    EXPECT_FALSE(semantic::helper::type_helper::is_never_type(i32_ref_type));
     
-    source = anyuint_type;
-    resolve_inference_if_needed(source, u32_type);
-    EXPECT_EQ(source, u32_type);
+    // NeverType should coerce to any type
+    EXPECT_TRUE(is_assignable_to(never_type, i32_type));
+    EXPECT_TRUE(is_assignable_to(never_type, u32_type));
+    EXPECT_TRUE(is_assignable_to(never_type, bool_type));
+    EXPECT_TRUE(is_assignable_to(never_type, unit_type));
+    EXPECT_TRUE(is_assignable_to(never_type, i32_array_5_type));
+    EXPECT_TRUE(is_assignable_to(never_type, i32_ref_type));
     
-    source = anyuint_type;
-    resolve_inference_if_needed(source, anyint_type);
-    EXPECT_EQ(source, anyint_type); // anyuint can coerce to anyint, so source becomes anyint_type
+    // But other types should not coerce to NeverType
+    EXPECT_FALSE(is_assignable_to(i32_type, never_type));
+    EXPECT_FALSE(is_assignable_to(anyint_type, never_type));
+    EXPECT_FALSE(is_assignable_to(unit_type, never_type));
     
-    // Non-inference types should remain unchanged
-    source = i32_type;
-    resolve_inference_if_needed(source, u32_type);
-    EXPECT_EQ(source, i32_type);
+    // NeverType should find common type with any type (returning the other type)
+    auto common = find_common_type(never_type, i32_type);
+    ASSERT_TRUE(common.has_value());
+    EXPECT_EQ(*common, i32_type);
     
-    source = u32_type;
-    resolve_inference_if_needed(source, i32_type);
-    EXPECT_EQ(source, u32_type);
+    common = find_common_type(u32_type, never_type);
+    ASSERT_TRUE(common.has_value());
+    EXPECT_EQ(*common, u32_type);
     
-    // Array types should remain unchanged (not primitive)
-    source = i32_array_5_type;
-    resolve_inference_if_needed(source, u32_array_5_type);
-    EXPECT_EQ(source, i32_array_5_type);
+    common = find_common_type(never_type, never_type);
+    ASSERT_TRUE(common.has_value());
+    EXPECT_EQ(*common, never_type);
+    
+    // NeverType should be comparable with any type
+    EXPECT_TRUE(are_comparable(never_type, i32_type));
+    EXPECT_TRUE(are_comparable(u32_type, never_type));
+    EXPECT_TRUE(are_comparable(never_type, never_type));
+    
+    // NeverType should be castable to any type
+    EXPECT_TRUE(is_castable_to(never_type, i32_type));
+    EXPECT_TRUE(is_castable_to(never_type, u32_type));
+    EXPECT_TRUE(is_castable_to(never_type, bool_type));
+    EXPECT_TRUE(is_castable_to(never_type, unit_type));
 }
 
-} // anonymous namespace
+} // namespace

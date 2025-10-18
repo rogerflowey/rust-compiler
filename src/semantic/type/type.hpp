@@ -65,6 +65,11 @@ struct NeverType{
         return true;
     }
 };
+struct UnderscoreType{
+    bool operator==(const UnderscoreType&) const {
+        return true;
+    }
+};
 
 
 using TypeVariant = std::variant<
@@ -74,7 +79,8 @@ using TypeVariant = std::variant<
     ReferenceType,
     ArrayType,
     UnitType,
-    NeverType
+    NeverType,
+    UnderscoreType
 >;
 
 struct Type {
@@ -106,6 +112,9 @@ struct TypeHash {
     }
     size_t operator()(const NeverType&) const {
         return 0xDABCABCD;
+    }
+    size_t operator()(const UnderscoreType&) const {
+        return 0xDABCABCE;
     }
     size_t operator()(const Type& t) const {
         return std::visit(*this, t.value);

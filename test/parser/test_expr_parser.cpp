@@ -441,6 +441,37 @@ TEST_F(ExprParserTest, BlockAsExpressionValue) {
     }
 }
 
+TEST_F(ExprParserTest, BlockFinalExprAbsorbsTrailingWithBlock) {
+    auto e = parse_expr("{ if true { 1i32 } }");
+    auto block = get_node<BlockExpr>(e);
+    ASSERT_NE(block, nullptr);
+    EXPECT_TRUE(block->statements.empty());
+    ASSERT_TRUE(block->final_expr.has_value());
+    auto iff = get_node<IfExpr>(*block->final_expr);
+    ASSERT_NE(iff, nullptr);
+}
+
+TEST_F(ExprParserTest, BlockFinalExprAbsorbsTrailingIfElseChain) {
+  auto e = parse_expr(
+    "{ if low == high { return a[low]; } let p: usize = partition(a, low, high); "
+    "if k == p { a[p] } else if k < p { select_k(a, low, p - 1, k) } else { select_k(a, p + 1, high, k) } }"
+  );
+  auto block = get_node<BlockExpr>(e);
+  ASSERT_NE(block, nullptr);
+  ASSERT_EQ(block->statements.size(), 2u);
+  ASSERT_TRUE(block->final_expr.has_value());
+
+  auto final_if = get_node<IfExpr>(*block->final_expr);
+  ASSERT_NE(final_if, nullptr);
+  ASSERT_TRUE(final_if->else_branch.has_value());
+
+  auto else_if = get_node<IfExpr>(*final_if->else_branch);
+  ASSERT_NE(else_if, nullptr);
+  ASSERT_TRUE(else_if->else_branch.has_value());
+  auto else_block = get_node<BlockExpr>(*else_if->else_branch);
+  ASSERT_NE(else_block, nullptr);
+}
+
 TEST_F(ExprParserTest, PrecedenceInteractions) {
   {
     auto e = parse_expr("!visited[i]");

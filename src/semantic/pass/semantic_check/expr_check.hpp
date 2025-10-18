@@ -6,6 +6,9 @@
 #include "semantic/utils.hpp"
 #include "type/impl_table.hpp"
 #include <stdexcept>
+#include <string>
+
+#include "utils/debug_context.hpp"
 
 namespace semantic {
 
@@ -13,6 +16,23 @@ class ExprChecker {
     ImplTable& impl_table;
 public:
     explicit ExprChecker(ImplTable& impl_table) : impl_table(impl_table) {}
+
+    class ContextGuard {
+        debug::Context::Guard guard;
+
+    public:
+        ContextGuard(std::string kind, std::string name);
+        ContextGuard(ContextGuard&& other) noexcept = default;
+        ContextGuard& operator=(ContextGuard&&) = delete;
+        ~ContextGuard() = default;
+
+        ContextGuard(const ContextGuard&) = delete;
+        ContextGuard& operator=(const ContextGuard&) = delete;
+    };
+
+    [[nodiscard]] ContextGuard enter_context(std::string kind, std::string name);
+    [[nodiscard]] std::string format_error(const std::string& message) const;
+    [[noreturn]] void throw_in_context(const std::string& message) const;
 
     // Main entry point for checking an expression
     ExprInfo check(hir::Expr& expr){

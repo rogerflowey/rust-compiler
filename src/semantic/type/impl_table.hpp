@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace semantic {
@@ -40,6 +41,8 @@ private:
             items.recorded_names.push_back(name);
         }
     }
+
+    static hir::Method *get_array_len_method();
 
 public:
     ImplTable() = default;
@@ -77,6 +80,17 @@ inline void ImplTable::add_impl(TypeId type, hir::Impl &impl_symbol) {
     }
 }
 
+inline hir::Method *ImplTable::get_array_len_method() {
+    static hir::Method method = [] {
+        hir::Method m{};
+        m.self_param.is_reference = true;
+        m.self_param.is_mutable = false;
+        m.return_type = hir::TypeAnnotation{get_typeID(Type{PrimitiveKind::USIZE})};
+        return m;
+    }();
+    return &method;
+}
+
 inline hir::Function *
 ImplTable::lookup_function(TypeId type, const ast::Identifier &name) const {
     auto it = items_by_type.find(type);
@@ -100,11 +114,18 @@ ImplTable::lookup_const(TypeId type, const ast::Identifier &name) const {
 inline hir::Method *
 ImplTable::lookup_method(TypeId type, const ast::Identifier &name) const {
     auto it = items_by_type.find(type);
-    if (it == items_by_type.end()) {
-        return nullptr;
+    if (it != items_by_type.end()) {
+        auto method_it = it->second.methods.find(name.name);
+        if (method_it != it->second.methods.end()) {
+            return method_it->second;
+        }
     }
-    auto method_it = it->second.methods.find(name.name);
-    return method_it != it->second.methods.end() ? method_it->second : nullptr;
+
+    if (name.name == "len" && std::holds_alternative<ArrayType>(type->value)) {
+        return get_array_len_method();
+    }
+
+    return nullptr;
 }
 
 inline bool ImplTable::has_impls(TypeId type) const {

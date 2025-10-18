@@ -78,6 +78,34 @@ TEST_F(ItemParserTest, ParsesFunctionNoReturnType) {
   ASSERT_TRUE(fn->body.value()->final_expr.has_value());
 }
 
+TEST_F(ItemParserTest, FunctionBlockFinalExprWithIfElseChain) {
+  auto it = parse_item(
+    "fn select_k(a: &mut [i32; 11], low: usize, high: usize, k: usize) -> i32 {\n"
+    "    if (low == high) {\n"
+    "        return a[low];\n"
+    "    }\n"
+    "    let p: usize = partition(a, low, high);\n"
+    "    if (k == p) {\n"
+    "        a[p]\n"
+    "    } else if (k < p) {\n"
+    "        select_k(a, low, p - 1, k)\n"
+    "    } else {\n"
+    "        select_k(a, p + 1, high, k)\n"
+    "    }\n"
+    "}"
+  );
+  auto fn = get_node<FunctionItem>(it);
+  ASSERT_NE(fn, nullptr);
+  ASSERT_TRUE(fn->body.has_value());
+  auto* body = fn->body.value().get();
+  ASSERT_NE(body, nullptr);
+  ASSERT_EQ(body->statements.size(), 2u);
+  ASSERT_TRUE(body->final_expr.has_value());
+  auto* final_if = get_node<IfExpr>(body->final_expr);
+  ASSERT_NE(final_if, nullptr);
+  ASSERT_TRUE(final_if->else_branch.has_value());
+}
+
 TEST_F(ItemParserTest, ParsesFunctionWithReturnType) {
     auto it = parse_item("fn id(x: i32) -> i32 { x }");
     auto fn = get_node<FunctionItem>(it);

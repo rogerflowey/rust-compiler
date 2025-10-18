@@ -4,11 +4,11 @@
 #include "semantic/hir/hir.hpp"
 #include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/hir/helper.hpp"
-#include "semantic/type/helper.hpp"
 #include "semantic/type/type.hpp"
 #include "semantic/type/impl_table.hpp"
 #include "type_compatibility.hpp"
 #include <unordered_set>
+#include <string>
 
 namespace semantic {
 
@@ -89,6 +89,8 @@ public:
             throw std::logic_error("Constant definition missing type annotation");
         }
 
+        auto context_guard = expr_checker.enter_context("const", hir::helper::get_name(const_def).name);
+
         // Check the expression
         auto info = expr_checker.check(*const_def.expr);
         
@@ -97,7 +99,7 @@ public:
         
         // Check type compatibility between expression and declared type
         if (!is_assignable_to(info.type, declared_type)) {
-            throw std::runtime_error("Constant expression type doesn't match declared type");
+            expr_checker.throw_in_context("Constant expression type doesn't match declared type");
         }
         
         // Base visitor handles any nested items
@@ -121,6 +123,8 @@ public:
             throw std::logic_error("Function missing return type annotation");
         }
         
+        auto context_guard = expr_checker.enter_context("function", hir::helper::get_name(function).name);
+
         // Check function body
         if (function.body) {
             auto info = expr_checker.check(*function.body);
@@ -131,7 +135,7 @@ public:
             // If function body can complete normally, check return type compatibility
             if (info.has_normal_endpoint()) {
                 if (!is_assignable_to(info.type, return_type)) {
-                    throw std::runtime_error("Function body type doesn't match return type");
+                    expr_checker.throw_in_context("Function body type doesn't match return type");
                 }
             }
         }
@@ -157,6 +161,8 @@ public:
             throw std::logic_error("Method missing return type annotation");
         }
         
+        auto context_guard = expr_checker.enter_context("method", hir::helper::get_name(method).name);
+
         // Check method body
         if (method.body) {
             auto info = expr_checker.check(*method.body);
@@ -167,7 +173,7 @@ public:
             // If method body can complete normally, check return type compatibility
             if (info.has_normal_endpoint()) {
                 if (!is_assignable_to(info.type, return_type)) {
-                    throw std::runtime_error("Method body type doesn't match return type");
+                    expr_checker.throw_in_context("Method body type doesn't match return type");
                 }
             }
         }
@@ -187,6 +193,7 @@ public:
         if (struct_def.fields.size() != struct_def.field_type_annotations.size()) {
             throw std::logic_error("Struct field count mismatch with type annotations");
         }
+        auto context_guard = expr_checker.enter_context("struct", hir::helper::get_name(struct_def).name);
         
         // Validate all field type annotations are resolved
         for (const auto& type_annotation : struct_def.field_type_annotations) {
@@ -198,7 +205,7 @@ public:
         std::unordered_set<ast::Identifier> field_names;
         for (const auto& field : struct_def.fields) {
             if (field_names.contains(field.name)) {
-                throw std::runtime_error("Duplicate field name in struct");
+                expr_checker.throw_in_context("Duplicate field name in struct");
             }
             field_names.insert(field.name);
         }
@@ -214,11 +221,12 @@ public:
      * Validates enum variant names and checks for duplicates.
      */
     void visit(hir::EnumDef& enum_def) {
+        auto context_guard = expr_checker.enter_context("enum", hir::helper::get_name(enum_def).name);
         // Check for duplicate variant names
         std::unordered_set<ast::Identifier> variant_names;
         for (const auto& variant : enum_def.variants) {
             if (variant_names.contains(variant.name)) {
-                throw std::runtime_error("Duplicate variant name in enum");
+                expr_checker.throw_in_context("Duplicate variant name in enum");
             }
             variant_names.insert(variant.name);
         }
@@ -235,6 +243,7 @@ public:
      * Note: Full trait validation is handled by the TraitValidator pass.
      */
     void visit(hir::Trait& trait) {
+        auto context_guard = expr_checker.enter_context("trait", hir::helper::get_name(trait).name);
         // Basic validation - trait items should not have bodies
         // Full signature validation is handled by TraitValidator
         for (auto& item : trait.items) {
@@ -242,15 +251,15 @@ public:
                 using T = std::decay_t<decltype(associated_item)>;
                 if constexpr (std::is_same_v<T, hir::Function>) {
                     if (associated_item.body) {
-                        throw std::runtime_error("Trait function cannot have a body");
+                        expr_checker.throw_in_context("Trait function cannot have a body");
                     }
                 } else if constexpr (std::is_same_v<T, hir::Method>) {
                     if (associated_item.body) {
-                        throw std::runtime_error("Trait method cannot have a body");
+                        expr_checker.throw_in_context("Trait method cannot have a body");
                     }
                 } else if constexpr (std::is_same_v<T, hir::ConstDef>) {
                     if (associated_item.expr) {
-                        throw std::runtime_error("Trait constant cannot have an initializer");
+                        expr_checker.throw_in_context("Trait constant cannot have an initializer");
                     }
                 }
             }, item->value);
@@ -268,6 +277,7 @@ public:
      * Note: Full trait implementation validation is handled by the TraitValidator pass.
      */
     void visit(hir::Impl& impl) {
+        auto context_guard = expr_checker.enter_context("impl", describe_impl_name(impl));
         // Validate the for_type
         hir::helper::get_resolved_type(impl.for_type);
         
@@ -290,6 +300,76 @@ public:
     }
 
 // No private methods needed - trait validation is handled by TraitValidator
+private:
+    std::string describe_type(semantic::TypeId type_id) const {
+        return std::visit(
+            Overloaded{
+                [](PrimitiveKind kind) -> std::string {
+                    switch (kind) {
+                    case PrimitiveKind::I32:
+                        return "i32";
+                    case PrimitiveKind::U32:
+                        return "u32";
+                    case PrimitiveKind::ISIZE:
+                        return "isize";
+                    case PrimitiveKind::USIZE:
+                        return "usize";
+                    case PrimitiveKind::BOOL:
+                        return "bool";
+                    case PrimitiveKind::CHAR:
+                        return "char";
+                    case PrimitiveKind::STRING:
+                        return "string";
+                    case PrimitiveKind::__ANYINT__:
+                        return "<any-int>";
+                    case PrimitiveKind::__ANYUINT__:
+                        return "<any-uint>";
+                    }
+                    return "<primitive>";
+                },
+                [](const StructType& st) -> std::string {
+                    return "struct " + hir::helper::get_name(*st.symbol).name;
+                },
+                [](const EnumType& en) -> std::string {
+                    return "enum " + hir::helper::get_name(*en.symbol).name;
+                },
+                [this](const ReferenceType& ref) -> std::string {
+                    return std::string(ref.is_mutable ? "&mut " : "&") + describe_type(ref.referenced_type);
+                },
+                [this](const ArrayType& array) -> std::string {
+                    return "[" + std::to_string(array.size) + "] " + describe_type(array.element_type);
+                },
+                [](const UnitType&) -> std::string {
+                    return "unit";
+                },
+                [](const NeverType&) -> std::string {
+                    return "never";
+                },
+                [](const UnderscoreType&) -> std::string {
+                    return "_";
+                }
+            },
+            type_id->value);
+    }
+
+    std::string describe_impl_name(const hir::Impl& impl) const {
+        std::string name = "impl";
+        if (impl.trait) {
+            name += " ";
+            name += std::visit(
+                Overloaded{
+                    [](const ast::Identifier& id) { return id.name; },
+                    [](const hir::Trait* trait_ptr) { return hir::helper::get_name(*trait_ptr).name; }
+                },
+                *impl.trait);
+        } else {
+            name += " (inherent)";
+        }
+
+        name += " for ";
+        name += describe_type(hir::helper::get_resolved_type(impl.for_type));
+        return name;
+    }
 };
 
 } // namespace semantic

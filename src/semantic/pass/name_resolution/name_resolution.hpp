@@ -124,6 +124,7 @@ class NameResolver : public hir::HirVisitorBase<NameResolver> {
 public:
   NameResolver(ImplTable &impl_table) : impl_table(impl_table){};
   using hir::HirVisitorBase<NameResolver>::visit;
+  using hir::HirVisitorBase<NameResolver>::visit_block;
 
   void define_item(hir::Item &item) {
     // Check if this is an Impl (which doesn't have a name)
@@ -161,15 +162,16 @@ public:
     scopes.pop();
   }
 
-  void visit(hir::Block &block) {
-    // block scope allows capture of outer bindings
+  void visit_block(hir::Block &block) {
     scopes.push(Scope{&scopes.top(), false});
     for (auto &item : block.items) {
       define_item(*item);
     }
-    base().visit(block);
+    hir::HirVisitorBase<NameResolver>::visit_block(block);
     scopes.pop();
   }
+
+  void visit(hir::Block &block) { visit_block(block); }
 
   // --- Items ---
   // Function, Trait, Impl create new scopes
@@ -178,13 +180,6 @@ public:
     // function scope does not allow capture of outer bindings
     scopes.push(Scope{&scopes.top(), true});
     local_owner_stack.push_back(&func.locals);
-
-    //first define all items in the body
-    if (func.body) {
-        for (auto &item : func.body->items) {
-            define_item(*item);
-        }
-    }
 
     // the body will be treated as a pure block
     base().visit(func);
@@ -219,14 +214,6 @@ public:
     auto *self_ptr = self_local.get();
     method.self_local = std::move(self_local);
     register_local(*self_ptr);
-
-    // first define all items in the body
-    if (method.body) {
-        for (auto &item : method.body->items) {
-            define_item(*item);
-        }
-    }
-
     base().visit(method);
     local_owner_stack.pop_back();
     scopes.pop();

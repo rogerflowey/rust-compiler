@@ -79,6 +79,13 @@ std::unique_ptr<hir::Expr> make_integer_literal(uint64_t value) {
   return std::make_unique<hir::Expr>(hir::Literal(std::move(literal)));
 }
 
+std::unique_ptr<hir::Expr> make_boolean_literal(bool value) {
+    hir::Literal literal{.value = value,
+                                             .ast_node = static_cast<const ast::BoolLiteralExpr *>(
+                                                     nullptr)};
+    return std::make_unique<hir::Expr>(hir::Literal(std::move(literal)));
+}
+
 TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   AstStorage arena;
   auto program = std::make_unique<hir::Program>();
@@ -269,6 +276,49 @@ TEST(NameResolutionTest, ReportsUseBeforeBindingInLet) {
 
   auto fn =
       hir::Function({}, {}, std::nullopt, std::move(block), {}, fn_ast_ptr);
+  program->items.push_back(
+      std::make_unique<hir::Item>(hir::Function(std::move(fn))));
+
+  ImplTable impl_table;
+  NameResolver resolver{impl_table};
+  EXPECT_THROW(resolver.visit_program(*program), std::runtime_error);
+}
+
+TEST(NameResolutionTest, RejectsUseOfLoopScopedLetOutsideLoop) {
+  AstStorage arena;
+  auto program = std::make_unique<hir::Program>();
+
+  auto fn_ast = std::make_unique<ast::FunctionItem>();
+  fn_ast->name = std::make_unique<ast::Identifier>("main");
+  auto *fn_ast_ptr = fn_ast.get();
+  arena.function_items.push_back(std::move(fn_ast));
+
+  auto fn_block = std::make_unique<hir::Block>();
+
+  auto while_body = std::make_unique<hir::Block>();
+  auto tmp_pattern = make_binding_pattern("tmp");
+  auto tmp_initializer = make_integer_literal(1);
+  while_body->stmts.push_back(std::make_unique<hir::Stmt>(make_let_stmt(
+      std::move(tmp_pattern), std::nullopt, std::move(tmp_initializer))));
+
+  auto while_expr = hir::While();
+  while_expr.condition = make_boolean_literal(true);
+  while_expr.body = std::move(while_body);
+  while_expr.ast_node = nullptr;
+  fn_block->stmts.push_back(std::make_unique<hir::Stmt>(make_expr_stmt(
+      std::make_unique<hir::Expr>(hir::While(std::move(while_expr))))));
+
+  auto result_pattern = make_binding_pattern("result");
+  auto tmp_unresolved = hir::UnresolvedIdentifier();
+  tmp_unresolved.name = ast::Identifier{"tmp"};
+  tmp_unresolved.ast_node = nullptr;
+  auto tmp_expr = std::make_unique<hir::Expr>(
+      hir::UnresolvedIdentifier(std::move(tmp_unresolved)));
+  fn_block->stmts.push_back(std::make_unique<hir::Stmt>(make_let_stmt(
+      std::move(result_pattern), std::nullopt, std::move(tmp_expr))));
+
+  auto fn =
+      hir::Function({}, {}, std::nullopt, std::move(fn_block), {}, fn_ast_ptr);
   program->items.push_back(
       std::make_unique<hir::Item>(hir::Function(std::move(fn))));
 

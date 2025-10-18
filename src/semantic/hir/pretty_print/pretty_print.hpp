@@ -546,6 +546,8 @@ inline std::string HirPrettyPrinter::describe_type(semantic::TypeId type_id, int
                 return "Unit";
             } else if constexpr (std::is_same_v<T, semantic::NeverType>) {
                 return "Never";
+            } else if constexpr (std::is_same_v<T, semantic::UnderscoreType>) {
+                return "Underscore";
             } else {
                 return "<unknown type>";
             }

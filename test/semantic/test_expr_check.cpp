@@ -274,7 +274,7 @@ TEST_F(ExprCheckTest, UnderscoreExpression) {
     
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(underscore)});
     auto info = expr_checker->check(*expr);
-    EXPECT_EQ(info.type, never_type);
+    EXPECT_EQ(info.type, this->underscore_type);
     EXPECT_TRUE(info.is_mut);
     EXPECT_TRUE(info.is_place);
     EXPECT_TRUE(info.has_normal_endpoint());

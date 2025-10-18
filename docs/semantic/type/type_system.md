@@ -51,7 +51,39 @@ struct ArrayType { TypeId element_type; size_t size; };
 ##### Special Types
 ```cpp
 struct UnitType {};  // () type, no runtime representation
-struct NeverType {}; // ! type, diverging expressions
+struct NeverType {}; // ! type, diverging expressions - bottom type
+```
+
+#### NeverType as Bottom Type
+
+NeverType serves as the **bottom type** in the type system, meaning it can coerce to any other type. This makes it particularly useful for representing diverging expressions (like `return`, `break`, `continue`) that never produce a value.
+
+**Key Properties:**
+- **Coercion**: NeverType can coerce TO any type, but no type can coerce TO NeverType
+- **Common Type**: When finding common type between NeverType and T, the result is always T
+- **Assignment**: NeverType is assignable to any target type
+- **Compatibility**: NeverType is comparable with any type
+
+**Use Cases:**
+- Diverging expressions (`return`, `break`, `continue`)
+- Underscore expressions (`_`) that have NeverType with NormalEndpoint
+- Control flow analysis where expressions don't complete normally
+
+**Examples:**
+```cpp
+// NeverType coercion in if expressions
+if condition {
+    return; // NeverType
+} else {
+    42      // i32
+} // Result type: i32
+
+// Assignment compatibility
+let x: i32 = return; // Valid: NeverType assigns to i32
+
+// Common type resolution
+NeverType + i32 = i32    // Common type is i32
+NeverType + bool = bool   // Common type is bool
 ```
 
 ### Type Resolver Interface
@@ -279,3 +311,19 @@ Used throughout semantic analysis for:
 - **Pattern matching**: Checking pattern type constraints
 - **Method resolution**: Finding implementations via ImplTable
 - **Code generation**: Type-based code selection
+
+## Change Log
+
+### 2025-10-18: NeverType Bottom Type Implementation
+- **Added**: `is_never_type()` helper function to type helpers
+- **Updated**: `try_coerce_to()` to handle NeverType coercing TO any type
+- **Updated**: `find_common_type()` to return the other type when one operand is NeverType
+- **Updated**: `is_assignable_to()` to handle NeverType as assignable to any type
+- **Added**: Comprehensive tests for NeverType coercion behavior
+- **Documentation**: Clarified NeverType as bottom type with detailed examples
+
+**Implementation Details:**
+- NeverType now properly functions as a bottom type in the type system
+- Coercion rules allow NeverType to be used in any context where a specific type is expected
+- Common type resolution correctly handles NeverType in binary operations and control flow
+- Assignment compatibility supports NeverType for diverging expressions

@@ -1,5 +1,6 @@
 #include "expr_parse.hpp"
 
+#include "src/ast/stmt.hpp"
 #include "src/lexer/lexer.hpp"
 #include "src/utils/helpers.hpp"
 #include "parser_registry.hpp" // For the full ParserRegistry definition
@@ -114,7 +115,29 @@ ExprParser ExprParserBuilder::buildStructExprParser(const PathParser& pathParser
 ExprParser ExprParserBuilder::buildBlockParser(const StmtParser& stmtParser, const ExprParser& self) const {
     return (equal({TOKEN_DELIMITER, "{"}) > stmtParser.many().andThen(self.optional()) < equal({TOKEN_DELIMITER, "}"}))
         .map([](auto&& pair) -> ExprPtr {
-            return make_expr<BlockExpr>(std::move(std::get<0>(pair)), std::move(std::get<1>(pair)));
+            auto statements = std::move(std::get<0>(pair));
+            auto final_expr = std::move(std::get<1>(pair));
+
+            if (!final_expr && !statements.empty()) {
+                auto& last_stmt_ptr = statements.back();
+                if (last_stmt_ptr) {
+                    if (auto* expr_stmt = std::get_if<ExprStmt>(&last_stmt_ptr->value);
+                        expr_stmt && !expr_stmt->has_trailing_semicolon && expr_stmt->expr) {
+                        const auto& variant = expr_stmt->expr->value;
+                        const bool is_with_block_expr =
+                            std::holds_alternative<BlockExpr>(variant) ||
+                            std::holds_alternative<IfExpr>(variant) ||
+                            std::holds_alternative<WhileExpr>(variant) ||
+                            std::holds_alternative<LoopExpr>(variant);
+                        if (is_with_block_expr) {
+                            final_expr = std::move(expr_stmt->expr);
+                            statements.pop_back();
+                        }
+                    }
+                }
+            }
+
+            return make_expr<BlockExpr>(std::move(statements), std::move(final_expr));
         }).label("a block expression");
 }
 

@@ -137,6 +137,17 @@ inline TypeId get_base_type(TypeId type) {
     return current;
 }
 
+/**
+ * @brief Check if a type is NeverType
+ */
+inline bool is_never_type(TypeId type) {
+    return std::holds_alternative<NeverType>(type->value);
+}
+
+inline bool is_underscore_type(TypeId type) {
+    return std::holds_alternative<UnderscoreType>(type->value);
+}
+
 } // namespace type_helper
 
 }

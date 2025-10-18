@@ -15,8 +15,10 @@
 #include "src/semantic/hir/converter.hpp"
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
 #include "src/semantic/pass/type&const/visitor.hpp"
+#include "src/semantic/pass/trait_check/trait_check.hpp"
 #include "src/semantic/pass/semantic_check/semantic_check.hpp"
 #include "src/semantic/pass/control_flow_linking/control_flow_linking.hpp"
+#include "src/semantic/pass/exit_check/exit_check.hpp"
 #include "src/semantic/type/impl_table.hpp"
 #include "src/semantic/symbol/predefined.hpp"
 
@@ -140,7 +142,21 @@ int main(int argc, char* argv[]) {
         std::cout << *hir_program << std::endl;
         std::cout << "\n=== End HIR ===\n" << std::endl;
 
-        // Phase 6: Control Flow Linking
+        // Phase 6: Trait Validation
+        semantic::TraitValidator trait_validator;
+        try {
+            trait_validator.validate(*hir_program);
+        } catch (const std::exception& e) {
+            std::cerr << "Error: Trait validation failed - " << e.what() << std::endl;
+            return 1;
+        }
+
+        // Print HIR after trait validation
+        std::cout << "\n=== HIR after Trait Validation ===\n" << std::endl;
+        std::cout << *hir_program << std::endl;
+        std::cout << "\n=== End HIR ===\n" << std::endl;
+
+        // Phase 7: Control Flow Linking
         ControlFlowLinker control_flow_linker;
         try {
             control_flow_linker.link_control_flow(*hir_program);
@@ -154,7 +170,7 @@ int main(int argc, char* argv[]) {
         std::cout << *hir_program << std::endl;
         std::cout << "\n=== End HIR ===\n" << std::endl;
 
-        // Phase 7: Semantic Checking
+        // Phase 8: Semantic Checking
         semantic::SemanticCheckVisitor semantic_checker(impl_table);
         try {
             // Apply comprehensive expression checking to the entire program
@@ -168,6 +184,15 @@ int main(int argc, char* argv[]) {
         std::cout << "\n=== Final HIR after Semantic Checking ===\n" << std::endl;
         std::cout << *hir_program << std::endl;
         std::cout << "\n=== End HIR ===\n" << std::endl;
+
+        // Phase 9: Exit Check
+        semantic::ExitCheckVisitor exit_checker;
+        try {
+            exit_checker.check_program(*hir_program);
+        } catch (const std::exception& e) {
+            std::cerr << "Error: Exit check failed - " << e.what() << std::endl;
+            return 1;
+        }
 
         std::cout << "Success: Semantic analysis completed successfully" << std::endl;
         return 0;
