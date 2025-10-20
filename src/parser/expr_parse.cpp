@@ -5,10 +5,85 @@
 #include "src/utils/helpers.hpp"
 #include "parser_registry.hpp" // For the full ParserRegistry definition
 #include "utils.hpp"
+#include <cctype>
 #include <stdexcept>
 
 using namespace parsec;
 using namespace ast;
+
+namespace {
+
+struct ParsedIntegerLiteral {
+    int64_t value;
+    ast::IntegerLiteralExpr::Type type;
+};
+
+bool isValidDigitForBase(char c, int base) {
+    unsigned char uc = static_cast<unsigned char>(c);
+    switch (base) {
+        case 2:  return uc == '0' || uc == '1';
+        case 8:  return uc >= '0' && uc <= '7';
+        case 10: return std::isdigit(uc) != 0;
+        case 16: return std::isxdigit(uc) != 0;
+        default: return false;
+    }
+}
+
+ParsedIntegerLiteral parseIntegerLiteral(const std::string& literal) {
+    using Type = ast::IntegerLiteralExpr::Type;
+
+    if (literal.empty()) {
+        return {0, Type::NOT_SPECIFIED};
+    }
+
+    int base = 10;
+    std::size_t digits_start = 0;
+    if (literal.size() > 2 && literal[0] == '0') {
+        char prefix = static_cast<char>(std::tolower(static_cast<unsigned char>(literal[1])));
+        if (prefix == 'x') {
+            base = 16;
+            digits_start = 2;
+        } else if (prefix == 'b') {
+            base = 2;
+            digits_start = 2;
+        } else if (prefix == 'o') {
+            base = 8;
+            digits_start = 2;
+        }
+    }
+
+    std::size_t pos = digits_start;
+    std::string digits;
+    digits.reserve(literal.size() - digits_start);
+    for (; pos < literal.size(); ++pos) {
+        char c = literal[pos];
+        if (c == '_') {
+            continue;
+        }
+        if (!isValidDigitForBase(c, base)) {
+            break;
+        }
+        digits.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    std::string suffix = literal.substr(pos);
+
+    if (digits.empty()) {
+        return {0, Type::NOT_SPECIFIED};
+    }
+
+    int64_t value = std::stoll(digits, nullptr, base);
+
+    Type type = Type::NOT_SPECIFIED;
+    if (suffix == "i32") type = Type::I32;
+    else if (suffix == "u32") type = Type::U32;
+    else if (suffix == "isize") type = Type::ISIZE;
+    else if (suffix == "usize") type = Type::USIZE;
+
+    return {value, type};
+}
+
+} // namespace
 
 void ExprParserBuilder::finalize(
     const ParserRegistry& registry,
@@ -56,17 +131,10 @@ ExprParser ExprParserBuilder::buildLiteralParser() const {
         .map([](Token t) -> ExprPtr { return make_expr<CharLiteralExpr>(t.value[0]); });
     auto p_bool = satisfy<Token>([](const Token& t) { return t.type == TOKEN_KEYWORD && (t.value == "true" || t.value == "false"); }, "boolean literal")
         .map([](Token t) -> ExprPtr { return make_expr<BoolLiteralExpr>(t.value == "true"); });
-    auto p_number = satisfy<Token>([](const Token& t) ->bool { return t.type == TOKEN_NUMBER; }, "number literal")
+    auto p_number = satisfy<Token>([](const Token& t) -> bool { return t.type == TOKEN_NUMBER; }, "number literal")
         .map([](Token t) -> ExprPtr {
-            std::string num_part; std::string suffix; size_t i = 0;
-            while (i < t.value.length() && std::isdigit(t.value[i])) { num_part += t.value[i]; i++; }
-            suffix = t.value.substr(i);
-            auto value = std::stoll(num_part);
-            if (suffix == "i32") return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::I32);
-            if (suffix == "u32") return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::U32);
-            if (suffix == "isize") return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::ISIZE);
-            if (suffix == "usize") return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::USIZE);
-            return make_expr<IntegerLiteralExpr>(value, IntegerLiteralExpr::NOT_SPECIFIED);
+            auto parsed = parseIntegerLiteral(t.value);
+            return make_expr<IntegerLiteralExpr>(parsed.value, parsed.type);
         });
     return (p_string | p_char | p_bool | p_number).label("a literal expression");
 }
@@ -77,12 +145,13 @@ ExprParser ExprParserBuilder::buildGroupedParser(const ExprParser& self) const {
 }
 
 ExprParser ExprParserBuilder::buildArrayParser(const ExprParser& self) const {
-    auto p_list = self.list(equal({TOKEN_SEPARATOR, ","}))
+    auto p_list = self.tuple(equal({TOKEN_SEPARATOR, ","}))
         .map([](std::vector<ExprPtr>&& elems) -> ExprPtr { return make_expr<ArrayInitExpr>(std::move(elems)); });
     auto p_repeat = (self < equal({TOKEN_SEPARATOR, ";"}))
         .andThen(self)
         .map([](auto&& pair) -> ExprPtr { return make_expr<ArrayRepeatExpr>(std::move(std::get<0>(pair)), std::move(std::get<1>(pair))); });
-    return (equal({TOKEN_DELIMITER, "["}) > (p_repeat | p_list).optional() < equal({TOKEN_DELIMITER, "]"}))
+    auto p_body = (p_repeat | p_list).optional();
+    return (equal({TOKEN_DELIMITER, "["}) > p_body < equal({TOKEN_DELIMITER, "]"}))
         .map([](std::optional<ExprPtr>&& maybe_elements) -> ExprPtr {
             if (maybe_elements) return std::move(*maybe_elements);
             return make_expr<ArrayInitExpr>(std::vector<ExprPtr>{});
@@ -144,7 +213,7 @@ ExprParser ExprParserBuilder::buildBlockParser(const StmtParser& stmtParser, con
 std::tuple<ExprParser, ExprParser, ExprParser> ExprParserBuilder::buildControlFlowParsers(const ExprParser& self, const ExprParser& blockParser) const {
     auto [p_if_lazy, set_if_lazy] = lazy<ExprPtr, Token>();
     auto p_else_branch = (equal({TOKEN_KEYWORD, "else"}) > (blockParser | p_if_lazy)).optional();
-    auto p_if_core = (equal({TOKEN_KEYWORD, "if"}) > self).andThen(blockParser).andThen(p_else_branch)
+    auto p_if_core = (equal({TOKEN_KEYWORD, "if"}) > equal({TOKEN_DELIMITER, "("}) > self < equal({TOKEN_DELIMITER, ")"}) ).andThen(blockParser).andThen(p_else_branch)
         .map([](auto&& t) -> ExprPtr {
             auto& [cond, then_b, else_b] = t;
             auto then_ptr = std::make_unique<BlockExpr>(std::get<BlockExpr>(std::move(then_b->value)));

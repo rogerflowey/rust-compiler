@@ -299,24 +299,59 @@ inline Token Lexer::parseIdentifierOrKeyword() {
 }
 inline Token Lexer::parseNumber() {
   std::string number;
-  while (!input.eof() && (std::isdigit(input.peek()) || input.peek() == '_')) {
-    char c = input.get();
-    if (c != '_') {
-        number += c;
+
+  auto consumeDigits = [&](auto predicate) {
+    while (!input.eof()) {
+      char c = input.peek();
+      if (c == '_') {
+        input.advance(1);
+        continue;
+      }
+      unsigned char uc = static_cast<unsigned char>(c);
+      if (!predicate(uc)) {
+        break;
+      }
+      number += static_cast<char>(std::tolower(uc));
+      input.advance(1);
     }
+  };
+
+  char first = input.get();
+  number += static_cast<char>(std::tolower(static_cast<unsigned char>(first)));
+
+  if (!input.eof()) {
+    char next = input.peek();
+    char lower_next = static_cast<char>(std::tolower(static_cast<unsigned char>(next)));
+    if (first == '0' && (lower_next == 'x' || lower_next == 'b' || lower_next == 'o')) {
+      input.advance(1);
+      number += lower_next;
+      if (lower_next == 'x') {
+        consumeDigits([](unsigned char c) { return std::isxdigit(c) != 0; });
+      } else if (lower_next == 'b') {
+        consumeDigits([](unsigned char c) { return c == '0' || c == '1'; });
+      } else {
+        consumeDigits([](unsigned char c) { return c >= '0' && c <= '7'; });
+      }
+    } else {
+      consumeDigits([](unsigned char c) { return std::isdigit(c) != 0; });
+    }
+  } else {
+    consumeDigits([](unsigned char c) { return std::isdigit(c) != 0; });
   }
-  if (!input.eof() && std::isalpha(input.peek())) {
+
+  if (!input.eof() && std::isalpha(static_cast<unsigned char>(input.peek()))) {
     std::string suffix;
-    int i = 0;
-    while(!input.eof(i) && std::isalnum(input.peek(i))) {
-        suffix += input.peek(i);
-        i++;
+    std::size_t offset = 0;
+    while (!input.eof(offset) && std::isalnum(static_cast<unsigned char>(input.peek(offset)))) {
+      suffix += input.peek(offset);
+      offset++;
     }
-    if (suffix.length() > 0 && (suffix[0] == 'i' || suffix[0] == 'u' || suffix[0] == 'f')) {
-        input.advance(suffix.length());
-        number += suffix;
+    if (!suffix.empty() && (suffix[0] == 'i' || suffix[0] == 'u' || suffix[0] == 'f')) {
+      input.advance(suffix.length());
+      number += suffix;
     }
   }
+
   return {TOKEN_NUMBER, number};
 }
 inline Token Lexer::parseDelimiter() {

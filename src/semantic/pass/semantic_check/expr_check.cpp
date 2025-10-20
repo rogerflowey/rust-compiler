@@ -1,4 +1,5 @@
 #include "expr_check.hpp"
+#include "temp_ref_desugger.hpp"
 #include "hir/helper.hpp"
 #include "hir/hir.hpp"
 #include "pass/semantic_check/expr_info.hpp"
@@ -54,6 +55,73 @@ std::string ExprChecker::format_error(const std::string &message) const {
 [[noreturn]] void
 ExprChecker::throw_in_context(const std::string &message) const {
   throw std::runtime_error(format_error(message));
+}
+
+ExprChecker::FunctionScopeGuard
+ExprChecker::enter_function_scope(hir::Function &function) {
+  hir::Function *previous_function = current_function;
+  hir::Method *previous_method = current_method;
+  size_t previous_counter = temp_local_counter;
+
+  current_function = &function;
+  current_method = nullptr;
+  temp_local_counter = 0;
+
+  return FunctionScopeGuard(*this, previous_function, previous_method,
+                            previous_counter);
+}
+
+ExprChecker::MethodScopeGuard
+ExprChecker::enter_method_scope(hir::Method &method) {
+  hir::Function *previous_function = current_function;
+  hir::Method *previous_method = current_method;
+  size_t previous_counter = temp_local_counter;
+
+  current_function = nullptr;
+  current_method = &method;
+  temp_local_counter = 0;
+
+  return MethodScopeGuard(*this, previous_function, previous_method,
+                          previous_counter);
+}
+
+hir::Expr &ExprChecker::current_expr_ref() {
+  if (!current_expr) {
+    throw std::logic_error("Current expression context not set");
+  }
+  return *current_expr;
+}
+
+void ExprChecker::replace_current_expr(hir::ExprVariant new_expr) {
+  auto &expr = current_expr_ref();
+  expr.value = std::move(new_expr);
+  expr.expr_info.reset();
+}
+
+hir::Local *ExprChecker::create_temporary_local(bool is_mutable,
+                                                TypeId type) {
+  auto temp_identifier = generate_temp_identifier();
+  auto local = std::make_unique<hir::Local>();
+  local->name = std::move(temp_identifier);
+  local->is_mutable = is_mutable;
+  local->type_annotation = type;
+  local->def_site = nullptr;
+
+  auto *local_ptr = local.get();
+  if (current_function) {
+    current_function->locals.push_back(std::move(local));
+  } else if (current_method) {
+    current_method->locals.push_back(std::move(local));
+  } else {
+    throw std::logic_error(
+        "Temporary local created outside of function or method context");
+  }
+  return local_ptr;
+}
+
+ast::Identifier ExprChecker::generate_temp_identifier() {
+  const std::string name = "_temp" + std::to_string(temp_local_counter++);
+  return ast::Identifier{name};
 }
 
 // Literal expressions
@@ -301,12 +369,16 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr) {
 
   switch (expr.op) {
   case hir::UnaryOp::NOT: {
-    // Operand must be BOOL, result is BOOL
-    if (!is_bool_type(operand_info.type)) {
-      throw_in_context("NOT operand must be boolean");
+    if (is_bool_type(operand_info.type)) {
+      TypeId bool_type = get_typeID(Type{PrimitiveKind::BOOL});
+      return ExprInfo(bool_type, false, false, operand_info.endpoints);
     }
-    TypeId bool_type = get_typeID(Type{PrimitiveKind::BOOL});
-    return ExprInfo(bool_type, false, false, operand_info.endpoints);
+
+    if (is_numeric_type(operand_info.type)) {
+      return ExprInfo(operand_info.type, false, false, operand_info.endpoints);
+    }
+
+    throw_in_context("NOT operand must be boolean or integer");
   }
   case hir::UnaryOp::NEGATE: {
     // Operand must be numeric, result is same type
@@ -329,7 +401,9 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr) {
   case hir::UnaryOp::MUTABLE_REFERENCE: {
     // An operand must be a place to be referenced.
     if (!operand_info.is_place) {
-      throw_in_context("Cannot take a reference to a temporary value");
+      return TempRefDesugger::desugar_reference_to_temporary(expr,
+                                                             operand_info,
+                                                             *this);
     }
 
     bool is_mut = (expr.op == hir::UnaryOp::MUTABLE_REFERENCE);
@@ -359,22 +433,16 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr) {
   case hir::BinaryOp::MUL:
   case hir::BinaryOp::DIV:
   case hir::BinaryOp::REM: {
-    std::cerr << "DEBUG: BinaryOp arithmetic, about to resolve inference"
-              << std::endl;
     if (!is_numeric_type(lhs_info.type) || !is_numeric_type(rhs_info.type)) {
       throw_in_context("Arithmetic operands must be numeric");
     }
-    std::cerr << "DEBUG: BinaryOp resolving lhs to rhs" << std::endl;
     resolve_inference_if_needed(lhs_info.type, rhs_info.type);
-    std::cerr << "DEBUG: BinaryOp resolving rhs to lhs" << std::endl;
     resolve_inference_if_needed(rhs_info.type, lhs_info.type);
 
-    std::cerr << "DEBUG: BinaryOp finding common type" << std::endl;
     auto common_type = find_common_type(lhs_info.type, rhs_info.type);
     if (!common_type) {
       throw_in_context("Arithmetic operands must have compatible types");
     }
-    std::cerr << "DEBUG: BinaryOp found common type" << std::endl;
     return ExprInfo(*common_type, false, false, endpoints);
   }
   case hir::BinaryOp::EQ:
@@ -417,9 +485,10 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr) {
     if (!is_numeric_type(lhs_info.type)) {
       throw_in_context("Shift left operand must be numeric");
     }
-    if (!is_assignable_to(rhs_info.type,
-                          get_typeID(Type{PrimitiveKind::USIZE}))) {
-      throw_in_context("Shift right operand must be coercible to usize");
+
+    if (!is_numeric_type(rhs_info.type)) {
+      throw_in_context(
+          "Shift right operand must be numeric");
     }
     return ExprInfo(lhs_info.type, false, false, endpoints);
   }
@@ -601,11 +670,9 @@ ExprInfo ExprChecker::check(hir::If &expr) {
     if (!common_type) {
       // Special handling for never_type: if one branch is never_type, use the
       // other branch's type
-      auto never_type = get_typeID(Type{NeverType{}});
-
-      if (then_info.type == never_type) {
+      if (is_never_type(then_info.type)) {
         common_type = else_info.type;
-      } else if (else_info.type == never_type) {
+      } else if (is_never_type(else_info.type)) {
         common_type = then_info.type;
       } else {
         // If no common type found, try coercing both to unit type
@@ -671,8 +738,9 @@ ExprInfo ExprChecker::check(hir::While &expr) {
   }
 
   ExprInfo body_info = check(*expr.body);
-  if (body_info.type != get_typeID(Type{UnitType{}})) {
-    throw_in_context("While body must have unit type");
+  auto unit_type = get_typeID(Type{UnitType{}});
+  if (!is_assignable_to(body_info.type, unit_type)) {
+    throw_in_context("While body must be assignable to unit type");
   }
 
   if (!expr.break_type) {
@@ -710,17 +778,17 @@ ExprInfo ExprChecker::check(hir::Break &expr) {
   std::visit(Overloaded{[&](hir::Loop *loop) {
                           if (!loop->break_type) {
                             loop->break_type = value_type;
-                          } else if (loop->break_type != value_type) {
+                          } else if (!is_assignable_to(value_type, *loop->break_type)) {
                             throw_in_context(
-                                "Inconsistent break value types in loop");
+                                "Break value type not assignable to loop break type");
                           }
                         },
                         [&](hir::While *while_loop) {
                           if (!while_loop->break_type) {
                             while_loop->break_type = value_type;
-                          } else if (while_loop->break_type != value_type) {
+                          } else if (!is_assignable_to(value_type, *while_loop->break_type)) {
                             throw_in_context(
-                                "Inconsistent break value types in while loop");
+                                "Break value type not assignable to while loop break type");
                           }
                         }},
              *expr.target);

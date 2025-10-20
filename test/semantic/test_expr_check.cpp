@@ -225,7 +225,13 @@ TEST_F(ExprCheckTest, BinaryOpShiftLeft) {
 TEST_F(ExprCheckTest, ErrorUnaryNotOnNonBoolean) {
     auto operand = createIntegerLiteral(42, ast::IntegerLiteralExpr::I32);
     auto expr = createUnaryOp(std::move(operand), hir::UnaryOp::NOT);
-    EXPECT_THROW(expr_checker->check(*expr), std::runtime_error);
+    // EXPECT_THROW(expr_checker->check(*expr), std::runtime_error);
+    // permit NOT on numeric types as well
+    auto info = expr_checker->check(*expr);
+    EXPECT_EQ(info.type, i32_type);
+    EXPECT_FALSE(info.is_mut);
+    EXPECT_FALSE(info.is_place);
+    EXPECT_TRUE(info.has_normal_endpoint());
 }
 
 // Test 15: Error Cases - Unary NEGATE on non-numeric
@@ -263,7 +269,13 @@ TEST_F(ExprCheckTest, ErrorShiftWithNonUsizeRightOperand) {
     auto lhs = createIntegerLiteral(42, ast::IntegerLiteralExpr::I32);
     auto rhs = createIntegerLiteral(2, ast::IntegerLiteralExpr::I32);
     auto expr = createBinaryOp(std::move(lhs), std::move(rhs), hir::BinaryOp::SHL);
-    EXPECT_THROW(expr_checker->check(*expr), std::runtime_error);
+    // EXPECT_THROW(expr_checker->check(*expr), std::runtime_error);
+    // permit i32 as well
+    auto info = expr_checker->check(*expr);
+    EXPECT_EQ(info.type, i32_type);
+    EXPECT_FALSE(info.is_mut);
+    EXPECT_FALSE(info.is_place);
+    EXPECT_TRUE(info.has_normal_endpoint());
 }
 
 // Test 20: Underscore Expression
