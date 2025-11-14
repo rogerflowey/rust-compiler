@@ -276,4 +276,5 @@ inline TypeId get_resolved_type(const TypeAnnotation& annotation) {
 - [Project Overview](./project-overview.md): Detailed source code structure
 - [Development Guide](./development.md): Build processes and development practices
 - [Agent Guide](./agent-guide.md): Navigation and development protocols
-- [Semantic Passes](./semantic/passes/README.md): Complete semantic analysis pipeline
+- [Component Overviews](./component-overviews/README.md): High-level component architecture
+- [Semantic Passes](../src/semantic/pass/README.md): Complete semantic analysis pipeline

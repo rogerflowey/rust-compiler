@@ -29,33 +29,33 @@ This guide helps agents efficiently navigate the RCompiler documentation system 
 
 ## Most Frequently Used Documents (Ranked by Usage)
 
-1. **[Semantic Passes Overview](./semantic/passes/README.md)** - Critical for all semantic work
-2. **[Architecture Guide](./architecture.md)** - High-level design understanding
-3. **[Development Guide](./development.md)** - Implementation standards and workflows
-4. **[Project Overview](./project-overview.md)** - Component structure and APIs
-5. **[Specific Pass Documentation](./semantic/passes/)** - Implementation details for specific passes
+1. **[Component Overviews](./component-overviews/README.md)** - High-level component architecture
+2. **[Semantic Passes Overview](../src/semantic/pass/README.md)** - Critical for all semantic work
+3. **[Architecture Guide](./architecture.md)** - High-level design understanding
+4. **[Development Guide](./development.md)** - Implementation standards and workflows
+5. **[Specific Component Documentation](../src/)** - Implementation details for specific components
 
 ## Navigation Strategies
 
 ### When You Know What You're Looking For
 
-1. **Specific Pass**: Go directly to `docs/semantic/passes/[pass-name].md`
-2. **Specific Component**: Check [Project Overview](./project-overview.md) first
+1. **Specific Pass**: Go directly to `../src/semantic/pass/[pass-name].md`
+2. **Specific Component**: Check [Component Overviews](./component-overviews/) first
 3. **Specific Error Pattern**: Check [Development Guide](./development.md) error handling section
 4. **Architecture Decision**: Check [Architecture Guide](./architecture.md)
 
 ### When You Need Context
 
-1. **New to Semantic Analysis**: Start with [Semantic Passes Overview](./semantic/passes/README.md)
+1. **New to Semantic Analysis**: Start with [Component Overviews - Semantic](./component-overviews/semantic-overview.md)
 2. **New to Compiler Architecture**: Start with [Architecture Guide](./architecture.md)
-3. **New to Project**: Start with [Project Overview](./project-overview.md)
+3. **New to Project**: Start with [Component Overviews](./component-overviews/README.md)
 4. **New to Development**: Start with [Development Guide](./development.md)
 
 ### When Debugging Issues
 
-1. **Invariant Violations**: Check [Semantic Passes Overview](./semantic/passes/README.md)
-2. **Type Errors**: Check [Architecture Guide](./architecture.md) type system section
-3. **Parsing Errors**: Check [Development Guide](./development.md) parser section
+1. **Invariant Violations**: Check [Semantic Passes Overview](../src/semantic/pass/README.md)
+2. **Type Errors**: Check [Component Overviews - Semantic](./component-overviews/semantic-overview.md) or [Architecture Guide](./architecture.md) type system section
+3. **Parsing Errors**: Check [Component Overviews - Parser](./component-overviews/parser-overview.md) or [Development Guide](./development.md) parser section
 4. **Build Issues**: Check [Development Guide](./development.md) build system section
 
 ## Development Protocols
@@ -237,8 +237,8 @@ TEST(TypeCheckerTest, InfersCorrectTypesForExpressions);
 4. Examine test cases for usage examples
 
 ### For Navigation Issues
-1. Check [Semantic Passes Overview](./semantic/passes/README.md) for pass information
-2. Use [Project Overview](./project-overview.md) for component details
+1. Check [Component Overviews](./component-overviews/) for component information
+2. Use [Semantic Passes Overview](../src/semantic/pass/README.md) for pass information
 3. Check [Architecture Guide](./architecture.md) for design decisions
 4. Review [Development Guide](./development.md) for implementation patterns
 
@@ -250,7 +250,8 @@ TEST(TypeCheckerTest, InfersCorrectTypesForExpressions);
 
 ## Related Documentation
 
+- [Component Overviews](./component-overviews/README.md): High-level component architecture
 - [Architecture Guide](./architecture.md): System architecture and design decisions
 - [Development Guide](./development.md): Build processes and development practices
-- [Project Overview](./project-overview.md): Detailed component documentation and APIs
-- [Semantic Passes](./semantic/passes/README.md): Complete semantic analysis pipeline
+- [Semantic Passes](../src/semantic/pass/README.md): Complete semantic analysis pipeline
+- [Component Documentation](../src/): Implementation details for all components

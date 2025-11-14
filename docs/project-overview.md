@@ -395,4 +395,5 @@ ControlFlowLinker linker;
 - [Language Features](./language-features.md) - Supported language features and syntax
 - [Component Reference](./component-cross-reference.md) - Detailed component documentation and APIs
 - [Glossary](./glossary.md) - Project-specific terminology
-- [Semantic Passes](./semantic/passes/README.md) - Complete semantic analysis pipeline
+- [Component Overviews](./component-overviews/) - High-level component documentation
+- [Semantic Passes](../src/semantic/pass/README.md) - Complete semantic analysis pipeline

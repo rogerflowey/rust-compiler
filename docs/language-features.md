@@ -152,4 +152,5 @@ These features may be considered for future implementation based on project goal
 ## Related Documentation
 
 - [Project Overview](./project-overview.md): Project goals and architecture
+- [Component Overviews](./component-overviews/): High-level component documentation
 - [Architecture Guide](./architecture.md): System architecture and design decisions

@@ -403,4 +403,5 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
 - [Architecture Guide](./architecture.md): System architecture and design patterns
 - [Agent Guide](./agent-guide.md): Navigation and development protocols
 - [Project Overview](./project-overview.md): Detailed source code structure
-- [Semantic Passes](./semantic/passes/README.md): Semantic analysis pipeline
+- [Component Overviews](./component-overviews/README.md): High-level component architecture
+- [Semantic Passes](../src/semantic/pass/README.md): Semantic analysis pipeline

@@ -92,3 +92,4 @@ rcompiler_test
 ## Related Documentation
 - [Architecture Guide](./architecture.md): System architecture details
 - [Project Overview](./project-overview.md): Detailed component structure
+- [Component Overviews](./component-overviews/README.md): High-level component architecture

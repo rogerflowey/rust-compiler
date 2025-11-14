@@ -99,5 +99,6 @@ C++ pattern for resource management using object lifetimes.
 
 ## Related Documentation
 
+- [Component Overviews](./component-overviews/): High-level component documentation
 - [Architecture Guide](./architecture.md): System architecture details
 - [Component Cross-Reference](./component-cross-reference.md): Component relationships
