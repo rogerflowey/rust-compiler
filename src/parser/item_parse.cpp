@@ -59,7 +59,6 @@ ItemParserBuilder::buildBlockParser(const StmtParser &stmtParser,
             }
           }
         }
-
         return std::make_unique<BlockExpr>(
             BlockExpr{std::move(stmts), std::move(final_expr)});
       });
