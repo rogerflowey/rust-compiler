@@ -22,10 +22,6 @@ protected:
         char_type = get_typeID(SemanticType{PrimitiveKind::CHAR});
         string_type = get_typeID(SemanticType{PrimitiveKind::STRING});
         
-        // Inference types
-        anyint_type = get_typeID(SemanticType{PrimitiveKind::__ANYINT__});
-        anyuint_type = get_typeID(SemanticType{PrimitiveKind::__ANYUINT__});
-        
         // Never type
         never_type = get_typeID(SemanticType{NeverType{}});
         
@@ -37,8 +33,6 @@ protected:
         u32_array_5_type = get_typeID(SemanticType{semantic::ArrayType{u32_type, 5}});
         i32_array_10_type = get_typeID(SemanticType{semantic::ArrayType{i32_type, 10}});
         i32_array_8_type = get_typeID(SemanticType{semantic::ArrayType{i32_type, 8}});
-        anyint_array_8_type = get_typeID(SemanticType{semantic::ArrayType{anyint_type, 8}});
-        anyuint_array_8_type = get_typeID(SemanticType{semantic::ArrayType{anyuint_type, 8}});
         
         // Reference types
         i32_ref_type = get_typeID(SemanticType{semantic::ReferenceType{i32_type, false}});
@@ -49,10 +43,9 @@ protected:
     // Common test types
     TypeId i32_type, u32_type, isize_type, usize_type;
     TypeId bool_type, char_type, string_type;
-    TypeId anyint_type, anyuint_type;
     TypeId never_type, unit_type;
     TypeId i32_array_5_type, u32_array_5_type, i32_array_10_type;
-    TypeId i32_array_8_type, anyint_array_8_type, anyuint_array_8_type;
+    TypeId i32_array_8_type;
     TypeId i32_ref_type, i32_mut_ref_type, u32_ref_type;
 };
 
@@ -69,24 +62,6 @@ TEST_F(TypeCompatibilityTest, BasicTypeCompatibility) {
     EXPECT_FALSE(is_assignable_to(u32_type, bool_type));
 }
 
-// Test inference type compatibility
-TEST_F(TypeCompatibilityTest, InferenceTypeCompatibility) {
-    // __ANYINT__ should coerce to I32 and ISIZE
-    EXPECT_TRUE(is_assignable_to(anyint_type, i32_type));
-    EXPECT_TRUE(is_assignable_to(anyint_type, isize_type));
-    
-    // __ANYUINT__ should coerce to U32 and USIZE
-    EXPECT_TRUE(is_assignable_to(anyuint_type, u32_type));
-    EXPECT_TRUE(is_assignable_to(anyuint_type, usize_type));
-    
-    // __ANYUINT__ should also coerce to __ANYINT__
-    EXPECT_TRUE(is_assignable_to(anyuint_type, anyint_type));
-    
-    // But not the other way around
-    EXPECT_FALSE(is_assignable_to(i32_type, anyint_type));
-    EXPECT_FALSE(is_assignable_to(anyint_type, anyuint_type));
-}
-
 // Test array type compatibility
 TEST_F(TypeCompatibilityTest, ArrayTypeCompatibility) {
     // Same element type and size should be assignable
@@ -94,10 +69,6 @@ TEST_F(TypeCompatibilityTest, ArrayTypeCompatibility) {
     
     // Different sizes should not be assignable
     EXPECT_FALSE(is_assignable_to(i32_array_5_type, i32_array_10_type));
-    
-    // Compatible element types with same size should be assignable
-    EXPECT_TRUE(is_assignable_to(anyint_array_8_type, i32_array_8_type));
-    EXPECT_TRUE(is_assignable_to(anyuint_array_8_type, i32_array_8_type));
     
     // Incompatible element types should not be assignable
     EXPECT_FALSE(is_assignable_to(i32_array_5_type, u32_array_5_type));
@@ -125,15 +96,6 @@ TEST_F(TypeCompatibilityTest, CommonTypeFinding) {
     ASSERT_TRUE(common.has_value());
     EXPECT_EQ(*common, i32_type);
     
-    // Inference types should find common types
-    common = find_common_type(anyint_type, i32_type);
-    ASSERT_TRUE(common.has_value());
-    EXPECT_EQ(*common, i32_type);
-    
-    common = find_common_type(anyuint_type, anyint_type);
-    ASSERT_TRUE(common.has_value());
-    EXPECT_EQ(*common, anyint_type);
-    
     // Incompatible types should not have common type
     common = find_common_type(i32_type, u32_type);
     EXPECT_FALSE(common.has_value());
@@ -149,11 +111,6 @@ TEST_F(TypeCompatibilityTest, ArrayCommonTypeFinding) {
     ASSERT_TRUE(common.has_value());
     EXPECT_EQ(*common, i32_array_5_type);
     
-    // Compatible element types should find common type
-    common = find_common_type(anyint_array_8_type, i32_array_8_type);
-    ASSERT_TRUE(common.has_value());
-    EXPECT_EQ(*common, i32_array_8_type);
-    
     // Different sizes should not have common type
     common = find_common_type(i32_array_5_type, i32_array_10_type);
     EXPECT_FALSE(common.has_value());
@@ -165,10 +122,6 @@ TEST_F(TypeCompatibilityTest, TypeComparability) {
     EXPECT_TRUE(are_comparable(i32_type, i32_type));
     EXPECT_TRUE(are_comparable(u32_type, u32_type));
     EXPECT_TRUE(are_comparable(bool_type, bool_type));
-    
-    // Types with common type should be comparable
-    EXPECT_TRUE(are_comparable(anyint_type, i32_type));
-    EXPECT_TRUE(are_comparable(anyuint_type, u32_type));
     
     // Incompatible types should not be comparable
     EXPECT_FALSE(are_comparable(i32_type, u32_type));
@@ -198,7 +151,6 @@ TEST_F(TypeCompatibilityTest, NeverTypeBehavior) {
     // Test is_never_type helper function
     EXPECT_TRUE(semantic::helper::type_helper::is_never_type(never_type));
     EXPECT_FALSE(semantic::helper::type_helper::is_never_type(i32_type));
-    EXPECT_FALSE(semantic::helper::type_helper::is_never_type(anyint_type));
     EXPECT_FALSE(semantic::helper::type_helper::is_never_type(unit_type));
     EXPECT_FALSE(semantic::helper::type_helper::is_never_type(i32_array_5_type));
     EXPECT_FALSE(semantic::helper::type_helper::is_never_type(i32_ref_type));
@@ -213,7 +165,6 @@ TEST_F(TypeCompatibilityTest, NeverTypeBehavior) {
     
     // But other types should not coerce to NeverType
     EXPECT_FALSE(is_assignable_to(i32_type, never_type));
-    EXPECT_FALSE(is_assignable_to(anyint_type, never_type));
     EXPECT_FALSE(is_assignable_to(unit_type, never_type));
     
     // NeverType should find common type with any type (returning the other type)

@@ -13,6 +13,14 @@
 
 namespace semantic {
 
+struct TypeExpectation {
+    bool has_expected = false;
+    TypeId expected = invalid_type_id;
+
+    static TypeExpectation none() { return {}; }
+    static TypeExpectation exact(TypeId t) { return {true, t}; }
+};
+
 class ExprChecker {
     ImplTable& impl_table;
     hir::Function* current_function = nullptr;
@@ -43,8 +51,12 @@ public:
     [[noreturn]] void throw_in_context(const std::string& message) const;
 
     // Main entry point for checking an expression
-    ExprInfo check(hir::Expr& expr){
-        if(expr.expr_info){
+    ExprInfo check(hir::Expr& expr) {
+        return check(expr, TypeExpectation::none());
+    }
+
+    ExprInfo check(hir::Expr& expr, TypeExpectation exp) {
+        if (expr.expr_info && expr.expr_info->has_type) {
             return *expr.expr_info;
         }
         struct CurrentExprGuard {
@@ -54,60 +66,67 @@ public:
                 : checker(checker), previous(checker.current_expr) {
                 checker.current_expr = current;
             }
-            ~CurrentExprGuard() {
-                checker.current_expr = previous;
-            }
+            ~CurrentExprGuard() { checker.current_expr = previous; }
         } guard(*this, &expr);
         auto info = std::visit(
-            [this](auto&& arg) -> ExprInfo { return this->check(arg); },
+            [this, &exp](auto&& arg) -> ExprInfo {
+                return this->check(arg, exp);
+            },
             expr.value);
-        expr.expr_info = info;
+        if (info.has_type) {
+            expr.expr_info = info;
+        } else {
+            expr.expr_info.reset();
+        }
         return info;
-    };
+    }
     
     // Visitor methods for each expression type
     // Literal expressions
-    ExprInfo check(hir::Literal& expr);
-    ExprInfo check(hir::UnresolvedIdentifier& expr){
+    ExprInfo check(hir::Literal& expr, TypeExpectation exp);
+    ExprInfo check(hir::UnresolvedIdentifier& expr, TypeExpectation) {
         (void)expr; // Suppress unused parameter warning
         throw std::logic_error("UnresolvedIdentifier should be resolved");
     };
-    ExprInfo check(hir::Underscore& expr);
+    ExprInfo check(hir::Underscore& expr, TypeExpectation exp);
     
     // Reference expressions
-    ExprInfo check(hir::Variable& expr);
-    ExprInfo check(hir::ConstUse& expr);
-    ExprInfo check(hir::FuncUse& expr);
-    ExprInfo check(hir::TypeStatic& expr){
+    ExprInfo check(hir::Variable& expr, TypeExpectation exp);
+    ExprInfo check(hir::ConstUse& expr, TypeExpectation exp);
+    ExprInfo check(hir::FuncUse& expr, TypeExpectation exp);
+    ExprInfo check(hir::TypeStatic& expr, TypeExpectation) {
         (void)expr; // Suppress unused parameter warning
         throw std::logic_error("TypeStatic should be resolved");
     };
     
     // Composite expressions
-    ExprInfo check(hir::FieldAccess& expr);
-    ExprInfo check(hir::Index& expr);
-    ExprInfo check(hir::StructLiteral& expr);
-    ExprInfo check(hir::ArrayLiteral& expr);
-    ExprInfo check(hir::ArrayRepeat& expr);
+    ExprInfo check(hir::FieldAccess& expr, TypeExpectation exp);
+    ExprInfo check(hir::Index& expr, TypeExpectation exp);
+    ExprInfo check(hir::StructLiteral& expr, TypeExpectation exp);
+    ExprInfo check(hir::ArrayLiteral& expr, TypeExpectation exp);
+    ExprInfo check(hir::ArrayRepeat& expr, TypeExpectation exp);
     
     // Operations
-    ExprInfo check(hir::UnaryOp& expr);
-    ExprInfo check(hir::BinaryOp& expr);
-    ExprInfo check(hir::Assignment& expr);
-    ExprInfo check(hir::Cast& expr);
+    ExprInfo check(hir::UnaryOp& expr, TypeExpectation exp);
+    ExprInfo check(hir::BinaryOp& expr, TypeExpectation exp);
+    ExprInfo check(hir::Assignment& expr, TypeExpectation exp);
+    ExprInfo check(hir::Cast& expr, TypeExpectation exp);
     
     // Control flow expressions
-    ExprInfo check(hir::Call& expr);
-    ExprInfo check(hir::MethodCall& expr);
-    ExprInfo check(hir::If& expr);
-    ExprInfo check(hir::Loop& expr);
-    ExprInfo check(hir::While& expr);
-    ExprInfo check(hir::Break& expr);
-    ExprInfo check(hir::Continue& expr);
-    ExprInfo check(hir::Return& expr);
+    ExprInfo check(hir::Call& expr, TypeExpectation exp);
+    ExprInfo check(hir::MethodCall& expr, TypeExpectation exp);
+    ExprInfo check(hir::If& expr, TypeExpectation exp);
+    ExprInfo check(hir::Loop& expr, TypeExpectation exp);
+    ExprInfo check(hir::While& expr, TypeExpectation exp);
+    ExprInfo check(hir::Break& expr, TypeExpectation exp);
+    ExprInfo check(hir::Continue& expr, TypeExpectation exp);
+    ExprInfo check(hir::Return& expr, TypeExpectation exp);
     
     // Block expressions
-    ExprInfo check(hir::Block& expr);
+    ExprInfo check(hir::Block& expr) {
+        return check(expr, TypeExpectation::none());
+    }
+    ExprInfo check(hir::Block& expr, TypeExpectation exp);
 
     class FunctionScopeGuard {
         ExprChecker& checker;
@@ -170,8 +189,8 @@ public:
     void replace_current_expr(hir::ExprVariant new_expr);
     hir::Local* create_temporary_local(bool is_mutable, TypeId type);
     // Static variants (should be resolved by name resolution)
-    ExprInfo check(hir::StructConst& expr);
-    ExprInfo check(hir::EnumVariant& expr);
+    ExprInfo check(hir::StructConst& expr, TypeExpectation exp);
+    ExprInfo check(hir::EnumVariant& expr, TypeExpectation exp);
 
 };
 

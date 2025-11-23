@@ -8,185 +8,197 @@ maintainer: @rcompiler-team
 
 ## Overview
 
-Resolves all identifiers in the HIR to their corresponding symbol definitions, establishing the semantic relationships between uses and declarations.
+Resolves identifiers, struct literals, and `impl` contexts so later passes can rely on concrete symbol handles while type annotations remain syntactic.
 
 ## Input Requirements
 
-- Valid HIR from HIR Converter with all expressions, statements, and items properly structured
-- All identifiers in unresolved form (as `ast::Identifier` variants)
-- Type annotations in `TypeNode` form (unresolved)
-- Field access expressions with `ast::Identifier` field names
+- Valid HIR from the converter (one `hir::Program` tree)
+- Unresolved identifiers expressed as `hir::UnresolvedIdentifier`
+- Type annotations stored as `TypeNode`/`DefType` variants (no `TypeId` yet)
+- `hir::StructLiteral` still refer to `ast::Identifier`
+- `impl` blocks contain syntactic `for_type` paths and optional trait identifiers
 
 ## Goals and Guarantees
 
-**Goal**: Resolve all identifier references to their definitions
-- **All identifiers resolved** to specific symbol definitions
-- **All type annotations converted** from `TypeNode` to `TypeId` form
-- **All field access expressions resolved** to specific struct fields
-- **Symbol table populated** with all visible symbols at each scope level
-- **Import statements processed** and external symbols made available
+**Goal**: Replace syntactic references with canonical symbol handles
+
+- **All value identifiers resolved** to `hir::Variable`, `hir::ConstUse`, or `hir::FuncUse`
+- **`impl` blocks registered** in `ImplTable` with resolved `for_type` and optional trait pointer
+- **Struct literals canonicalised** and stored as pointers to their `hir::StructDef`
+- **`Self` type and `self` parameter** synthesized for methods and impl bodies
+- **Type statics queued** for later resolution to associated items (constants / functions)
+- **Scopes populated** with locals, consts, functions, traits, structs, enums
 
 ## Architecture
 
 ### Core Components
-- **Symbol Table**: Hierarchical scope management with symbol definitions
-- **Scope Management**: Nested scope handling with proper visibility rules
-- **Import Processing**: Module and symbol import resolution
-- **Type Resolution**: Integration with type system for resolved types
 
-### Resolution Strategies
-- **Local Variables**: Function and block scope resolution
-- **Function Parameters**: Parameter binding resolution
-- **Global Items**: Module-level symbol resolution
-- **Field Access**: Struct field resolution
-- **Method Calls**: Trait and impl method resolution
+- **Scope Stack (`semantic::Scope`)**: Nested value/type lookups with support for `Self`
+- **Impl Table (`semantic::ImplTable`)**: Records inherent implementations for later method lookup
+- **Local Owner Stack**: Tracks which `hir::Function`/`hir::Method` owns the locals being created
+- **Deferred Binding Queue**: Ensures `let` pattern locals are defined only after visiting the initializer
+
+### Resolution Responsibilities
+
+- **Item Collection**: Each scope first registers item names before resolving bodies
+- **Local Creation**: `BindingDef` nodes create `hir::Local` entries and register them at the right scope depth
+- **Struct Literals**: Field initializers are reordered to canonical order and duplicate writes detected
+- **Type Paths**: `hir::DefType` and `hir::TypeStatic` replace `ast::Identifier` with concrete `TypeDef` handles
+- **Impl Registration**: `hir::Impl` nodes convert their `for_type` into `TypeId` and register themselves in `ImplTable`
 
 ## Implementation Details
 
-### Symbol Table Structure
-```cpp
-class SymbolTable {
-    std::vector<std::unique_ptr<Scope>> scope_stack;
-    std::unordered_map<std::string, SymbolId> global_symbols;
-    
-public:
-    void push_scope(ScopeType type);
-    void pop_scope();
-    SymbolId lookup(const std::string& name) const;
-    void define_symbol(const std::string& name, SymbolId id);
-};
-```
+### Scope Structure
+
+Symbol information is provided by `semantic::Scope` (see `src/semantic/symbol/scope.hpp`). Each scope contains:
+
+- A pointer to its parent scope (for lookups)
+- Maps for **values**, **types**, **consts**, and **impls**
+- Flags describing whether outer bindings may be captured (functions disable capture, blocks allow)
 
 ### Scope Types
-- **Global Scope**: Module-level declarations
-- **Function Scope**: Function parameters and local variables
-- **Block Scope**: Block-local variables
-- **Impl Scope**: Trait implementation scope
-- **Loop Scope**: Loop-specific variables
+
+- **Global Scope**: Root scope seeded with `get_predefined_scope()`
+- **Item Scope**: Created for function bodies, trait/impl blocks, and blocks
+- **Loop Scope**: Currently piggybacks on block scopes; dedicated tracking will move to Control Flow pass
+- **Method Scope**: Function-like scope with additional `self` local + `Self` type registration
 
 ### Resolution Process
-1. **Pre-population**: Load predefined symbols into global scope
-2. **Item Processing**: Process top-level items and populate global scope
-3. **Body Resolution**: Resolve identifiers within function bodies
-4. **Type Resolution**: Resolve type annotations to TypeIds
-5. **Field Resolution**: Resolve struct field access expressions
+
+1. **Program Entry**: Push global scope seeded with predefined items
+2. **Item Definition**: Declare every top-level item name before visiting bodies
+3. **Visit Bodies**: Traverse functions, methods, consts, impls, etc.
+4. **Resolve Locals**: `BindingDef` creates locals, deferring registration until after pattern traversal when necessary
+5. **Canonicalise Struct Literals**: Replace syntactic field order with canonical indexes and detect missing/duplicate fields
+6. **Finalise Type Statics**: After traversal, bind each pending `TypeStatic` to the resolved associated constant/function/variant
 
 ## Key Algorithms
 
 ### Identifier Resolution
+
 ```cpp
-SymbolId resolve_identifier(const ast::Identifier& ident) {
-    // Check local scopes first
-    for (auto it = scope_stack.rbegin(); it != scope_stack.rend(); ++it) {
-        if (auto symbol = (*it)->lookup(ident.name)) {
-            return *symbol;
+void NameResolver::visit(hir::UnresolvedIdentifier &ident, hir::Expr &container) {
+    auto def = scopes.top().lookup_value(ident.name);
+    if (!def) throw std::runtime_error("Undefined identifier " + ident.name.name);
+
+    container.value = std::visit(Overloaded{
+        [&](hir::Local *local) { return hir::ExprVariant{hir::Variable(local, ident.ast_node)}; },
+        [&](hir::ConstDef *constant) { return hir::ExprVariant{hir::ConstUse(constant, ident.ast_node)}; },
+        [&](hir::Function *function) { return hir::ExprVariant{hir::FuncUse(function, ident.ast_node)}; },
+        [&](hir::Method *) -> hir::ExprVariant {
+            throw std::runtime_error("Methods must be invoked via method call syntax");
         }
-    }
-    
-    // Check global scope
-    if (auto symbol = global_symbols.lookup(ident.name)) {
-        return *symbol;
-    }
-    
-    // Check imports
-    return resolve_import(ident.name);
+    }, *def);
 }
 ```
 
-### Type Resolution
+### Type Path Canonicalisation
+
 ```cpp
-TypeId resolve_type_annotation(const hir::TypeAnnotation& annotation) {
-    return std::visit([](auto&& arg) -> TypeId {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, std::unique_ptr<hir::TypeNode>>) {
-            return resolve_type_node(*arg);
-        } else if constexpr (std::is_same_v<T, TypeId>) {
-            return arg; // Already resolved
-        }
-    }, annotation);
+void NameResolver::visit(hir::DefType &def_type) {
+    if (auto *name = std::get_if<ast::Identifier>(&def_type.def)) {
+        auto type_def = scopes.top().lookup_type(*name);
+        if (!type_def) throw std::runtime_error("Undefined type " + name->name);
+        def_type.def = *type_def; // store pointer to Struct/Trait/etc.
+    }
 }
 ```
 
-### Field Access Resolution
+### Struct Literal Canonicalisation
+
 ```cpp
-hir::FieldAccess resolve_field_access(const hir::FieldAccess& access) {
-    auto struct_type = resolve_expression_type(*access.object);
-    auto struct_def = type_system.get_struct_definition(struct_type);
-    
-    for (const auto& field : struct_def.fields) {
-        if (field.name == access.field.name) {
-            return hir::FieldAccess{
-                .object = std::move(access.object),
-                .field = FieldId{field.index},
-                .ast_node = access.ast_node
-            };
-        }
+void NameResolver::visit(hir::StructLiteral &sl) {
+    auto *name_ptr = std::get_if<ast::Identifier>(&sl.struct_path);
+    if (!name_ptr) return base().visit(sl);
+
+    auto def = scopes.top().lookup_type(*name_ptr);
+    if (!def) throw std::runtime_error("Undefined struct " + name_ptr->name);
+    auto *struct_def = std::get_if<hir::StructDef *>(&def.value());
+    if (!struct_def) throw std::runtime_error(name_ptr->name + " is not a struct");
+
+    sl.struct_path = *struct_def;
+    auto syntactic_fields = std::get_if<hir::StructLiteral::SyntacticFields>(&sl.fields);
+    if (!syntactic_fields) throw std::runtime_error("Unexpected struct literal form");
+
+    std::vector<std::unique_ptr<hir::Expr>> fields((*struct_def)->fields.size());
+    for (auto &init : syntactic_fields->initializers) {
+        auto it = std::find_if((*struct_def)->fields.begin(), (*struct_def)->fields.end(),
+                               [&](const semantic::Field &f) { return f.name == init.first.name; });
+        if (it == (*struct_def)->fields.end()) throw std::runtime_error("Unknown field " + init.first.name);
+        size_t index = std::distance((*struct_def)->fields.begin(), it);
+        if (fields[index]) throw std::runtime_error("Duplicate initialization of field " + init.first.name);
+        fields[index] = std::move(init.second);
     }
-    
-    throw SemanticError("Field not found", access.field.position);
+    sl.fields = hir::StructLiteral::CanonicalFields{.initializers = std::move(fields)};
+    base().visit(sl);
 }
 ```
 
 ## Error Handling
 
 ### Common Resolution Errors
-- **Undefined Identifier**: Use of undeclared variable or function
-- **Ambiguous Reference**: Multiple definitions with same name
-- **Private Access**: Attempt to access private symbol
-- **Field Not Found**: Access to non-existent struct field
-- **Type Not Found**: Reference to undefined type
 
-### Error Recovery Strategies
-- **Best Effort Resolution**: Continue resolving other identifiers
-- **Placeholder Symbols**: Use placeholder for unresolved symbols
-- **Deferred Resolution**: Mark for later resolution in multi-pass system
+- **Undefined Identifier**: Encountered by `visit(hir::UnresolvedIdentifier)`
+- **Duplicate Definition**: Attempt to define two items with the same name in one scope
+- **Missing Type**: `DefType`/`TypeStatic` points to unknown type name
+- **Invalid Struct Literal Field**: Missing or duplicate field initialisation
+- **Trait/Impl Mismatches**: Impl references non-trait entity or unresolved `for_type`
+
+### Error Strategy
+
+The current implementation aborts immediately via `std::runtime_error`. Recovery/placeholder strategies are not implemented.
 
 ## Performance Characteristics
 
 ### Time Complexity
+
 - **Lookup**: O(1) average case with hash tables
 - **Scope Navigation**: O(s) where s is scope depth
 - **Import Resolution**: O(i) where i is number of imports
 
 ### Space Complexity
+
 - **Symbol Table**: O(n) where n is total number of symbols
 - **Scope Stack**: O(d) where d is maximum nesting depth
 
 ### Optimization Opportunities
+
 - **Symbol Caching**: Cache frequently accessed symbols
 - **Lazy Import Loading**: Load imports only when needed
 - **Scope Pre-allocation**: Pre-allocate common scope sizes
 
 ## Integration Points
 
-### With Type Resolution
-- **Type Annotation Resolution**: Convert TypeNode to TypeId
-- **Type Consistency**: Ensure resolved types match expectations
-- **Generic Handling**: Resolve generic type parameters
+### With Type & Const Finalisation
+
+- Consumes canonical `DefType` nodes to produce a `TypeId`
+- Reads the registered `impl` list from `ImplTable` when evaluating associated consts/functions
 
 ### With Semantic Checking
-- **Symbol Availability**: Ensure symbols are available for checking
-- **Type Information**: Provide resolved types for type checking
-- **Method Resolution**: Enable method call validation
+
+- Provides `hir::Variable`/`hir::ConstUse`/`hir::FuncUse` nodes for `ExprChecker`
+- Supplies canonical struct literals and `ImplTable` data needed for method lookup
 
 ### With HIR Converter
-- **Identifier Preservation**: Maintain original identifier information
-- **AST References**: Preserve source location information
-- **Structure Integrity**: Ensure HIR structure remains valid
+
+- Consumes AST-origin identifiers while preserving `ast_node` pointers for diagnostics
+- Assumes converter populated `BindingDef::Unresolved` entries and `StructLiteral::SyntacticFields`
 
 ## Testing Strategy
 
 ### Unit Tests
-- **Symbol Table Operations**: Test scope management and lookup
-- **Resolution Algorithms**: Test individual resolution functions
-- **Error Cases**: Test error detection and reporting
+
+- `test_name_resolution.cpp` ensures structs/impls/locals resolve correctly
+- Use builder helpers to emulate nested scopes and struct literals
+- Regression tests cover duplicate fields, undefined names, etc.
 
 ### Integration Tests
-- **Full Resolution**: Test complete name resolution on sample programs
-- **Import Handling**: Test module and symbol import resolution
-- **Complex Scenarios**: Test nested scopes and shadowing
+
+- `RCompiler-Testcases/semantic-1` programs populate complex trait/impl scenarios
+- Combined semantic pipeline tests (e.g., `test_expr_check`) implicitly exercise name resolution
 
 ### Test Cases
+
 ```cpp
 TEST(NameResolutionTest, LocalVariableResolution) {
     // Test local variable resolution in function scope
@@ -204,24 +216,27 @@ TEST(NameResolutionTest, ImportResolution) {
 ## Debugging and Diagnostics
 
 ### Debug Information
+
 - **Symbol Table Dump**: Print current symbol table state
 - **Resolution Trace**: Track identifier resolution process
 - **Scope Visualization**: Display scope hierarchy
 
 ### Diagnostic Messages
+
 - **Undefined Symbol**: Clear indication of missing definitions
 - **Scope Context**: Show available symbols in current scope
 - **Import Status**: Display import resolution status
 
 ## Future Extensions
 
-### Advanced Features
-- **Generic Resolution**: Handle generic type and function resolution
-- **Trait Resolution**: Resolve trait method calls and implementations
-- **Macro Expansion**: Handle macro identifier resolution
-- **Conditional Compilation**: Resolve symbols in conditional contexts
+### Future Work
+
+- Imports / modules
+- Generic parameters + `Self` trait bounds
+- Better diagnostics for method references and trait short-hands
 
 ### Performance Improvements
+
 - **Parallel Resolution**: Resolve independent symbols in parallel
 - **Incremental Resolution**: Update only affected symbols on changes
 - **Resolution Caching**: Cache resolution results across compilations
@@ -230,7 +245,7 @@ TEST(NameResolutionTest, ImportResolution) {
 
 - [Semantic Passes Overview](README.md): Complete pipeline overview
 - [HIR Converter](hir-converter.md): Previous pass in pipeline
-- [Type Resolution](type-resolution.md): Next pass in pipeline
+- [Type & Const Finalization](type-resolution.md): Next pass in pipeline
 - [Symbol Management](../symbol/scope.md): Symbol table implementation
 - [Type System](../type/type_system.md): Type resolution integration
 - [Semantic Analysis Overview](../../../docs/component-overviews/semantic-overview.md): High-level semantic analysis design

@@ -1,435 +1,128 @@
 # Semantic Analysis Overview
 
-Semantic Analysis is the middle phase of the RCompiler pipeline, responsible for transforming the syntactic structure (AST) into a semantically valid High-Level Intermediate Representation (HIR). This phase ensures that the program is not just syntactically correct but also meaningful according to the language's type system and semantic rules.
+Semantic analysis transforms the parsed AST into a validated High-Level IR (HIR) through a sequence of explicit visitor passes. The pipeline is orchestrated in `cmd/semantic_pipeline.cpp` and each pass tightens invariants that the following pass relies on.
 
 ## Architecture
 
-RCompiler implements semantic analysis as a **multi-pass transformation system** inspired by rustc's query-based approach. Each pass focuses on specific semantic concerns and builds upon the results of previous passes, gradually enriching the AST with semantic information until it becomes a fully resolved HIR.
+- Visitor-based passes run on a shared HIR data model and communicate through resolved pointers and `TypeId` handles rather than a query system.
+- Pipeline order: **HIR Conversion → Name Resolution → Type & Const Finalization → Trait Validation → Control Flow Linking → Semantic Checking → Exit Check**.
+- Shared infrastructure: HIR nodes (`src/semantic/hir/`), scope management (`src/semantic/symbol/`), implementation table (`src/semantic/type/impl_table.hpp`), the type arena (`src/semantic/type/type.hpp`), and the constant evaluator (`src/semantic/const/`).
 
 ## Core Components
 
-### Semantic Analysis Framework
+### HIR and Conversion (`src/semantic/hir/`)
+- `AstToHirConverter` turns parsed AST items into HIR while leaving names, types, and control-flow targets unresolved.
+- `TypeAnnotation` is a `std::variant` of `std::unique_ptr<TypeNode>` (unresolved) or `semantic::TypeId` (resolved).
+- HIR nodes carry AST back-references for diagnostics and optional `ExprInfo` slots populated later by semantic checking.
 
-The semantic analysis system consists of several interconnected components:
+### Type System (`src/semantic/type/`)
+- Supported kinds: primitives (`I32`, `U32`, `ISIZE`, `USIZE`, `BOOL`, `CHAR`, `STRING`), struct/enum nominal types, references (with mutability), arrays with constant length, and marker types (`UnitType`, `NeverType`, `UnderscoreType`).
+- `TypeId` is a pointer to an interned `Type` owned by `TypeContext`; equality is pointer equality.
+- No generics, subtyping, or function types are implemented. Type inference is intentionally absent; all bindings must be annotated before resolution.
+- `TypeResolver` resolves `TypeAnnotation` nodes to `TypeId` and materializes array lengths via constant evaluation.
+- `helper` utilities provide introspection helpers (e.g., reference checks, numeric checks, base type extraction).
 
-- **Type System** ([`src/semantic/type/`](../../src/semantic/type/)): Type definitions, resolution, and operations
-- **Symbol Table** ([`src/semantic/symbol/`](../../src/semantic/symbol/)): Name resolution and scope management
-- **Constant Evaluation** ([`src/semantic/const/`](../../src/semantic/const/)): Compile-time computation and folding
-- **HIR Generation** ([`src/semantic/hir/`](../../src/semantic/hir/)): AST to HIR transformation
-- **Analysis Passes** ([`src/semantic/pass/`](../../src/semantic/pass/)): Individual semantic analysis transformations
+### Symbol and Implementation Tables (`src/semantic/symbol/`, `src/semantic/type/impl_table.hpp`)
+- `Scope` stores value bindings (locals, consts, functions, methods) and type bindings (structs, enums, traits) with lexical shadowing; boundary scopes prevent capturing outer bindings inside functions/methods.
+- The predefined scope injects built-ins such as `String`, `print/println/printInt/printlnInt/getString/getInt/exit` plus predefined methods (e.g., `to_string`, `len`, `append`) wired through `inject_predefined_methods`.
+- `ImplTable` records associated items per `TypeId`, registers inherent impls during name resolution, and provides lookup for functions/consts/methods (including an implicit `len` for arrays).
 
-### Type System ([`src/semantic/type/`](../../src/semantic/type/))
+### Constant Evaluation (`src/semantic/const/`)
+- `ConstEvaluator` reduces literals, unary/binary operations, and `ConstUse` expressions to `ConstVariant` values (integers, booleans, chars, strings) with memoization.
+- Used by `TypeConstResolver` to populate `ConstDef::const_value` and to materialize array repeat counts; unsupported expressions raise exceptions. There is no separate notion of const functions.
 
-The type system provides the foundation for all semantic analysis:
+## Pass Pipeline and Invariants
 
-#### Core Types ([`src/semantic/type/type.hpp`](../../src/semantic/type/type.hpp))
-- **Primitive Types**: `i32`, `i64`, `f64`, `bool`, `str`, `char`
-- **Composite Types**: Arrays `[T]`, tuples `(T, U)`, structs `Struct { ... }`
-- **Function Types**: `fn(T) -> U`, `fn(T, U) -> V`
-- **Generic Types**: Type parameters and instantiated generics
-- **Type Variables**: For type inference and unification
+1. **HIR Conversion** (`src/semantic/hir/converter.*`)
+   - Produces HIR skeletons with unresolved identifiers (`UnresolvedIdentifier`), type paths (`TypeStatic`), and control-flow targets.
+   - Preserves AST layout and initializes `TypeAnnotation` with `TypeNode` variants.
 
-#### Type Resolution ([`src/semantic/type/resolver.hpp`](../../src/semantic/type/resolver.hpp))
-- **Type Inference**: Automatic type deduction from usage
-- **Type Unification**: Finding most general types for expressions
-- **Subtyping**: Checking type compatibility and relationships
-- **Generic Instantiation**: Creating concrete types from generic definitions
+2. **Name Resolution** (`src/semantic/pass/name_resolution/`)
+   - Starts with the predefined scope, defines all items, and resolves identifiers to `Variable`, `ConstUse`, or `FuncUse`.
+   - Resolves `TypeStatic` paths and impl `for_type` entries to nominal definitions and registers impls in `ImplTable`.
+   - Canonicalizes struct literals by reordering initializers to match the struct definition and binds `BindingDef` nodes to `Local*`.
+   - Leaves type annotations unresolved for later passes.
 
-#### Implementation Table ([`src/semantic/type/impl_table.hpp`](../../src/semantic/type/impl_table.hpp))
-- **Trait Implementations**: Mapping from types to implemented traits
-- **Method Resolution**: Finding appropriate methods for types
-- **Trait Bounds**: Checking generic constraints
-- **Coercion Rules**: Implicit type conversions
+3. **Type & Const Finalization** (`src/semantic/pass/type&const/visitor.hpp`)
+   - Resolves every `TypeAnnotation` to a `TypeId`; defaults missing function/method return types to `UnitType`.
+   - Requires explicit parameter and let-statement annotations; propagates resolved types into bound locals.
+   - Evaluates all constant expressions and stores them on `ConstDef`, materializes array repeat counts, and folds unary `-` into integer literals.
 
-#### Type Helpers ([`src/semantic/type/helper.hpp`](../../src/semantic/type/helper.hpp))
-- **Type Utilities**: Common type operations and comparisons
-- **Type Canonicalization**: Normalizing type representations
-- **Type Printing**: Human-readable type formatting
+4. **Trait Validation** (`src/semantic/pass/trait_check/trait_check.hpp`)
+   - For impls that reference a trait, verifies every required item exists and that parameter/return `TypeId` signatures match the trait definition.
+   - Reports missing items or mismatched signatures; inherent impls are ignored by this pass.
 
-### Symbol Table Management ([`src/semantic/symbol/`](../../src/semantic/symbol/))
+5. **Control Flow Linking** (`src/semantic/pass/control_flow_linking/`)
+   - Attaches `return`, `break`, and `continue` targets to their containing function/method or loop nodes.
+   - Establishes the invariants used by later analyses for endpoint reasoning.
 
-#### Scope Management ([`src/semantic/symbol/scope.hpp`](../../src/semantic/symbol/scope.hpp))
-- **Hierarchical Scopes**: Nested lexical scopes
-- **Symbol Resolution**: Name lookup with proper shadowing rules
-- **Lifetime Tracking**: Variable lifetime and visibility
-- **Import Resolution**: Module and use statement handling
+6. **Semantic Checking** (`src/semantic/pass/semantic_check/`)
+   - Computes `ExprInfo` (type, mutability, place-ness, endpoints) for every expression and enforces assignability via `type_compatibility`.
+   - Resolves struct field accesses to field indices, validates struct literal initialization against field order/types, and uses `ImplTable` for method/function lookup.
+   - Ensures control-flow endpoint information is consistent (e.g., divergence, break/continue/return destinations).
 
-#### Predefined Symbols ([`src/semantic/symbol/predefined.hpp`](../../src/semantic/symbol/predefined.hpp))
-- **Built-in Types**: Primitive type definitions
-- **Standard Library**: Predeclared functions and types
-- **Language Features**: Compiler intrinsics and special forms
+7. **Exit Check** (`src/semantic/pass/exit_check/`)
+   - Enforces the project rule that `exit()` may only appear as the final statement of the top-level `main` function and is forbidden elsewhere.
 
-### Constant Evaluation ([`src/semantic/const/`](../../src/semantic/const/))
-
-#### Constant Definitions ([`src/semantic/const/const.hpp`](../../src/semantic/const/const.hpp))
-- **Constant Values**: Compile-time known values
-- **Constant Expressions**: Evaluatable at compile time
-- **Const Functions**: Functions that can be evaluated at compile time
-
-#### Evaluator ([`src/semantic/const/evaluator.hpp`](../../src/semantic/const/evaluator.hpp))
-- **Expression Folding**: Reducing constant expressions
-- **Propagation**: Spreading constant values through code
-- **Optimization**: Replacing expressions with their results
-
-### HIR Generation ([`src/semantic/hir/`](../../src/semantic/hir/))
-
-#### HIR Definition ([`src/semantic/hir/hir.hpp`](../../src/semantic/hir/hir.hpp))
-- **High-Level IR**: More abstract than AST, closer to machine representation
-- **Semantic Annotations**: Type information, resolved names, constant values
-- **Control Flow**: Structured control flow constructs
-- **Memory Layout**: Information about data organization
-
-#### Converter ([`src/semantic/hir/converter.hpp`](../../src/semantic/hir/converter.hpp))
-- **AST to HIR**: Transformation from syntactic to semantic representation
-- **Type Annotation**: Adding type information to HIR nodes
-- **Name Resolution**: Converting identifiers to resolved symbols
-- **Semantic Validation**: Ensuring semantic correctness during conversion
-
-#### Visitor Pattern ([`src/semantic/hir/visitor/`](../../src/semantic/hir/visitor/))
-- **HIR Traversal**: Type-safe tree operations
-- **Transformations**: HIR modifications and optimizations
-- **Analysis**: Semantic information extraction
-
-#### Pretty Printing ([`src/semantic/hir/pretty_print/`](../../src/semantic/hir/pretty_print/))
-- **HIR Display**: Human-readable HIR output
-- **Debugging**: Visualization of semantic analysis results
-- **Documentation**: Generating code examples and explanations
-
-## Semantic Analysis Passes
-
-The semantic analysis is organized into distinct passes, each with specific responsibilities:
-
-### 1. Name Resolution Pass ([`src/semantic/pass/name_resolution/`](../../src/semantic/pass/name_resolution/))
-
-**Purpose**: Resolve all identifiers to their declarations and build the symbol table.
-
-**Key Operations**:
-- **Symbol Registration**: Collect all declarations into appropriate scopes
-- **Reference Resolution**: Map identifier uses to their definitions
-- **Import Handling**: Process module imports and use statements
-- **Error Detection**: Find undefined variables and ambiguous references
-
-**Invariants Established**:
-- Every identifier reference points to a valid declaration
-- Scope boundaries are properly enforced
-- Import statements are correctly resolved
-
-### 2. Type Resolution Pass ([`src/semantic/pass/type&const/`](../../src/semantic/pass/type&const/))
-
-**Purpose**: Determine and annotate types for all expressions and declarations.
-
-**Key Operations**:
-- **Type Inference**: Deduce types from expressions and usage
-- **Type Checking**: Verify type compatibility in operations
-- **Generic Instantiation**: Create concrete types from generic definitions
-- **Constant Evaluation**: Compute constant expressions at compile time
-
-**Invariants Established**:
-- Every expression has a known type
-- Type compatibility is verified for all operations
-- Generic types are properly instantiated
-- Constant expressions are evaluated
-
-### 3. Semantic Checking Pass ([`src/semantic/pass/semantic_check/`](../../src/semantic/pass/semantic_check/))
-
-**Purpose**: Perform comprehensive semantic validation beyond type checking.
-
-**Key Operations**:
-- **Expression Checking**: Validate expression semantics and rules
-- **Control Flow Analysis**: Verify control flow properties
-- **Lifetime Checking**: Ensure proper variable lifetimes
-- **Borrow Checking**: (Future) Reference and ownership validation
-
-**Invariants Established**:
-- All expressions follow language semantic rules
-- Control flow is properly structured
-- Variable lifetimes are correctly managed
-- Memory safety rules are enforced
-
-### 4. Exit Check Pass ([`src/semantic/pass/exit_check/`](../../src/semantic/pass/exit_check/))
-
-**Purpose**: Validate function exit behavior and return statements.
-
-**Key Operations**:
-- **Return Path Analysis**: Ensure all functions have proper return paths
-- **Return Type Checking**: Verify return value compatibility
-- **Exit Validation**: Check function termination conditions
-
-**Invariants Established**:
-- All functions have valid return behavior
-- Return types match function signatures
-- No unreachable code exists
-
-### 5. Control Flow Linking Pass ([`src/semantic/pass/control_flow_linking/`](../../src/semantic/pass/control_flow_linking/))
-
-**Purpose**: Analyze and optimize control flow structures.
-
-**Key Operations**:
-- **Flow Graph Construction**: Build control flow graphs
-- **Dominance Analysis**: Compute dominance relationships
-- **Loop Analysis**: Identify loop structures and properties
-- **Optimization Preparation**: Set up for future optimizations
-
-**Invariants Established**:
-- Control flow relationships are explicitly represented
-- Loop structures are properly identified
-- Optimization opportunities are marked
-
-### 6. Trait Check Pass ([`src/semantic/pass/trait_check/`](../../src/semantic/pass/trait_check/))
-
-**Purpose**: Validate trait implementations and trait bounds.
-
-**Key Operations**:
-- **Trait Implementation**: Verify proper trait method implementations
-- **Bound Checking**: Ensure generic constraints are satisfied
-- **Method Resolution**: Resolve trait method calls
-- **Coercion Validation**: Check implicit conversions
-
-**Invariants Established**:
-- All trait implementations are complete and correct
-- Generic bounds are properly satisfied
-- Trait method calls are correctly resolved
-
-## Data Flow Architecture
+### Data Flow
 
 ```mermaid
 graph TD
-    A[AST] --> B[Name Resolution Pass]
-    B --> C[Type Resolution Pass]
-    C --> D[Semantic Checking Pass]
-    D --> E[Exit Check Pass]
-    E --> F[Control Flow Linking Pass]
-    F --> G[Trait Check Pass]
-    G --> H[Validated HIR]
-    
-    B --> I[Symbol Table]
-    C --> J[Type System]
-    D --> K[Semantic Info]
-    E --> L[Exit Analysis]
-    F --> M[Control Flow Graph]
-    G --> N[Trait Resolution]
+    A[AST] --> B[HIR Conversion]
+    B --> C[Name Resolution]
+    C --> D[Type & Const Finalization]
+    D --> E[Trait Validation]
+    E --> F[Control Flow Linking]
+    F --> G[Semantic Checking]
+    G --> H[Exit Check]
+    H --> I[Validated HIR]
 ```
 
-## Key Design Decisions
+## Design Notes
 
-### Multi-Pass Architecture
+- Passes are invariant-driven: helpers in `hir/helper.hpp` (e.g., `get_resolved_type`, `get_field_index`, `get_break_target`) assume previous passes have resolved the required fields and throw on violation.
+- Types are interned so identical structural types share `TypeId` handles; this makes equality checks O(1) and keeps the `ImplTable` keyed by stable pointers.
+- Constant evaluation and type resolution are deliberately strict—missing annotations or non-constant repeat counts fail fast to keep later passes simpler.
 
-Instead of monolithic semantic analysis, RCompiler uses separate passes:
-
-**Benefits:**
-- **Modularity**: Each pass focuses on specific concerns
-- **Maintainability**: Easier to understand and modify individual analyses
-- **Extensibility**: New analyses can be added as separate passes
-- **Incremental Development**: Passes can be developed and tested independently
-- **Optimization Opportunities**: Each pass can optimize for its specific domain
-
-### Invariant-Based Design
-
-Each pass establishes specific invariants that later passes can rely upon:
+## Usage Example
 
 ```cpp
-// Example: Type Resolution Pass establishes type invariants
-class TypeResolutionPass {
-public:
-    void process(ASTNode* node) {
-        // After this pass:
-        // - Every expression has a resolved type
-        // - Type compatibility is verified
-        // - Generic types are instantiated
-        establish_type_invariants(node);
-    }
-    
-private:
-    void establish_type_invariants(ASTNode* node) {
-        // Ensure all expressions have types
-        // Verify type compatibility
-        // Instantiate generics
-    }
-};
+AstToHirConverter converter;
+auto hir = converter.convert_program(items);
+
+semantic::ImplTable impl_table;
+semantic::inject_predefined_methods(impl_table);
+
+semantic::NameResolver name_resolver(impl_table);
+name_resolver.visit_program(*hir);
+
+semantic::TypeConstResolver type_const;
+type_const.visit_program(*hir);
+
+semantic::TraitValidator trait_validator;
+trait_validator.validate(*hir);
+
+ControlFlowLinker linker;
+linker.link_control_flow(*hir);
+
+semantic::SemanticCheckVisitor checker(impl_table);
+checker.check_program(*hir);
+
+semantic::ExitCheckVisitor exit_checker;
+exit_checker.check_program(*hir);
 ```
-
-**Benefits:**
-- **Clear Contracts**: Each pass has well-defined inputs and outputs
-- **Reliable Composition**: Later passes can trust established invariants
-- **Error Localization**: Problems can be traced to specific pass failures
-- **Parallel Development**: Different teams can work on different passes
-
-### Type System Design
-
-Separate TypeId system from type definitions:
-
-```cpp
-// Type system with separate IDs
-class TypeSystem {
-public:
-    TypeId create_primitive_type(PrimitiveKind kind);
-    TypeId create_function_type(TypeId return_type, std::vector<TypeId> params);
-    TypeId instantiate_generic(TypeId generic_type, std::vector<TypeId> args);
-    
-    const TypeInfo& get_type_info(TypeId id) const;
-    bool is_subtype(TypeId sub, TypeId super) const;
-    
-private:
-    std::vector<TypeInfo> types_;
-    std::unordered_map<std::string, TypeId> type_names_;
-};
-```
-
-**Benefits:**
-- **Efficient Comparison**: TypeId comparison is O(1)
-- **Memory Efficiency**: Type definitions are shared
-- **Caching**: Type operations can be cached by TypeId
-- **Unification**: Type inference algorithms work with TypeIds
-
-### Visitor Pattern Implementation
-
-CRTP-based visitor pattern for type-safe tree operations:
-
-```cpp
-template<typename Derived>
-class HIRVisitor {
-public:
-    void visit(HIRNode* node) {
-        node->accept(static_cast<Derived&>(*this));
-    }
-    
-    // Default implementations
-    void visit_expression(HIRExpression* expr) {
-        // Default expression handling
-    }
-    
-    void visit_statement(HIRStatement* stmt) {
-        // Default statement handling
-    }
-};
-
-class TypeChecker : public HIRVisitor<TypeChecker> {
-public:
-    void visit_binary_op(HIRBinaryOp* op) {
-        // Type-specific binary operation checking
-    }
-    
-    void visit_function_call(HIRFunctionCall* call) {
-        // Function call type checking
-    }
-};
-```
-
-**Benefits:**
-- **Type Safety**: Compile-time checking of visitor operations
-- **Performance**: Static dispatch instead of virtual calls
-- **Extensibility**: New node types easily added
-- **Modularity**: Different visitors for different analyses
-
-## Error Handling Strategy
-
-### Comprehensive Error Reporting
-
-```cpp
-class SemanticError : public CompilerError {
-public:
-    SemanticError(const std::string& message,
-                 const HIRNode* node,
-                 ErrorKind kind,
-                 const std::vector<Hint>& hints = {})
-        : message_(format_error(message, node, kind)),
-          node_(node),
-          kind_(kind),
-          hints_(hints) {}
-    
-    const std::string& message() const { return message_; }
-    const HIRNode* node() const { return node_; }
-    ErrorKind kind() const { return kind_; }
-    const std::vector<Hint>& hints() const { return hints_; }
-    
-private:
-    std::string message_;
-    const HIRNode* node_;
-    ErrorKind kind_;
-    std::vector<Hint> hints_;
-};
-```
-
-**Features:**
-- **Precise Location**: Error location in source code
-- **Error Categories**: Different kinds of semantic errors
-- **Helpful Hints**: Suggestions for fixing errors
-- **Error Recovery**: Continue analysis after errors
-- **Error Aggregation**: Collect multiple errors per pass
-
-## Performance Considerations
-
-### Efficient Type Operations
-
-- **Type Caching**: Cache type inference results
-- **Canonicalization**: Normalize type representations
-- **Interning**: Share common type definitions
-- **Lazy Evaluation**: Defer expensive operations until needed
-
-### Memory Management
-
-- **Arena Allocation**: Use arena allocators for AST/HIR nodes
-- **Smart Pointers**: RAII for automatic memory management
-- **Move Semantics**: Efficient transfer of ownership
-- **Reference Counting**: Shared ownership where appropriate
 
 ## Navigation
 
-- **Implementation Details**: See [`src/semantic/`](../../src/semantic/) directory
-- **Type System**: [`src/semantic/type/`](../../src/semantic/type/)
-- **Analysis Passes**: [`src/semantic/pass/`](../../src/semantic/pass/)
-- **HIR Definition**: [`src/semantic/hir/hir.hpp`](../../src/semantic/hir/hir.hpp:1)
-- **Usage Examples**: Test files in [`test/semantic/`](../../test/semantic/)
+- HIR definitions and converter: `src/semantic/hir/`
+- Type system: `src/semantic/type/`
+- Scopes and predefined symbols: `src/semantic/symbol/`
+- Pass implementations and docs: `src/semantic/pass/`
+- Tests: `test/semantic/`
 
 ## Related Documentation
 
-- [AST Overview](./ast-overview.md) - Input to semantic analysis
-- [Parser Overview](./parser-overview.md) - AST generation
-- [Testing Overview](./testing-overview.md) - Semantic analysis testing
-- [Architecture Guide](../architecture.md) - System-wide design decisions
-
-## Usage Examples
-
-### Basic Semantic Analysis
-```cpp
-// Create semantic analyzer
-auto analyzer = SemanticAnalyzer();
-
-// Analyze AST
-auto result = analyzer.analyze(ast);
-
-if (result.has_errors()) {
-    for (const auto& error : result.errors()) {
-        std::cerr << "Semantic error: " << error.message() << std::endl;
-        std::cerr << "At " << error.node()->location() << std::endl;
-    }
-}
-
-// Get validated HIR
-auto hir = result.hir();
-```
-
-### Custom Analysis Pass
-```cpp
-class CustomAnalysisPass : public SemanticPass {
-public:
-    void process(HIRNode* node) override {
-        // Custom semantic analysis logic
-        if (auto* function = dynamic_cast<HIRFunction*>(node)) {
-            analyze_function(function);
-        }
-    }
-    
-private:
-    void analyze_function(HIRFunction* function) {
-        // Function-specific analysis
-        check_function_properties(function);
-    }
-};
-
-// Register and run custom pass
-auto custom_pass = std::make_unique<CustomAnalysisPass>();
-analyzer.add_pass(std::move(custom_pass));
-```
-
-This semantic analysis design provides comprehensive validation while maintaining modularity and extensibility, making it suitable for educational purposes and future development.
+- `docs/component-overviews/ast-overview.md` — AST input to semantic analysis
+- `docs/component-overviews/parser-overview.md` — Parsing pipeline
+- `docs/component-overviews/testing-overview.md` — Semantic analysis testing
+- `src/semantic/pass/README.md` — Detailed pass contracts and state transitions

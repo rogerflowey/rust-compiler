@@ -59,11 +59,26 @@ inline bool is_numeric_type(TypeId type) {
         case PrimitiveKind::ISIZE:
         case PrimitiveKind::U32:
         case PrimitiveKind::USIZE:
-        case PrimitiveKind::__ANYINT__:
-        case PrimitiveKind::__ANYUINT__:
             return true;
         default:
             return false;
+    }
+}
+
+inline bool is_integer_type(TypeId type) {
+    auto prim = std::get_if<PrimitiveKind>(&type->value);
+    if (!prim) {
+        return false;
+    }
+
+    switch (*prim) {
+    case PrimitiveKind::I32:
+    case PrimitiveKind::ISIZE:
+    case PrimitiveKind::U32:
+    case PrimitiveKind::USIZE:
+        return true;
+    default:
+        return false;
     }
 }
 

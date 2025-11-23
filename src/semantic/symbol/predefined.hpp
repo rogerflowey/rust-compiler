@@ -76,16 +76,6 @@ inline TypeId usize_type() {
     return id;
 }
 
-inline TypeId anyint_type() {
-    static const TypeId id = get_typeID(Type{PrimitiveKind::__ANYINT__});
-    return id;
-}
-
-inline TypeId anyuint_type() {
-    static const TypeId id = get_typeID(Type{PrimitiveKind::__ANYUINT__});
-    return id;
-}
-
 inline TypeId primitive_string_type() {
     static const TypeId id = get_typeID(Type{PrimitiveKind::STRING});
     return id;
@@ -181,10 +171,9 @@ static hir::Function func_getString = make_builtin_function(std::initializer_lis
 static hir::Function func_getInt = make_builtin_function(std::initializer_list<TypeId>{}, i32_type());
 static hir::Function func_exit = make_builtin_function({i32_type()}, unit_type());
 
+static hir::Method method_i32_to_string = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_struct_type());
 static hir::Method method_u32_to_string = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_struct_type());
 static hir::Method method_usize_to_string = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_anyint_to_string = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_anyuint_to_string = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_struct_type());
 static hir::Method method_string_as_str = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_ref_type());
 static hir::Method method_string_as_mut_str = make_builtin_method(true, true, std::initializer_list<TypeId>{}, string_mut_ref_type());
 static hir::Method method_string_len = make_builtin_method(true, false, std::initializer_list<TypeId>{}, usize_type());
@@ -193,11 +182,9 @@ static hir::Method method_str_len = make_builtin_method(true, false, std::initia
 
 struct PredefinedMethodRegistrar {
     PredefinedMethodRegistrar() {
+        insert_predefined_method(i32_type(), "to_string", &method_i32_to_string);
         insert_predefined_method(u32_type(), "to_string", &method_u32_to_string);
         insert_predefined_method(usize_type(), "to_string", &method_usize_to_string);
-    // Temporary support until integer inference is fully resolved.
-    insert_predefined_method(anyint_type(), "to_string", &method_anyint_to_string);
-    insert_predefined_method(anyuint_type(), "to_string", &method_anyuint_to_string);
         insert_predefined_method(string_struct_type(), "as_str", &method_string_as_str);
         insert_predefined_method(string_struct_type(), "as_mut_str", &method_string_as_mut_str);
         insert_predefined_method(string_struct_type(), "len", &method_string_len);

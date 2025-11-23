@@ -57,21 +57,21 @@ TEST_F(ExprCheckTest, IntegerLiterals) {
     EXPECT_FALSE(info_usize.is_place);
     EXPECT_TRUE(info_usize.has_normal_endpoint());
     
-    // Test negative integer with inference
-    auto expr_neg = createIntegerLiteral(42, ast::IntegerLiteralExpr::NOT_SPECIFIED, true);
-    auto info_neg = expr_checker->check(*expr_neg);
-    EXPECT_EQ(info_neg.type, anyint_type);
-    EXPECT_FALSE(info_neg.is_mut);
-    EXPECT_FALSE(info_neg.is_place);
-    EXPECT_TRUE(info_neg.has_normal_endpoint());
-    
-    // Test positive integer with inference
-    auto expr_pos = createIntegerLiteral(42, ast::IntegerLiteralExpr::NOT_SPECIFIED, false);
-    auto info_pos = expr_checker->check(*expr_pos);
-    EXPECT_EQ(info_pos.type, anyuint_type);
-    EXPECT_FALSE(info_pos.is_mut);
-    EXPECT_FALSE(info_pos.is_place);
-    EXPECT_TRUE(info_pos.has_normal_endpoint());
+    // Test unsuffixed integer without expectation (should remain unresolved)
+    auto expr_unsuffixed = createIntegerLiteral(42, ast::IntegerLiteralExpr::NOT_SPECIFIED, false);
+    auto info_unsuffixed = expr_checker->check(*expr_unsuffixed);
+    EXPECT_FALSE(info_unsuffixed.has_type);
+    EXPECT_EQ(info_unsuffixed.type, semantic::invalid_type_id);
+    EXPECT_FALSE(info_unsuffixed.is_mut);
+    EXPECT_FALSE(info_unsuffixed.is_place);
+    EXPECT_TRUE(info_unsuffixed.has_normal_endpoint());
+
+    // Supplying an expectation should resolve the literal type
+    auto info_with_expectation = expr_checker->check(
+        *expr_unsuffixed,
+        semantic::TypeExpectation::exact(i32_type));
+    EXPECT_TRUE(info_with_expectation.has_type);
+    EXPECT_EQ(info_with_expectation.type, i32_type);
 }
 
 // Test 2: Boolean Literals

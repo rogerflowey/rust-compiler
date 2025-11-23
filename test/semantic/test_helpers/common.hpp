@@ -80,10 +80,6 @@ protected:
         never_type = semantic::get_typeID(SemanticType{semantic::NeverType{}});
         underscore_type = semantic::get_typeID(SemanticType{semantic::UnderscoreType{}});
         
-        // Initialize inference types
-        anyint_type = semantic::get_typeID(SemanticType{semantic::PrimitiveKind::__ANYINT__});
-        anyuint_type = semantic::get_typeID(SemanticType{semantic::PrimitiveKind::__ANYUINT__});
-        
         // Initialize array types
         i32_array_5_type = semantic::get_typeID(SemanticType{semantic::ArrayType{i32_type, 5}});
         u32_array_5_type = semantic::get_typeID(SemanticType{semantic::ArrayType{u32_type, 5}});
@@ -440,9 +436,6 @@ static std::unique_ptr<hir::Expr> createReturn(std::unique_ptr<hir::Expr> value 
     semantic::TypeId i32_type, u32_type, isize_type, usize_type;
     semantic::TypeId bool_type, char_type, string_type;
     semantic::TypeId unit_type, never_type, underscore_type;
-    
-    // Inference types
-    semantic::TypeId anyint_type, anyuint_type;
     
     // Array types
     semantic::TypeId i32_array_5_type, u32_array_5_type, string_array_3_type;

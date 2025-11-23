@@ -39,30 +39,47 @@ AST → HIR Converter → Name Resolution → Type & Const Finalization → Trai
 - Evaluate constant expressions to compile-time values
 - Materialize array repeat counts and default function return types
 
-### 4. Control Flow Linking
+### 4. Trait Validation
+
 **Input**: HIR with resolved types and constants from Type & Const Finalization
+**Output**: HIR with trait requirements & impls cross-checked
+
+**Goal**: Ensure each trait definition and impl agree on signatures
+
+- Collect required trait items (functions/methods/consts)
+- Register impl-provided items and verify matching `TypeId`s and receiver mutability
+- Reject duplicate/conflicting implementations before later passes rely on them
+
+### 5. Control Flow Linking
+
+**Input**: HIR with validated traits from Trait Validation
 **Output**: HIR with linked control flow
 
 **Goal**: Resolve and ensure all control flow statements have valid targets
+
 - Link `break`, `continue`, and `return` statements to their destinations
 - Validate control flow contexts and jump validity
 - Handle nested control flow structures correctly
 
-### 5. Semantic Checking
+### 6. Semantic Checking
+
 **Input**: HIR with linked control flow from Control Flow Linking
 **Output**: Fully validated HIR
 
 **Goal**: Resolve and ensure all expressions have complete semantic information
+
 - Convert field access names to field indices
 - Resolve method calls to method definitions
 - Annotate expressions with `ExprInfo` (type, mutability, place, divergence)
 - Validate type safety and ownership rules
 
-### 6. Exit Check
+### 7. Exit Check
+
 **Input**: Fully validated HIR from Semantic Checking
 **Output**: HIR with validated exit() usage
 
 **Goal**: Validate exit() function usage according to language rules
+
 - Ensure exit() is only used in top-level main() function
 - Verify exit() is final statement in main()
 - Disallow exit() in non-main functions and methods
@@ -70,6 +87,7 @@ AST → HIR Converter → Name Resolution → Type & Const Finalization → Trai
 ## Variant State Transitions
 
 ### Type Annotations
+
 ```cpp
 // Initial state (HIR Converter)
 TypeAnnotation annotation = std::make_unique<TypeNode>(...);
@@ -85,6 +103,7 @@ TypeAnnotation annotation = resolved_type_id;
 ```
 
 ### Field Access
+
 ```cpp
 // Initial state (HIR Converter)
 FieldAccess field = ast::Identifier{"my_field"};
@@ -100,6 +119,7 @@ FieldAccess field = size_t{2};  // Field index
 ```
 
 ### Identifiers
+
 ```cpp
 // Initial state (HIR Converter)
 UnresolvedIdentifier ident = ast::Identifier{"my_function"};
@@ -145,6 +165,7 @@ inline std::optional<TypeId> try_get_resolved_type(const TypeAnnotation& annotat
 ## Implementation Guidelines
 
 ### For Pass Authors
+
 1. Document input/output invariants clearly
 2. Use helper functions to access variant content
 3. Transform variants toward more resolved states
@@ -152,12 +173,14 @@ inline std::optional<TypeId> try_get_resolved_type(const TypeAnnotation& annotat
 5. Preserve AST back-references for error reporting
 
 ### For Variant Design
+
 1. Start with unresolved/semantic variants
 2. Add intermediate states if needed
 3. Ensure progression toward fully resolved
 4. Provide helper functions for each state
 
 ### Error Handling
+
 1. Use `logic_error` for invariant violations
 2. Provide clear error messages
 3. Include context about which pass failed
@@ -168,9 +191,11 @@ inline std::optional<TypeId> try_get_resolved_type(const TypeAnnotation& annotat
 - [HIR Converter](hir-converter.md)
 - [Name Resolution](name-resolution.md)
 - [Type & Const Finalization](type-resolution.md)
+- [Trait Validation](trait_check.md)
 - [Semantic Checking](semantic-checking.md)
 - [Control Flow Linking](control-flow-linking.md)
 - [Exit Check](exit_check.md)
+- [Temp Ref Desugaring](temp_ref_desuger.md)
 
 ## Related Documentation
 

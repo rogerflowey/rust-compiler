@@ -1,321 +1,302 @@
-
-# The RCompiler MIR (Mid-level Intermediate Representation)
-
-The MIR is the final representation before code generation (LLVM IR). It is designed to be explicit, analysis-friendly, and easy to translate into a low-level format like LLVM. Its core philosophy is to make control flow obvious and to separate memory-based variables from SSA-based temporary values.
-
-## Core Design Principles
-
-1. **Control Flow Graph (CFG):**
-   All code is organized into a graph of **Basic Blocks**. Each block contains a linear sequence of instructions and ends with a single **Terminator** instruction that dictates control flow. There is no implicit control flow (e.g., short-circuiting operators).
-
-2. **Explicit SSA Form:**
-   The MIR is in Static Single Assignment (SSA) form for temporaries.
-
-   * **Temporaries (`Temp`)**: Intermediate values from expressions are stored in temporaries. Each `Temp` is defined exactly once and is immutable.
-   * **Phi Nodes**: When control flow paths merge, `Phi` nodes are used to select the correct temporary value based on the path taken.
-
-3. **Explicit Memory Model:**
-
-   * **Locals (`Local`)**: User-declared variables (`let x`), function arguments, and other values that require a stable memory address are represented as `Local`s. These are explicitly allocated in memory (typically on the stack).
-   * **Load/Store Instructions**: Interaction between SSA temporaries and memory-backed `Local`s is done explicitly via `load` and `assign` (store) instructions.
-   * **Places (`Place`)**: Addressable locations in memory are described structurally (base + projections), not as raw pointers.
-
-4. **Typed Values via IDs Only:**
-
-   * `TempId` and `LocalId` carry types (through tables in the function).
-   * `RValue`, `Place`, and `Operand` are *untyped* in the IR itself; their types are inferred from the defining `TempId` / `LocalId` and the type system.
-   * This avoids duplicated type information and consistency issues.
+Here’s a more “finalized” version of your MIR + type story, folding in everything we’ve discussed and your clarifications. You can more or less drop this into docs.
 
 ---
 
-## Key Data Structures
+## 0. Goals & Scope
 
-### 0. `Program`
+* Target: Rust-subset / C-like language.
+* Ownership / move / copy semantics are **not** modeled at MIR yet.
 
-The top-level container for all MIR functions in a compilation unit.
+  * Loads/stores are just *bitwise* value copies at this level.
+* MIR is a mid-level IR meant to:
 
-* `functions`: A vector of all `MirFunction`.
-* `globals`: A table of global variables (not detailed here).
+  * Make control flow explicit (CFG).
+  * Separate memory (`Local`) from SSA temporaries (`Temp`).
+  * Be easy to lower to LLVM IR.
 
-### 1. `MirFunction`
-
-The top-level container for a single function's MIR.
-
-* `name`: The mangled name of the function.
-* `temp_types`: A table mapping each `TempId` (by index) to its `TypeId`.
-* `locals`: A table mapping each `LocalId` to its `LocalInfo`:
-
-  * `type: TypeId`
-  * `debug_name: string` (for diagnostics)
-* `basic_blocks`: A vector of all `BasicBlock`s in the function.
-* `start_block`: The `BasicBlockId` of the entry block.
-
-### 2. `BasicBlock`
-
-A straight-line sequence of code.
-
-* `phis`: A vector of `PhiNode`s. These must appear first and define new temporaries based on incoming control flow.
-* `statements`: A vector of `Statement`s that perform computations and memory operations.
-* `terminator`: A single `Terminator` instruction that ends the block and transfers control.
+HIR handles “language semantics” (name resolution, types, traits, exit rules); MIR is post-semantic, structurally simple, and fully typed via `TypeId`.
 
 ---
 
-## 3. Storage & Value Primitives
+## 1. Types & `TypeId` (Shared Between HIR and MIR)
 
-### Identifiers
+We reuse the existing semantic type system for MIR:
 
-* **`TempId`**: An identifier for an SSA temporary value (indexed into `temp_types`).
-* **`LocalId`**: An identifier for a memory-backed local variable (indexed into `locals`).
-* **`BasicBlockId`**: An identifier for a basic block (index into `basic_blocks`).
+### MIR-specific invariants
 
-### Operands
+* **Type interning**: All `TypeId` values used anywhere (HIR or MIR) must come from `TypeContext::get_id`.
+* **Pointer equality**: Type equality is `a == b` (pointer equality), since there’s at most one `Type` instance per structural type.
+* **No `UnderscoreType` in MIR**:
 
-* **`Operand`**: Represents a value used in an operation:
+  * By the time HIR is lowered to MIR, there should be *no* unresolved `_` types.
+  * A MIR builder or validator can assert that `TypeVariant` is never `UnderscoreType`.
+* **Enums as ints** (simplest choice):
 
-  * `Temp(TempId)`: The value of a temporary.
-  * `Constant(Value)`: A compile-time constant (integer, bool, char, string, etc).
+  * At or before MIR, `EnumType` is mapped to an underlying `PrimitiveKind` (e.g., `U32`).
+  * MIR `TypeId` tables for temps/locals see enums only as the chosen integer primitive.
+  * This makes `SwitchInt` purely integral and keeps MIR simple.
 
-Types for operands are determined by:
-
-* The type of the underlying `TempId`, or
-* The context in which the `Constant` is used (e.g., the destination `TempId` or `Place` type).
+(If you later want to keep `EnumType` in MIR for debugging, you still treat it as an integer in codegen.)
 
 ---
 
-## 4. Places and Projections
+## 2. Storage Model: `Temp` vs `Local`
 
-**`Place`** represents an *addressable location in memory* (an lvalue).
+### 2.1 Identifiers
 
-A `Place` consists of:
+* `TempId` → index into `temp_types: std::vector<TypeId>`.
+* `LocalId` → index into `locals: std::vector<LocalInfo>`.
+* `BasicBlockId` → index into `basic_blocks`.
 
-1. **Base (`PlaceBase`)**:
+### 2.2 Semantics
 
-   * `Local(LocalId)`: The base is a stack-allocated local.
-   * `Global(GlobalId)`: The base is a global variable.
-   * `Pointer(TempId)`: The base is a pointer-valued temporary. The pointee type comes from the type system.
+* **Temporaries (`TempId`)**
 
-2. **Projections (`Projection`)**: A sequence of pure address computations, applied in order:
+  * SSA: each `TempId` has exactly one definition (via `Define`, `Load`, `Phi`, or `Call` with `dest`).
+  * Immutable values; never mutated.
+  * Used for intermediate results and non-addressable values (e.g., scalar expression results, aggregate values).
 
-   * **Field projection**: `.field` or tuple index
+* **Locals (`LocalId`)**
 
-     * Selects a field of a struct/tuple from the current base pointer.
-     * Selector can be a field name or a numeric field index.
-   * **Index projection**: `[index_temp]`
+  * Represent memory-backed storage: user locals, function parameters, and anything needing an address.
+  * All accesses go through `Place` + `Load` / `Assign`.
+  * Function parameters are just `Local` entries with appropriate `TypeId` and debug names.
 
-     * Selects an array element by an integer-typed `TempId` index from the current base pointer.
+* **Ownership / move / copy**
 
-Importantly:
+  * Not modeled here: `Load` and `Assign` are pure bit copies.
+  * Any future Rust-like move/copy rules live in earlier passes.
 
-* **There is no deref projection.**
-  Dereference as a value is always expressed via `Load`/`Assign` on a `Place` whose base is `Pointer(TempId)`; dereference as an lvalue is represented by using that pointer as the `PlaceBasePointer`.
+---
+
+## 3. Places, Pointers, and `Ref`
+
+### 3.1 `Place`
+
+A `Place` is an addressable location (lvalue), modeled structurally:
+
+* **Base (`PlaceBase`)**:
+
+  * `Local(LocalId)` – stack local storage.
+  * `Global(GlobalId)` – global variable.
+  * `Pointer(TempId)` – pointer/reference value held in a temporary.
+
+* **Projections (`Projection`)**:
+
+  * `Field(selector)` – select a field from a struct/tuple aggregate (by index or field name).
+  * `Index(TempId)` – array indexing with an integer-typed `TempId`.
+
+**There is no explicit deref projection**. Dereferencing is always:
+
+* As an lvalue: `Place { base = Pointer(temp), projections = [...] }`
+* As a value: `Load { dest, src: Place{...} }`.
 
 Examples:
 
-* `x.y` where `x` is a local struct:
+* `x.y` where `x` is a struct local:
 
-  * `Place { base = Local(x), projections = [Field("y")] }`
-* `(*p).y[i]` where `p` is a `Temp` pointer to a struct with a field `y` that is an array:
+  ```text
+  base = Local(x), projections = [Field("y")]
+  ```
 
-  * `Place { base = Pointer(p), projections = [Field("y"), Index(i_temp)] }`
+* `(*p).y[i]` where `p: &Struct` and `y` is an array field:
+
+  ```text
+  base = Pointer(p), projections = [Field("y"), Index(i_temp)]
+  ```
+
 * `*p` as an lvalue:
 
-  * `Place { base = Pointer(p), projections = [] }`
+  ```text
+  base = Pointer(p), projections = []
+  ```
 
-All **memory access** goes through:
+### 3.2 `Ref` (address-of)
 
-* `Load { dest: TempId, src: Place }`
-* `Assign { dest: Place, src: Operand }`
+MIR has an `RValue`:
+
+* `Ref(Place) -> TempId`
+
+Semantics:
+
+* Compute the pointer for the given `Place` (GEP etc.).
+* Do **not** load: the result is a pointer-typed (`ReferenceType`) `TempId`.
+* This is how `&place` / `&mut place` are represented at MIR.
+
+Even though conceptually “places are already pointers”, `Ref` is the operation that turns an lvalue into a pointer *value* (`TempId`) you can pass around or store.
+
+### 3.3 Memory vs value aggregates
+
+We have two ways to access fields/indices:
+
+1. **Aggregates in memory (locals/globals/through pointer)**:
+
+   * Use `Place` projections:
+
+     * `Place(Local x, [Field, Index...])`.
+     * `Load` / `Assign` for reads/writes.
+   * **Do not** load the whole struct just to access a field; compute the field address and load that field.
+
+2. **Aggregates in SSA temps**:
+
+   * Use pure `RValue`s:
+
+     * `FieldAccess { base: TempId, selector }`
+     * `IndexAccess { base: TempId, index: TempId }`
+
+**Rule of thumb**:
+
+* If an aggregate is in memory (has a `Place`), prefer `Place` + field-level `Load`/`Assign`.
+* Use `FieldAccess`/`IndexAccess` only when the aggregate lives as a value in a `Temp`.
+
+This avoids generating “load whole struct then extract field” patterns and maps more cleanly to LLVM `getelementptr`.
 
 ---
 
-## 5. Instructions
+## 4. MIR Structure & Instructions (Refined)
 
-### 5.1 Phi Nodes
+### 4.1 `MirFunction`
 
-**`PhiNode`**
+* `name`: mangled function name.
+* `temp_types: std::vector<TypeId>` – type for each `TempId`.
+* `locals: std::vector<LocalInfo>`:
 
-* Located at the beginning of a basic block.
-* `dest: TempId`: The new temporary defined by the merge.
-* `incoming: vector<(BasicBlockId, TempId)>`: For each predecessor block, the value that flows into `dest`.
+  * `LocalInfo { TypeId type; std::string debug_name; /* flags later */ }`
+  * First N entries = function parameters.
+* `basic_blocks: std::vector<BasicBlock>`.
+* `start_block: BasicBlockId` – entry block.
+
+### 4.2 `BasicBlock`
+
+* `phis: std::vector<PhiNode>`.
+* `statements: std::vector<Statement>`.
+* `terminator: Terminator` – exactly one per block.
+
+### 4.3 Phi nodes
+
+`PhiNode`:
+
+* `dest: TempId`.
+* `incoming: vector<(BasicBlockId, TempId)>`.
 
 Invariants:
 
-* `dest` has a type in `temp_types`.
-* For every `(pred, val)` in `incoming`, `val` has the same type as `dest`.
-* All *reachable* predecessors of the block must supply an incoming value.
+* `temp_types[dest]` is defined.
+* All incoming `TempId`s share the same `TypeId` as `dest`.
+* For every *reachable* predecessor `P` of this block, either:
+
+  * `P` is represented in `incoming`, or
+  * `P` is known unreachable.
+
+### 4.4 Statements
+
+* `Define { dest: TempId, rvalue: RValue }`
+
+* `Load   { dest: TempId, src: Place }`
+  Bitwise copy from memory to SSA. Type invariant:
+   `type_of_temp(dest)` must be same as `type_of_place(src)`.(consider adding assertion)
+
+* `Assign { dest: Place, src: Operand }`
+  Bitwise copy from SSA/constant to memory. Type invariant:
+  the Operand's result type(implied by its kind) must be same as `type_of_place(dest)`.(consider adding assertion)
+
+* `Call  { dest: optional<TempId>, func: Operand, args: vector<Operand> }`
+
+  * `func` is either a direct callee constant or a pointer-typed `TempId`.
+  * If `dest` is present, its type matches the callee’s return type.
+  * If callee returns unit, `dest` must be `nullopt`.
+
+Calls are statements, not terminators; control falls through to the next statement and eventually a terminator.
+
+### 4.5 RValues
+
+* `BinaryOp { kind, lhs: Operand, rhs: Operand }` where `kind` already encodes the operand domain (`iadd`, `uadd`, `bool_and`, `icmp_lt`, etc.). This keeps LLVM opcode selection one-to-one with the MIR enum variant and forbids polymorphic operators.
+* `UnaryOp  { kind, operand: Operand }` same as above
+* `Ref(Place)` – address-of (as discussed).Acutally do nothing since place is already pointer internally
+* `Constant { value: Constant }` – define an SSA temp from an immediate literal (bool/int/unit)
+* `Aggregate { kind: Struct/Array, elements: vector<Operand> }`
+* `Cast { value: Operand, target_type: TypeId }`
+* `FieldAccess { base: TempId, selector }` – on aggregate-valued temps only.
+* `IndexAccess { base: TempId, index: TempId }` – on array-valued temps only.
+
+Types of RValues are determined by the `dest: TempId` of their surrounding `Define` statement and validated against operand types. The type must be deterministic from *only the Operator*, forbidding polymorphic behavior, thus ensuring one-to-one mapping from operand to llvm opcode.
+
+
+### 4.6 Terminators
+
+* `Goto { target: BasicBlockId }`.
+
+* `SwitchInt { discriminant: Operand, targets: vector<(Constant, BasicBlockId)>, otherwise: BasicBlockId }`.
+
+  * Discriminant and all case constants must be compatible integer types.
+  * Used for `if`, `match`, etc.
+
+* `Return { value: optional<Operand> }`:
+
+  * If function return type is unit, `value` must be `nullopt`.
+  * Otherwise `value` must be present and type-compatible.
+
+* `Unreachable`:
+
+  * Marks a statically impossible or diverging path (e.g., after a diverging call like `exit` if treated as noreturn).
 
 ---
 
-### 5.2 RValues
+## 5. `exit` Handling
 
-**`RValue`** is a *pure* (side-effect free) computation that produces a new SSA value for a `TempId`. RValues never directly read or write memory.
+In `main`, last statement `exit(expr)` lowers directly to:
 
-Available forms:
+* Evaluate `expr` → `TempId t_code`.
+* `Return { value: t_code }`.
 
-1. **BinaryOp**
-
-   * `BinaryOp(kind: Op, lhs: Operand, rhs: Operand)`
-   * `Op` includes:
-     * Int: `Add`, `Sub`, `Mul`, `Div`, `Rem`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`
-     * Uint: `Add`, `Sub`, `Mul`, `Div`, `Rem`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`
-     * Cmp: `Eq`, `Ne`, `Lt`, `Le`, `Gt`, `Ge`
-
-
-2. **UnaryOp**
-
-   * `UnaryOp(kind: Op, operand: Operand)`
-   * `Op` includes:
-
-     * `LogicNot`,`BitwiseNot`
-     * `Neg` (arithmetic negation)
-
-3. **Ref**
-
-   * `Ref(Place)`
-   * Takes the address of a `Place` and returns a pointer-typed `Temp`.
-   * Models `&place` / `&mut place` at MIR level.
-
-4. **Aggregate**
-
-   * `Aggregate(kind: Kind, elements: vector<Operand>)`
-   * `Kind` is:
-
-     * `Struct`: elements form a struct/tuple value.
-     * `Array`: elements form a fixed-size array value.
-   * Produces an aggregate value in a `TempId` (no implicit memory).
-
-5. **Cast**
-
-   * `Cast(value: Operand, target_type: TypeId)`
-   * Represents explicit conversions: integer width changes, int casts, pointer casts, etc.
-
-6. **FieldAccess** (value-level field extraction)
-
-   * `FieldAccess { base: TempId, selector: FieldSelector }`
-   * `base` must be an aggregate-typed temporary (struct/tuple value).
-   * `selector` identifies which field/element to extract (by name or index).
-   * Produces a new `Temp` containing the field *value* (no memory).
-
-7. **IndexAccess** (value-level index extraction)
-
-   * `IndexAccess { base: TempId, index: TempId }`
-   * `base` must be an array-typed temporary.
-   * `index` is an integer-typed `TempId`.
-   * Produces a new `Temp` containing the array element *value* (no memory).
-
-**Types for RValues**
-
-* An `RValue` does **not** carry its own type.
-* The type of the `RValue`'s result is the type of the `dest: TempId` in the `Define` statement.
-* A MIR validation pass ensures that each `RValue` is type-correct given the destination `TempId` and operand types.
+No runtime `exit` function exists in MIR/IR; it’s purely syntax sugar.
 
 ---
 
-### 5.3 Statements
+## 6. HIR → MIR Lowering Plan (Refined)
 
-**`Statement`** is an instruction that executes in order within a basic block and may define new temps or modify memory.
+1. **Preconditions on HIR**
 
-1. **Define**
+   * Name resolution, type resolution, trait checks, const eval, control-flow linking, semantic checks, exit rules all completed.
+   * Every expression has a known `TypeId` (no `UnderscoreType`).
+   * Enums are either:
 
-   * `Define { dest: TempId, rvalue: RValue }`
-   * Computes a new SSA value and assigns it to `dest`.
-   * This is the primary way temporaries are created.
+     * Already mapped to integer primitives, or
+     * At least have a known integer representation.
 
-2. **Load**
+2. **Function setup**
 
-   * `Load { dest: TempId, src: Place }`
-   * Reads a value from a memory `Place` into a new temporary.
-   * Type invariant: `type(dest) == type_of_place(src)`.
+   * For each HIR function, create a `MirFunction`:
 
-3. **Assign**
+     * Allocate `LocalId`s for all parameters and locals, filling `locals[i].type` with the resolved `TypeId`.
+     * Create an entry block and set `start_block`.
 
-   * `Assign { dest: Place, src: Operand }`
-   * Writes a value from an `Operand` into a memory `Place`.
-   * Type invariant: `type_of_place(dest) == type_of_operand(src)`.
+3. **Expression flattening**
 
-4. **Call**
+   * Lower expression trees into:
 
-   * `Call { dest: optional<TempId>, func: Operand, args: vector<Operand> }`
-   * Calls a function:
+     * `Define` + `RValue`, `Load`, `Assign`, `Call` statements.
+     * Always produce SSA temps for intermediate results.
+   * For aggregates:
 
-     * `func` may be a pointer-typed `Temp` (indirect call) or a constant handle to a direct callee (convention defined by the frontend).
-     * `args` are operands passed to the callee.
-   * If `dest` is present, the function’s result is written into the specified `TempId`.
+     * Struct/array literals → `Aggregate` into a `TempId`.
+     * If the aggregate must be mutable/addressable, store it into a `Local` and then operate via `Place`.
 
-     * Type invariant: `type(dest) == return_type_of(func)`.
-   * If the function’s return type is `void` / unit, `dest` must be `nullopt`.
+4. **Control-flow construction**
 
-Calls are **statements**, not terminators. Control continues to subsequent statements and ends with the block’s `terminator`.
+   * Lower `if`, `while`/`loop`, `match` into explicit CFG:
 
----
+     * Evaluate conditions to `TempId`s.
+     * Branch with `Goto` / `SwitchInt`.
+     * Introduce join blocks with required `PhiNode`s to merge values.
 
-### 5.4 Terminators
+5. **Handle method calls**
 
-**`Terminator`** chooses the next basic block (or ends the function). Every basic block must end with exactly one `Terminator`.
+   * Desugar `instance.method(args...)` into a normal `Call`:
 
-1. **Goto**
+     * Decide by-value/by-ref convention at HIR/semantic level.
+     * MIR only sees `Call { func, args, dest }`.
 
-   * `Goto { target: BasicBlockId }`
-   * Unconditional branch to `target`.
+6. **Enums**
+   * lower to integer primitives directly.
 
-2. **SwitchInt**
-
-   * `SwitchInt { discriminant: Operand, targets: vector<(Constant, BasicBlockId)>, otherwise: BasicBlockId }`
-   * Multi-way conditional branch based on an integer-like discriminant.
-   * Each `Constant` must be compatible with the type of `discriminant`.
-   * Used to lower `if`, `match`, and other branching constructs.
-
-3. **Return**
-
-   * `Return { value: optional<Operand> }`
-   * Returns from the current function.
-   * If the function is non-void, `value` must be present and type-compatible with the function return type.
-   * If the function is void/unit, `value` must be `nullopt`.
-
-4. **Unreachable**
-
-   * `Unreachable`
-   * Marks a code path that should be impossible to reach at runtime (e.g., after a diverging call like `panic`).
-   * Reaching this at runtime is undefined behavior.
-
----
-
-## HIR-to-MIR Lowering Philosophy
-
-The process of converting the HIR to MIR is responsible for all major desugaring and structural transformation.
-
-1. **Expression Flattening**
-
-   Complex expression trees are broken down into a linear sequence of `Define`, `Load`, and `Call` statements, each producing a new `Temp`:
-
-   * Operator expressions become `BinaryOp` / `UnaryOp` `RValue`s.
-   * Struct/tuple/array literals become `Aggregate` `RValue`s.
-   * Accesses to:
-
-     * **Lvalues** (e.g. `x.y`, `(*p)[i]`) are lowered to `Place` + `Load` / `Assign`.
-     * **Aggregate values** (e.g. `s.a` where `s` is a struct-valued `Temp`) are lowered to `FieldAccess` / `IndexAccess` `RValue`s.
-
-2. **Control Flow Construction**
-
-   HIR constructs like `if`, `loop`, and `match` are lowered into a CFG of `BasicBlock`s connected by `Goto` and `SwitchInt` terminators:
-
-   * Conditions are evaluated into `Temp`s.
-   * Branches are realized with explicit blocks and terminators.
-   * Short-circuiting logical operators are desugared into explicit control flow.
-
-3. **SSA by Construction**
-
-   When lowering control flow that produces a value (e.g., an `if`-expression with two value branches), the lowerer is responsible for:
-
-   * Creating a join block.
-   * Emitting `PhiNode`s in the join block to merge the values from each predecessor.
-   * Ensuring every `TempId` has exactly one definition (`Define`, `Load`, `Phi`, or `Call dest`).
-
-   No separate SSA construction pass is needed.
-
-4. **Method Desugaring**
-
-   Method calls like `instance.method(arg1, ...)` are converted to standard function calls at MIR level:
-
-   * `instance.method(arg1, ...)` → `method(&instance, arg1, ...)` or `method(instance, arg1, ...)`, depending on the language’s calling discipline (by-ref vs by-value).
-   * MIR only sees `Call { func, args, dest }` with all arguments explicit.

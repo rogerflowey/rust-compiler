@@ -1,83 +1,72 @@
-# Exit Check Pass Implementation Guide
+# Exit Check Pass
 
-## Overview
+## Purpose
 
-The exit_check pass validates the usage of the `exit()` function according to specific language rules. It ensures that `exit()` is only used in the top-level `main()` function and appears as the final statement.
+Enforce the project rule that `exit()` may only appear as the final statement of the *top-level* `main` function. Any other usage is rejected with a fatal error.
 
-## Requirements
+## Accepted Form
 
-Based on the test cases, the exit_check pass must enforce these rules:
-
-1. **Main Function Requirement**: `exit()` must be called in the top-level `main()` function
-2. **Final Statement Requirement**: `exit()` must be the final statement in `main()`'s body
-3. **Function Exclusion**: `exit()` cannot be used in non-main functions
-4. **Method Exclusion**: `exit()` cannot be used in methods, even if named "main"
-
-## Architecture
-
-### Core Components
-
-- **ExitCheckVisitor**: Visitor class that traverses HIR and validates exit() usage
-- **Context Tracking**: Mechanism to track current function context
-- **Exit Call Detection**: Logic to identify calls to the predefined exit function
-- **Position Validation**: Logic to ensure exit() is the final statement in main()
-
-
-## Error Handling
-
-The pass will use `std::runtime_error` for user-facing errors:
-
-1. "exit() cannot be used in non-main functions"
-2. "exit() cannot be used in methods"  
-3. "main function must have an exit() call as the final statement"
-4. "exit() must be the final statement in main function"
-
-## Pipeline Integration
-
-The exit_check pass will be added to the semantic pipeline after semantic checking:
-
-```cpp
-// Phase 8: Exit Check
-semantic::ExitCheckVisitor exit_checker;
-try {
-    exit_checker.check_program(*hir_program);
-} catch (const std::exception& e) {
-    std::cerr << "Error: Exit check failed - " << e.what() << std::endl;
-    return 1;
+```rust
+fn main() {
+    // … arbitrary statements …
+    exit(); // last statement, no trailing expression
 }
 ```
 
-## Implementation Challenges
+Anything else (e.g., `exit()` in helper functions, methods, nested mains, or followed by more statements/`final_expr`) is rejected.
 
-### 1. Context Management
-- Properly tracking nested function contexts
-- Handling function calls within expressions
-- Managing context restoration after visiting nested items
+## Implementation Summary
 
-### 2. Exit Function Identification
-- Reliably detecting calls to the predefined exit function
-- Handling function pointers or indirect calls (if supported)
+- `ExitCheckVisitor` derives from `hir::HirVisitorBase`
+- A `Context` stack tracks whether we are inside a function or method and whether the current function is the top-level `main`
+- `is_main_function` checks the AST name and ensures the function is defined at the root module scope
+- While visiting calls, `is_exit_call` inspects the callee `hir::FuncUse` and its AST path segments to see if the identifier is `exit`
+- Every `exit()` call is recorded on the current context; later validation ensures only one call exists and that it sits at the end of `main`
 
-### 3. Statement Counting
-- Accurately counting statements in complex blocks
-- Handling nested blocks and control structures
+```cpp
+void ExitCheckVisitor::visit(hir::Call &call) {
+    if (is_exit_call(call)) {
+        if (context_stack_.empty()) throw std::runtime_error("exit() cannot be used in non-main functions");
+        auto &ctx = context_stack_.back();
+        if (ctx.kind == ContextKind::Method || !ctx.is_main) {
+            throw std::runtime_error("exit() cannot be used in non-main functions");
+        }
+        ctx.exit_calls.push_back(&call);
+    }
+    base().visit(call);
+}
+```
 
-## Dependencies
+### Validating `main`
 
-- **HIR Structures**: Access to function, method, call, and statement nodes
-- **Predefined Functions**: Reference to the predefined exit function
-- **Visitor Base**: Inheritance from `hir::HirVisitorBase`
-- **Error Handling**: Standard exception throwing mechanisms
+`validate_main_context` runs after finishing a top-level `main`:
 
-## Future Work
+1. Ensure at least one `exit()` call was recorded
+2. Confirm the block has no `final_expr`
+3. Check that the last statement is an expression statement whose expression is exactly that `exit()` call
+4. Forbid secondary `exit()` calls elsewhere in the body
 
-- Enhanced error messages with position information
-- Support for more complex exit() validation rules
-- Integration with control flow analysis for dead code detection
+Violations raise `std::runtime_error` with one of the following messages:
 
-## Files affected
+- `exit() cannot be used in non-main functions`
+- `exit() cannot be used in methods`
+- `main function must have an exit() call as the final statement`
+- `exit() must be the final statement in main function`
 
-- [`src/semantic/pass/exit_check.hpp`](exit_check.hpp): Header file with visitor class
-- [`src/semantic/pass/exit_check.cpp`](exit_check.cpp): Implementation file
-- [`cmd/semantic_pipeline.cpp`](../../cmd/semantic_pipeline.cpp): Pipeline integration
-- [`docs/semantic/passes/README.md`](../../../docs/semantic/passes/README.md): Documentation update
+### Associated Item Awareness
+
+Trait/impl bodies temporarily bump `associated_scope_depth_` so nested `fn main` inside an impl is **not** considered top-level.
+
+## Position in Pipeline
+
+Runs after **Semantic Checking** so all function/method bodies are fully validated and expression info is available. Located at the end of `cmd/semantic_pipeline.cpp`.
+
+## Future Enhancements
+
+- Provide span information in error messages using `hir::Call::ast_node`
+- Allow `exit()` in tests or other contexts by configuration once the language spec evolves
+
+## References
+
+- Source: `src/semantic/pass/exit_check/`
+- Tests: `test/semantic/test_exit_check.cpp`

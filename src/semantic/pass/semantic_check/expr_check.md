@@ -10,12 +10,14 @@ The expression checker validates type correctness, mutability, place expressions
 
 - **Visitor Pattern**: Handwritten visitor traverses HIR expression nodes
 - **ExprInfo Structure**: Contains type, mutability, place status, and endpoint information
+- **Type Expectation Propagation**: Every `check` call receives a `TypeExpectation` that constrains and re-evaluates ambiguous expressions
 - **Endpoint Analysis**: Replaces boolean `diverge` flag with precise control flow tracking
 
 ### ExprInfo Structure
 
 Each expression evaluation produces:
-- `type`: The expression's resolved type
+- `type`: The expression's resolved type (or `invalid_type_id` when unresolved)
+- `has_type`: Whether the expression currently has a concrete type
 - `is_mut`: Whether the expression represents a mutable value
 - `is_place`: Whether the expression denotes a memory location
 - `endpoints`: Set of possible exit points (normal, break, continue, return)
@@ -53,8 +55,8 @@ Each expression evaluation produces:
 
 #### Integer Literals
 - Validate value fits within type bounds using `overflow_int_literal_check`
-- Determine type from suffix or use `__ANYINT__`/`__ANYUINT__` for inference
-- Return: appropriate type, non-mutable, non-place, normal endpoint
+- Determine type from suffix when present. Without a suffix, emit an unresolved `ExprInfo` (`has_type=false`, `type=invalid_type_id`) so parents can re-run the literal with a concrete `TypeExpectation`
+- Return: appropriate type when resolved, otherwise unresolved + normal endpoint
 
 #### Boolean/Character/String Literals
 - Return corresponding primitive type
@@ -72,8 +74,8 @@ Each expression evaluation produces:
 - Perform type validation on const expression:
   - Check the always-present original expression
   - Validate expression type matches declared type using `is_assignable_to`
-  - Use existing type compatibility infrastructure for coercion
-  - Resolve inference placeholders if present
+   - Use existing type compatibility infrastructure for coercion
+   - Const evaluation always uses the declared type expectation, so no inference placeholders are needed
 - Return: constant's declared type, non-mutable, non-place, normal endpoint
 
 **Implementation Details**:
@@ -254,8 +256,8 @@ ExprInfo ExprChecker::check(hir::ConstUse& expr) {
 
 ### Type Inference
 
-- Limited support: only integer literals via `__ANYINT__`/`__ANYUINT__`
-- Full type inference not yet implemented
+- Limited support driven by `TypeExpectation`. Unsuffixed literals and a handful of parent expressions can temporarily return `has_type=false` until a concrete expectation is provided.
+- Full type inference beyond expectation-driven rechecks is not yet implemented
 
 ### Deferred Name Resolution
 
@@ -345,9 +347,12 @@ Do **minimum** error handling, just make sure everything invalid will cause an e
    - Added support for inference placeholder resolution in const expressions
 - 2025-10-15: Const Expression Type Inference Fix
    - Fixed missing inference type resolution in `ConstUse::check()` method
-   - Added proper handling of `__ANYINT__` and `__ANYUINT__` inference types
-   - Made const checking consistent with other expression type checking
+   - Integrated with the new `TypeExpectation` infrastructure instead of relying on pseudo-primitive inference types
    - Fixed failing test `ConstUseWithCoercibleType`
+- 2025-10-21: Expectation-Driven Literal Inference
+   - Removed the `__ANYINT__`/`__ANYUINT__` pseudo-primitive workflow in favor of `has_type` + `TypeExpectation`
+   - Literal checking now defers type selection until an enclosing context (binary op, array literal, etc.) provides an expectation
+   - Expr caching skips unresolved nodes to ensure they can be re-evaluated with new expectations
 - 2025-10-15: Double Checking Issue Fix
    - Fixed double checking issue in `FieldAccess::check()` and `Index::check()` methods
    - Added comments to clarify that re-checking only happens after applying dereference transformation

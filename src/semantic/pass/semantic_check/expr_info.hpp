@@ -122,20 +122,17 @@ struct EndpointEqual {
 using EndpointSet = std::unordered_set<Endpoint, EndpointHash, EndpointEqual>;
 
 struct ExprInfo {
-    TypeId type; // the type of the expr
-    bool is_mut; // mutability of the expr
-    bool is_place;
+    TypeId type = invalid_type_id; // the type of the expr
+    bool has_type = true;
+    bool is_mut = false; // mutability of the expr
+    bool is_place = false;
     EndpointSet endpoints = {NormalEndpoint{}}; // Set of possible exit points from this expression
-    
+
     // Check if expression can complete normally
-    bool has_normal_endpoint() const {
-        return endpoints.contains(NormalEndpoint{});
-    }
+    bool has_normal_endpoint() const { return endpoints.contains(NormalEndpoint{}); }
     
     // Check if expression diverges (no normal endpoint)
-    bool diverges() const {
-        return !has_normal_endpoint();
-    }
+    bool diverges() const { return !has_normal_endpoint(); }
 };
 
 // ===== Endpoint Merging Helper Functions =====

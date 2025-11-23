@@ -36,7 +36,7 @@ inline TypeId get_referenced_type(TypeId ref_type);
 ```cpp
 inline bool is_numeric_type(TypeId type);
 ```
-Checks if a type is numeric (I32, U32, ISIZE, USIZE, __ANYINT__, __ANYUINT__).
+Checks if a type is numeric (I32, U32, ISIZE, USIZE).
 
 #### Boolean Type Operations
 ```cpp
@@ -104,8 +104,7 @@ inline bool is_reference_type(TypeId type) {
 inline bool is_numeric_type(TypeId type) {
     if (auto prim = std::get_if<PrimitiveKind>(&type->value)) {
         return *prim == PrimitiveKind::I32 || *prim == PrimitiveKind::U32 || 
-               *prim == PrimitiveKind::ISIZE || *prim == PrimitiveKind::USIZE ||
-               *prim == PrimitiveKind::__ANYINT__ || *prim == PrimitiveKind::__ANYUINT__;
+               *prim == PrimitiveKind::ISIZE || *prim == PrimitiveKind::USIZE;
     }
     return false;
 }
@@ -114,6 +113,7 @@ inline bool is_numeric_type(TypeId type) {
 ### Error Handling
 
 The helper functions use defensive programming:
+
 - **Null checks**: Returns nullptr for invalid type extractions
 - **Type validation**: Throws std::logic_error for invalid conversions
 - **Optional returns**: Uses std::optional for operations that may fail
@@ -127,6 +127,7 @@ The helper functions use defensive programming:
 ## Usage Context
 
 Used throughout semantic analysis for:
+
 - **Type checking**: Validating type compatibility
 - **Expression analysis**: Determining expression types
 - **Pattern matching**: Checking pattern type constraints
@@ -162,6 +163,7 @@ TypeId type_id = get_typeID(concrete_type);
 ## Namespace Organization
 
 Functions are organized in nested namespaces:
+
 - `semantic::helper`: Main helper namespace
 - `semantic::helper::type_helper`: Type-specific operations
 

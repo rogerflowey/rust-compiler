@@ -19,10 +19,9 @@ namespace semantic {
  * types, reference types, array types, and inference placeholders.
  * 
  * Key features:
- * - Primitive type coercion with proper promotion rules
+ * - Primitive type coercion via exact matches
  * - Array element type compatibility checking
  * - Reference type handling
- * - Inference placeholder resolution (__ANYINT__, __ANYUINT__)
  * 
  * Dependencies:
  * - Type system (src/semantic/type/type.hpp)
@@ -30,18 +29,6 @@ namespace semantic {
  */
 
 // ===== Helper Functions =====
-
-/**
- * @brief Checks if a type is an inference placeholder (__ANYINT__ or __ANYUINT__)
- */
-inline std::string describe_type(TypeId type);
-
-inline bool is_inference_type(TypeId type) {
-    if (auto prim = std::get_if<PrimitiveKind>(&type->value)) {
-        return *prim == PrimitiveKind::__ANYINT__ || *prim == PrimitiveKind::__ANYUINT__;
-    }
-    return false;
-}
 
 inline std::string describe_type(TypeId type) {
     return std::visit(
@@ -62,10 +49,6 @@ inline std::string describe_type(TypeId type) {
                     return "char";
                 case PrimitiveKind::STRING:
                     return "string";
-                case PrimitiveKind::__ANYINT__:
-                    return "<any-int>";
-                case PrimitiveKind::__ANYUINT__:
-                    return "<any-uint>";
                 }
                 return "<primitive>";
             },
@@ -92,20 +75,6 @@ inline std::string describe_type(TypeId type) {
             }
         },
         type->value);
-}
-
-/**
- * @brief Checks if an inference type can coerce to a target primitive type
- */
-inline bool can_inference_coerce_to(PrimitiveKind from_inf, PrimitiveKind to_prim) {
-    if (from_inf == PrimitiveKind::__ANYINT__) {
-        return to_prim == PrimitiveKind::I32 || to_prim == PrimitiveKind::ISIZE;
-    }
-    if (from_inf == PrimitiveKind::__ANYUINT__) {
-        return to_prim == PrimitiveKind::U32 || to_prim == PrimitiveKind::USIZE ||
-               to_prim == PrimitiveKind::__ANYINT__ || to_prim == PrimitiveKind::I32 || to_prim == PrimitiveKind::ISIZE;
-    }
-    return false;
 }
 
 // Forward declaration
@@ -162,7 +131,6 @@ inline std::optional<TypeId> coerce_composite_types(TypeId from, TypeId to) {
  * 
  * Coercion rules:
  * - Identical types always succeed
- * - Inference placeholders (__ANYINT__, __ANYUINT__) coerce to compatible integer types
  * - Array elements coerce if their element types are compatible and sizes match
  * - Reference types coerce if their underlying types are compatible and mutability allows
  * - Note: I32/ISIZE and U32/USIZE are completely different types and cannot be coerced
@@ -183,10 +151,10 @@ inline std::optional<TypeId> try_coerce_to(TypeId from, TypeId to) {
         return to;
     }
     
-    // Handle primitive type coercion
+    // Primitive types only coerce if identical
     if (auto from_prim = std::get_if<PrimitiveKind>(&from->value)) {
         if (auto to_prim = std::get_if<PrimitiveKind>(&to->value)) {
-            if (can_inference_coerce_to(*from_prim, *to_prim)) {
+            if (*from_prim == *to_prim) {
                 return to;
             }
         }
@@ -216,8 +184,6 @@ inline std::optional<TypeId> try_coerce_to(TypeId from, TypeId to) {
  * 
  * Common type selection rules:
  * - Identical types are always the common type
- * - Inference placeholders resolve to compatible concrete types
- * - Numeric types promote to wider types when compatible
  * - Array types must have compatible element types and same size
  */
 inline std::optional<TypeId> find_common_type(TypeId left, TypeId right) {
@@ -234,22 +200,10 @@ inline std::optional<TypeId> find_common_type(TypeId left, TypeId right) {
         return left;
     }
     
-    // Handle primitive type common type resolution
+    // Handle primitive type common type resolution via coercion in either direction
     if (auto left_prim = std::get_if<PrimitiveKind>(&left->value)) {
         if (auto right_prim = std::get_if<PrimitiveKind>(&right->value)) {
-            // Handle inference placeholder cases: __ANYUINT__ + __ANYINT__ -> __ANYINT__
-            if (*left_prim == PrimitiveKind::__ANYUINT__ && *right_prim == PrimitiveKind::__ANYINT__) {
-                return right;
-            }
-            if (*left_prim == PrimitiveKind::__ANYINT__ && *right_prim == PrimitiveKind::__ANYUINT__) {
-                return left;
-            }
-            
-            // Try coercion in both directions
-            if (auto coerced = try_coerce_to(left, right)) {
-                return right;
-            }
-            if (auto coerced = try_coerce_to(right, left)) {
+            if (*left_prim == *right_prim) {
                 return left;
             }
         }
@@ -370,63 +324,6 @@ inline bool is_castable_to(TypeId from, TypeId to) {
  */
 inline bool are_comparable(TypeId left, TypeId right) {
     return find_common_type(left, right).has_value();
-}
-
-// ===== Type Inference Functions =====
-
-/**
- * @brief Resolves an inference type to a concrete type based on expected type
- * @param inference_type The inference type (__ANYINT__ or __ANYUINT__)
- * @param expected_type The type that should resolve the inference
- * @return Resolved concrete type
- * 
- * Used when inference placeholders meet concrete types in expressions.
- * Throws std::logic_error if resolution is not possible.
- * 
- * Resolution rules:
- * - __ANYINT__ resolves to I32 or ISIZE
- * - __ANYUINT__ resolves to U32, USIZE, or __ANYINT__
- * - Non-inference types are returned as-is
- */
-inline TypeId resolve_inference_type(TypeId inference_type, TypeId expected_type) {
-    if (auto inf_prim = std::get_if<PrimitiveKind>(&inference_type->value)) {
-        if (auto exp_prim = std::get_if<PrimitiveKind>(&expected_type->value)) {
-            if (can_inference_coerce_to(*inf_prim, *exp_prim)) {
-                return expected_type;
-            }
-            
-            const char* inf_name = (*inf_prim == PrimitiveKind::__ANYINT__) ? "__ANYINT__" : "__ANYUINT__";
-            throw std::runtime_error(
-                debug::format_with_context(
-                    std::string("Cannot resolve ") + inf_name + " to type '" + describe_type(expected_type) + "'"));
-        }
-    }
-    
-    // Not an inference type, return as-is
-    return inference_type;
-}
-
-/**
- * @brief Resolves inference type if needed, used for ExprInfo type resolution
- * @param source_type The type that might contain inference placeholders
- * @param expected_type The expected type to resolve to
- * @return Resolved type (modified source_type if it was an inference type)
- *
- * This is a convenience wrapper around resolve_inference_type that
- * handles the common pattern of checking for inference types and resolving them.
- * Used in expression checking when an expression's type needs to be resolved
- * against an expected type (e.g., struct fields, array elements, etc.).
- */
-inline void resolve_inference_if_needed(TypeId& source_type, TypeId expected_type) {
-    if (!is_inference_type(source_type)) {
-        return;
-    }
-
-    if (std::holds_alternative<PrimitiveKind>(expected_type->value)) {
-        if (!is_inference_type(expected_type) || source_type != expected_type) {
-            source_type = resolve_inference_type(source_type, expected_type);
-        }
-    }
 }
 
 } // namespace semantic

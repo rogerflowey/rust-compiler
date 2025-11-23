@@ -509,8 +509,6 @@ inline std::string HirPrettyPrinter::primitive_kind_to_string(semantic::Primitiv
         case semantic::PrimitiveKind::BOOL: return "BOOL";
         case semantic::PrimitiveKind::CHAR: return "CHAR";
         case semantic::PrimitiveKind::STRING: return "STRING";
-        case semantic::PrimitiveKind::__ANYINT__: return "__ANYINT__";
-        case semantic::PrimitiveKind::__ANYUINT__: return "__ANYUINT__";
     }
     return "UNKNOWN";
 }

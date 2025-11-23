@@ -30,13 +30,18 @@ The RCompiler type system provides a comprehensive foundation for type checking,
 enum class PrimitiveKind {
     I32,      // 32-bit signed integer
     U32,      // 32-bit unsigned integer
-    ISIZE,     // Pointer-sized signed integer
+    ISIZE,    // Pointer-sized signed integer
     USIZE,    // Pointer-sized unsigned integer
-    BOOL,      // Boolean type
-    __ANYINT__, // Placeholder for any integer type
-    __ANYUINT__, // Placeholder for any unsigned integer type
+    BOOL,     // Boolean type
+    CHAR,     // Unicode scalar value
+    STRING,   // String literal type used by the checker
 };
 ```
+
+All primitives are now concrete. Earlier placeholder variants
+(`__ANYINT__`, `__ANYUINT__`) have been removed in favor of explicit
+`TypeExpectation`-driven inference in the semantic checker, so the type
+system never manufactures pseudo-types.
 
 ### Composite Types
 
@@ -124,11 +129,17 @@ using Type = std::variant<
 ### TypeId Definition
 ```cpp
 using TypeId = const Type*;
+inline constexpr TypeId invalid_type_id = nullptr;
 ```
 Uses const pointers for:
 - **Efficient comparison**: Pointer equality for type identity
 - **Immutability**: Const ensures type definitions don't change
 - **Caching**: Enables type memoization
+
+`invalid_type_id` acts as a sentinel when an expression does not yet
+have a resolved type. The semantic checker never caches such nodes and
+re-runs them when a `TypeExpectation` provides enough context to resolve
+their final type.
 
 ### Type Storage
 ```cpp

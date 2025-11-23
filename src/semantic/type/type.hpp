@@ -18,8 +18,17 @@ namespace semantic {
 struct Type;
 
 using TypeId = const Type*;
+inline constexpr TypeId invalid_type_id = nullptr;
 
-enum class PrimitiveKind { I32, U32, ISIZE, USIZE, BOOL, CHAR, STRING, /* Only used as a temporary solution of the integer related type Inference*/ __ANYINT__, __ANYUINT__};
+enum class PrimitiveKind {
+    I32,
+    U32,
+    ISIZE,
+    USIZE,
+    BOOL,
+    CHAR,
+    STRING,
+};
 
 struct StructType {
     const hir::StructDef* symbol;

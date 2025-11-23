@@ -91,12 +91,16 @@ public:
 
         auto context_guard = expr_checker.enter_context("const", hir::helper::get_name(const_def).name);
 
-        // Check the expression
-        auto info = expr_checker.check(*const_def.expr);
-        
-        // Get the declared type
+        // Get the declared type up front so the expression can use it as an expectation
         TypeId declared_type = hir::helper::get_resolved_type(*const_def.type);
-        
+
+        // Check the expression with the declared type expectation so literals get resolved
+        auto info = expr_checker.check(
+            *const_def.expr, TypeExpectation::exact(declared_type));
+        if (!info.has_type) {
+            expr_checker.throw_in_context("Constant expression type could not be inferred");
+        }
+
         // Check type compatibility between expression and declared type
         if (!is_assignable_to(info.type, declared_type)) {
             expr_checker.throw_in_context("Constant expression type doesn't match declared type");
@@ -128,10 +132,10 @@ public:
 
         // Check function body
         if (function.body) {
-            auto info = expr_checker.check(*function.body);
-            
-            // Get expected return type
             TypeId return_type = hir::helper::get_resolved_type(*function.return_type);
+            auto info = expr_checker.check(
+                *function.body,
+                TypeExpectation::exact(return_type));
             
             // If function body can complete normally, check return type compatibility
             if (info.has_normal_endpoint()) {
@@ -167,10 +171,10 @@ public:
 
         // Check method body
         if (method.body) {
-            auto info = expr_checker.check(*method.body);
-            
-            // Get expected return type
             TypeId return_type = hir::helper::get_resolved_type(*method.return_type);
+            auto info = expr_checker.check(
+                *method.body,
+                TypeExpectation::exact(return_type));
             
             // If method body can complete normally, check return type compatibility
             if (info.has_normal_endpoint()) {
@@ -322,10 +326,6 @@ private:
                         return "char";
                     case PrimitiveKind::STRING:
                         return "string";
-                    case PrimitiveKind::__ANYINT__:
-                        return "<any-int>";
-                    case PrimitiveKind::__ANYUINT__:
-                        return "<any-uint>";
                     }
                     return "<primitive>";
                 },

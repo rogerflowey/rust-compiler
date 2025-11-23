@@ -55,7 +55,7 @@ TEST_F(ConstTypeCheckTest, ConstUseWithMatchingType) {
     
     // This should not throw an exception
     EXPECT_NO_THROW({
-        ExprInfo result = expr_checker->check(*const_use);
+        ExprInfo result = expr_checker->check(*const_use, TypeExpectation::none());
         EXPECT_EQ(result.type, i32_type);
         EXPECT_FALSE(result.is_mut);
         EXPECT_FALSE(result.is_place);
@@ -82,7 +82,7 @@ TEST_F(ConstTypeCheckTest, ConstUseWithTypeMismatch) {
     
     // This should throw a type mismatch error
     EXPECT_THROW({
-        expr_checker->check(*const_use);
+        expr_checker->check(*const_use, TypeExpectation::none());
     }, std::runtime_error);
 }
 
@@ -93,7 +93,7 @@ TEST_F(ConstTypeCheckTest, ConstUseWithNullDefinition) {
     
     // This should throw a logic error
     EXPECT_THROW({
-        expr_checker->check(*const_use);
+        expr_checker->check(*const_use, TypeExpectation::none());
     }, std::logic_error);
 }
 
@@ -109,7 +109,7 @@ TEST_F(ConstTypeCheckTest, ConstDefWithNullExpression) {
     
     // This should throw a logic error
     EXPECT_THROW({
-        expr_checker->check(*const_use);
+        expr_checker->check(*const_use, TypeExpectation::none());
     }, std::logic_error);
 }
 
@@ -143,7 +143,7 @@ TEST_F(ConstTypeCheckTest, ConstUseWithComplexExpression) {
     
     // This should not throw an exception
     EXPECT_NO_THROW({
-        ExprInfo result = expr_checker->check(*const_use);
+        ExprInfo result = expr_checker->check(*const_use, TypeExpectation::none());
         EXPECT_EQ(result.type, i32_type);
     });
 }
@@ -152,8 +152,7 @@ TEST_F(ConstTypeCheckTest, ConstUseWithCoercibleType) {
     // Test const use where expression type is coercible to declared type
     TypeId i32_type = get_typeID(semantic::Type{PrimitiveKind::I32});
     
-    // Create a literal expression with inference type (__ANYINT__)
-    // Using negative flag to ensure __ANYINT__ is created instead of __ANYUINT__
+    // Create an unsuffixed literal that requires the const type expectation
     auto literal_expr = std::make_unique<hir::Expr>(hir::Literal{
         .value = hir::Literal::Integer{42, ast::IntegerLiteralExpr::NOT_SPECIFIED, true},
         .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
@@ -167,7 +166,7 @@ TEST_F(ConstTypeCheckTest, ConstUseWithCoercibleType) {
     
     // This should not throw an exception (inference type should be resolved)
     EXPECT_NO_THROW({
-        ExprInfo result = expr_checker->check(*const_use);
+        ExprInfo result = expr_checker->check(*const_use, TypeExpectation::none());
         EXPECT_EQ(result.type, i32_type);
     });
 }
@@ -192,7 +191,7 @@ TEST_F(ConstTypeCheckTest, CompleteConstTypeCheckingPipeline) {
     
     // Step 3: Verify type checking succeeds
     EXPECT_NO_THROW({
-        ExprInfo result = expr_checker->check(*const_use);
+        ExprInfo result = expr_checker->check(*const_use, TypeExpectation::none());
         EXPECT_EQ(result.type, u32_type);
         EXPECT_FALSE(result.is_mut);
         EXPECT_FALSE(result.is_place);

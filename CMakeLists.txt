@@ -82,8 +82,9 @@ if(BUILD_TESTING)
 
         # Link tests against the parser library.
         target_link_libraries(${test_name} PRIVATE
-            parser # <<< MODIFY THIS LINE (replaces parsecpp)
+            parser
             semantic
+            mir
             gtest_main
             compiler_tests_properties
         )
