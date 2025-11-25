@@ -10,7 +10,6 @@
 #include "type_compatibility.hpp"
 #include "utils.hpp"
 #include "utils/error.hpp"
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -112,50 +111,45 @@ ExprInfo ExprChecker::check(hir::Literal &expr, TypeExpectation exp) {
 
                      overflow_int_literal_check(integer);
 
-                     auto const_value = detail::LiteralVisitor{}(integer);
-                     if ((integer.suffix_type == ast::IntegerLiteralExpr::I32 ||
-                      integer.suffix_type == ast::IntegerLiteralExpr::ISIZE) &&
-                       std::holds_alternative<UintConst>(const_value)) {
-                     const auto unsigned_value =
-                       std::get<UintConst>(const_value).value;
-                     const_value = IntConst{
-                       static_cast<int32_t>(unsigned_value)};
-                     }
-
+                     auto literal_const = const_eval::literal_value(expr, type);
                      return ExprInfo{.type = type,
                              .has_type = has_type,
                              .is_mut = false,
                              .is_place = false,
                              .endpoints = {NormalEndpoint{}},
-                             .const_value = const_value};
+                             .const_value = literal_const};
                  },
-                 [](bool &value) -> ExprInfo {
-                   return ExprInfo{.type =
-                                       get_typeID(Type{PrimitiveKind::BOOL}),
+                 [&expr](bool &) -> ExprInfo {
+                   TypeId type = get_typeID(Type{PrimitiveKind::BOOL});
+                   auto literal_const = const_eval::literal_value(expr, type);
+                   return ExprInfo{.type = type,
                                    .has_type = true,
                                    .is_mut = false,
                                    .is_place = false,
                                    .endpoints = {NormalEndpoint{}},
-                                   .const_value = BoolConst{value}};
+                                   .const_value = literal_const};
                  },
-                 [](char &value) -> ExprInfo {
-                   return ExprInfo{.type =
-                                       get_typeID(Type{PrimitiveKind::CHAR}),
+                 [&expr](char &) -> ExprInfo {
+                   TypeId type = get_typeID(Type{PrimitiveKind::CHAR});
+                   auto literal_const = const_eval::literal_value(expr, type);
+                   return ExprInfo{.type = type,
                                    .has_type = true,
                                    .is_mut = false,
                                    .is_place = false,
                                    .endpoints = {NormalEndpoint{}},
-                                   .const_value = CharConst{value}};
+                                   .const_value = literal_const};
                  },
-                 [](hir::Literal::String &value) -> ExprInfo {
-                   return ExprInfo{.type = get_typeID(Type{ReferenceType{
+                 [&expr](hir::Literal::String &) -> ExprInfo {
+                   TypeId type = get_typeID(Type{ReferenceType{
                                        get_typeID(Type{PrimitiveKind::STRING}),
-                                       false}}),
+                                       false}});
+                   auto literal_const = const_eval::literal_value(expr, type);
+                   return ExprInfo{.type = type,
                                    .has_type = true,
                                    .is_mut = false,
                                    .is_place = false,
                                    .endpoints = {NormalEndpoint{}},
-                                   .const_value = StringConst{value.value}};
+                                   .const_value = literal_const};
                  }},
       expr.value);
 }
@@ -231,8 +225,10 @@ ExprInfo ExprChecker::check(hir::ConstUse &expr, TypeExpectation) {
                            "' definition missing expression");
   }
 
-  std::optional<ConstVariant> const_value;
-  const_value = context.const_query(const_def);
+  std::optional<ConstVariant> const_value = context.const_query(const_def);
+  if (!const_value) {
+    throw_in_context("Const '" + const_name + "' is not a compile-time constant");
+  }
 
   return ExprInfo{.type = declared_type,
                   .has_type = true,
@@ -468,9 +464,12 @@ ExprInfo ExprChecker::check(hir::ArrayRepeat &expr, TypeExpectation exp) {
       throw_in_context("Array repeat count expression is missing");
     }
 
-    ConstVariant const_value = context.const_query(**count_expr_ptr,
-                                                   get_typeID(Type{PrimitiveKind::USIZE}));
-    if (auto *uint_value = std::get_if<UintConst>(&const_value)) {
+    auto const_value = context.const_query(**count_expr_ptr,
+                                           get_typeID(Type{PrimitiveKind::USIZE}));
+    if (!const_value) {
+      throw_in_context("Array repeat count must be a usize constant");
+    }
+    if (auto *uint_value = std::get_if<UintConst>(&*const_value)) {
       expr.count = static_cast<size_t>(uint_value->value);
       return std::get<size_t>(expr.count);
     }
@@ -502,7 +501,7 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
   case hir::UnaryOp::NEGATE:
     if (is_numeric_expectation(exp)) {
       operand_expectation = exp;
-    }
+    } 
     break;
   case hir::UnaryOp::NOT:
     if (exp.has_expected && is_bool_type(exp.expected)) {
@@ -543,16 +542,21 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
     }
   };
 
+  auto fold_unary = [&]() -> std::optional<ConstVariant> {
+    if (!operand_info.const_value) {
+      return std::nullopt;
+    }
+    return const_eval::eval_unary(expr.op, operand_info.type,
+                                  *operand_info.const_value);
+  };
+
   switch (expr.op) {
   case hir::UnaryOp::NOT: {
     if (!operand_info.has_type) {
       return unresolved();
     }
     if (is_bool_type(operand_info.type)) {
-      std::optional<ConstVariant> folded;
-      if (operand_info.const_value) {
-        folded = std::visit(detail::UnaryOpVisitor{expr.op}, *operand_info.const_value);
-      }
+      auto folded = fold_unary();
       return ExprInfo{.type = bool_type,
                       .has_type = true,
                       .is_mut = false,
@@ -561,10 +565,7 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
                       .const_value = folded};
     }
     if (is_numeric_type(operand_info.type)) {
-      std::optional<ConstVariant> folded;
-      if (operand_info.const_value) {
-        folded = std::visit(detail::UnaryOpVisitor{expr.op}, *operand_info.const_value);
-      }
+      auto folded = fold_unary();
       return ExprInfo{.type = operand_info.type,
                       .has_type = true,
                       .is_mut = false,
@@ -581,10 +582,7 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
     if (!is_numeric_type(operand_info.type)) {
       throw_in_context("NEGATE operand must be numeric");
     }
-    std::optional<ConstVariant> folded;
-    if (operand_info.const_value) {
-      folded = std::visit(detail::UnaryOpVisitor{expr.op}, *operand_info.const_value);
-    }
+    auto folded = fold_unary();
     return ExprInfo{.type = operand_info.type,
                     .has_type = true,
                     .is_mut = false,
@@ -633,7 +631,6 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
   ExprInfo lhs_info = eval_operand(expr.lhs);
   ExprInfo rhs_info = eval_operand(expr.rhs);
   EndpointSet endpoints = sequence_endpoints(lhs_info, rhs_info);
-  std::optional<ConstVariant> folded;
 
   auto recheck_with = [&](ExprInfo &info, std::unique_ptr<hir::Expr> &node,
                           TypeId type) {
@@ -669,20 +666,13 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
     }
   }();
 
+  TypeId bool_type = get_typeID(Type{PrimitiveKind::BOOL});
+
   if (lhs_info.has_type && is_numeric_type(lhs_info.type)) {
     recheck_with(rhs_info, expr.rhs, lhs_info.type);
   }
   if (rhs_info.has_type && is_numeric_type(rhs_info.type)) {
     recheck_with(lhs_info, expr.lhs, rhs_info.type);
-  }
-
-  if (lhs_info.const_value && rhs_info.const_value) {
-    try {
-      folded = std::visit(detail::BinaryOpVisitor{expr.op}, *lhs_info.const_value,
-                          *rhs_info.const_value);
-    } catch (...) {
-      folded.reset();
-    }
   }
 
   if (is_numeric_op && exp.has_expected &&
@@ -710,6 +700,11 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
     if (!common_type) {
       throw_in_context("Arithmetic operands must have compatible types");
     }
+    std::optional<ConstVariant> folded;
+    if (lhs_info.const_value && rhs_info.const_value) {
+      folded = const_eval::eval_binary(expr.op, lhs_info.type, *lhs_info.const_value,
+                                       rhs_info.type, *rhs_info.const_value, *common_type);
+    }
     return ExprInfo{.type = *common_type,
                     .has_type = true,
                     .is_mut = false,
@@ -729,7 +724,12 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
     if (!are_comparable(lhs_info.type, rhs_info.type)) {
       throw_in_context("Comparison operands must be comparable");
     }
-    return ExprInfo{.type = get_typeID(Type{PrimitiveKind::BOOL}),
+    std::optional<ConstVariant> folded;
+    if (lhs_info.const_value && rhs_info.const_value) {
+      folded = const_eval::eval_binary(expr.op, lhs_info.type, *lhs_info.const_value,
+                                       rhs_info.type, *rhs_info.const_value, bool_type);
+    }
+    return ExprInfo{.type = bool_type,
                     .has_type = true,
                     .is_mut = false,
                     .is_place = false,
@@ -738,15 +738,20 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
   }
   case hir::BinaryOp::AND:
   case hir::BinaryOp::OR: {
-    recheck_with(lhs_info, expr.lhs, get_typeID(Type{PrimitiveKind::BOOL}));
-    recheck_with(rhs_info, expr.rhs, get_typeID(Type{PrimitiveKind::BOOL}));
+    recheck_with(lhs_info, expr.lhs, bool_type);
+    recheck_with(rhs_info, expr.rhs, bool_type);
     if (!lhs_info.has_type || !rhs_info.has_type) {
       return unresolved();
     }
     if (!is_bool_type(lhs_info.type) || !is_bool_type(rhs_info.type)) {
       throw_in_context("Logical operands must be boolean");
     }
-    return ExprInfo{.type = get_typeID(Type{PrimitiveKind::BOOL}),
+    std::optional<ConstVariant> folded;
+    if (lhs_info.const_value && rhs_info.const_value) {
+      folded = const_eval::eval_binary(expr.op, lhs_info.type, *lhs_info.const_value,
+                                       rhs_info.type, *rhs_info.const_value, bool_type);
+    }
+    return ExprInfo{.type = bool_type,
                     .has_type = true,
                     .is_mut = false,
                     .is_place = false,
@@ -766,6 +771,11 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
     }
     if (!is_numeric_type(rhs_info.type)) {
       throw_in_context("Shift amount must be numeric");
+    }
+    std::optional<ConstVariant> folded;
+    if (lhs_info.const_value && rhs_info.const_value) {
+      folded = const_eval::eval_binary(expr.op, lhs_info.type, *lhs_info.const_value,
+                                       rhs_info.type, *rhs_info.const_value, lhs_info.type);
     }
     return ExprInfo{.type = lhs_info.type,
                     .has_type = true,
@@ -863,7 +873,7 @@ ExprInfo ExprChecker::check(hir::Call &expr, TypeExpectation) {
 
   EndpointSet endpoints = sequence_endpoints(arg_infos);
 
-  return ExprInfo{.type = context.type_query(*function_def.return_type),
+  return ExprInfo{.type = context.function_return_type(function_def),
                   .has_type = true,
                   .is_mut = false,
                   .is_place = false,
@@ -968,7 +978,7 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
   EndpointSet endpoints = sequence_endpoints(eval_infos);
 
   // Return method's return type
-  return ExprInfo{.type = context.type_query(*method_def->return_type),
+  return ExprInfo{.type = context.method_return_type(*method_def),
                   .has_type = true,
                   .is_mut = false,
                   .is_place = false,
@@ -1216,10 +1226,10 @@ ExprInfo ExprChecker::check(hir::Return &expr, TypeExpectation) {
   TypeId target_return_type = get_typeID(Type{UnitType{}});
   std::visit(
       Overloaded{[&](hir::Function *func) {
-                   target_return_type = context.type_query(*func->return_type);
+                   target_return_type = context.function_return_type(*func);
                  },
                  [&](hir::Method *method) {
-                   target_return_type = context.type_query(*method->return_type);
+                   target_return_type = context.method_return_type(*method);
                  }},
       *expr.target);
 

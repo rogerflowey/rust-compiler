@@ -130,7 +130,7 @@ struct ExprInfo {
     bool is_mut = false; // mutability of the expr
     bool is_place = false;
     EndpointSet endpoints = {NormalEndpoint{}}; // Set of possible exit points from this expression
-    std::optional<ConstVariant> const_value;
+    std::optional<ConstVariant> const_value = std::nullopt;
 
     // Check if expression can complete normally
     bool has_normal_endpoint() const { return endpoints.contains(NormalEndpoint{}); }

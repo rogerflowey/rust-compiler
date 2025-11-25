@@ -56,15 +56,18 @@ private:
         }
         std::optional<TypeId> operator()(const std::unique_ptr<hir::ArrayType>& array_type){
             auto element_type_id = resolver.resolve(array_type->element_type);
-            auto size = evaluate_const(*array_type->size);
-            if(auto size_uint = std::get_if<UintConst>(&size)){
+            auto size = const_eval::evaluate_const_expression(
+                *array_type->size, get_typeID(Type{PrimitiveKind::USIZE}));
+            if (!size) {
+                throw std::logic_error("Const value type mismatch for array type");
+            }
+            if (auto size_uint = std::get_if<UintConst>(&*size)) {
                 return get_typeID(Type{ArrayType{
                     .element_type = element_type_id,
                     .size = size_uint->value,
                 }});
-            } else{
-                throw std::logic_error("Const value type mismatch for array type");
             }
+            throw std::logic_error("Const value type mismatch for array type");
         }
         std::optional<TypeId> operator()(const std::unique_ptr<hir::ReferenceType>& ref_type){
             auto referenced_type_id = resolver.resolve(ref_type->referenced_type);

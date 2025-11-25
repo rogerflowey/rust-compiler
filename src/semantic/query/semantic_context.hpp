@@ -22,9 +22,11 @@ public:
 
     TypeId type_query(hir::TypeAnnotation& annotation);
     ExprInfo expr_query(hir::Expr& expr, TypeExpectation exp = TypeExpectation::none());
-    ConstVariant const_query(hir::Expr& expr, TypeId expected_type);
-    ConstVariant const_query(hir::ConstDef& def);
+    std::optional<ConstVariant> const_query(hir::Expr& expr, TypeId expected_type);
+    std::optional<ConstVariant> const_query(hir::ConstDef& def);
     void bind_pattern_type(hir::Pattern& pattern, TypeId expected_type);
+    TypeId function_return_type(hir::Function& function);
+    TypeId method_return_type(hir::Method& method);
 
     ExprChecker& get_checker() { return expr_checker; }
 
@@ -55,7 +57,7 @@ private:
     };
 
     std::unordered_map<ExprKey, ExprInfo, ExprKeyHash, ExprKeyEqual> expr_cache;
-    std::unordered_map<const hir::ConstDef*, ConstVariant> const_cache;
+    std::unordered_map<const hir::ConstDef*, std::optional<ConstVariant>> const_cache;
     std::unordered_set<const hir::Expr*> evaluating_const_exprs;
 
     TypeId resolve_type_annotation(hir::TypeAnnotation& annotation);
@@ -63,7 +65,7 @@ private:
     ExprInfo compute_expr(hir::Expr& expr, TypeExpectation exp);
     bool can_reuse_cached(const ExprInfo& info, TypeExpectation exp) const;
     void bind_reference_pattern(hir::ReferencePattern& pattern, TypeId expected_type);
+    TypeId ensure_return_type_annotation(std::optional<hir::TypeAnnotation>& annotation);
 };
 
 } // namespace semantic
-

@@ -17,6 +17,10 @@ TypeId primitive_type_id(PrimitiveKind kind) {
     return get_typeID(Type{kind});
 }
 
+TypeId unit_type_id() {
+    return get_typeID(Type{UnitType{}});
+}
+
 } // namespace
 
 SemanticContext::SemanticContext(ImplTable& impl_table)
@@ -55,11 +59,11 @@ ExprInfo SemanticContext::expr_query(hir::Expr& expr, TypeExpectation exp) {
     return info;
 }
 
-ConstVariant SemanticContext::const_query(hir::Expr& expr, TypeId expected_type) {
-    if (evaluating_const_exprs.contains(&expr)) {
-        throw std::runtime_error("Cyclic const evaluation detected");
+std::optional<ConstVariant> SemanticContext::const_query(hir::Expr& expr, TypeId expected_type) {
+    auto [_, inserted] = evaluating_const_exprs.insert(&expr);
+    if (!inserted) {
+        return std::nullopt;
     }
-    evaluating_const_exprs.insert(&expr);
     struct ConstGuard {
         SemanticContext& ctx;
         const hir::Expr* expr_ptr;
@@ -68,18 +72,15 @@ ConstVariant SemanticContext::const_query(hir::Expr& expr, TypeId expected_type)
 
     ExprInfo info = expr_query(expr, TypeExpectation::exact_const(expected_type));
     if (!info.has_type || info.type == invalid_type_id) {
-        throw std::runtime_error("Const expression failed to type-check");
+        return std::nullopt;
     }
     if (expected_type != invalid_type_id && !is_assignable_to(info.type, expected_type)) {
-        throw std::runtime_error("Const expression type is not assignable to expectation");
+        return std::nullopt;
     }
-    if (!info.const_value) {
-        throw std::runtime_error("Expression is not const-evaluable");
-    }
-    return *info.const_value;
+    return info.const_value;
 }
 
-ConstVariant SemanticContext::const_query(hir::ConstDef& def) {
+std::optional<ConstVariant> SemanticContext::const_query(hir::ConstDef& def) {
     if (auto it = const_cache.find(&def); it != const_cache.end()) {
         return it->second;
     }
@@ -93,7 +94,7 @@ ConstVariant SemanticContext::const_query(hir::ConstDef& def) {
         throw std::logic_error("Const definition missing expression");
     }
 
-    ConstVariant value = const_query(*def.expr, expected_type);
+    auto value = const_query(*def.expr, expected_type);
     def.const_value = value;
     const_cache.emplace(&def, value);
     return value;
@@ -116,6 +117,21 @@ void SemanticContext::bind_pattern_type(hir::Pattern& pattern, TypeId expected_t
             }
         },
         pattern.value);
+}
+
+TypeId SemanticContext::function_return_type(hir::Function& function) {
+    return ensure_return_type_annotation(function.return_type);
+}
+
+TypeId SemanticContext::method_return_type(hir::Method& method) {
+    return ensure_return_type_annotation(method.return_type);
+}
+
+TypeId SemanticContext::ensure_return_type_annotation(std::optional<hir::TypeAnnotation>& annotation) {
+    if (!annotation) {
+        annotation = hir::TypeAnnotation(unit_type_id());
+    }
+    return type_query(annotation.value());
 }
 
 TypeId SemanticContext::resolve_type_annotation(hir::TypeAnnotation& annotation) {
@@ -159,8 +175,11 @@ TypeId SemanticContext::resolve_type_node(const hir::TypeNode& node) {
         }
         std::optional<TypeId> operator()(const std::unique_ptr<hir::ArrayType>& array_type) {
             auto element_type_id = ctx.type_query(array_type->element_type);
-            ConstVariant size_value = ctx.const_query(*array_type->size, primitive_type_id(PrimitiveKind::USIZE));
-            if (auto* uint_value = std::get_if<UintConst>(&size_value)) {
+            auto size_value = ctx.const_query(*array_type->size, primitive_type_id(PrimitiveKind::USIZE));
+            if (!size_value) {
+                throw std::logic_error("Array size must be a constant expression");
+            }
+            if (auto* uint_value = std::get_if<UintConst>(&*size_value)) {
                 return get_typeID(Type{ArrayType{.element_type = element_type_id, .size = uint_value->value}});
             }
             throw std::logic_error("Array size must resolve to an unsigned integer");
@@ -217,4 +236,3 @@ void SemanticContext::bind_reference_pattern(hir::ReferencePattern& ref_pattern,
 }
 
 } // namespace semantic
-
