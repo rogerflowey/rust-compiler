@@ -1,203 +1,52 @@
-# Temporary Reference Desugaring Helper Design
+# Temporary Reference Materialization
 
 ## Overview
 
-This document describes the design of a temporary reference desugaring helper that transforms reference operations on r-values into temporary variable blocks. The helper integrates with the semantic checking pass and is triggered when the reference operator encounters an operand with `is_place == false`.
+Reference expressions may legally target non-place operands (e.g. integer literals). Rather than rewriting the HIR during the semantic check, temporary storage is now synthesized during MIR lowering. This keeps the semantic pass purely analytical while ensuring that MIR still operates on addressable memory when building references.
 
-The transformation converts:
-```cpp
-&literal          // or &mut literal
-```
+When `&rvalue` (or `&mut rvalue`) is lowered, the following sequence is emitted:
 
-Into:
-```cpp
-{
-  let _temp = literal;  // or let mut _temp = literal
-  &_temp               // or &mut _temp
-}
-```
+1. Evaluate the operand as a value `tmp_value`.
+2. Allocate a fresh MIR local (stack slot) of the operand type.
+3. Assign `tmp_value` into the local.
+4. Produce a `RefRValue` that borrows the local place, yielding the requested reference.
+
+The generated locals follow the naming scheme `_ref_tmpN` / `_ref_mut_tmpN` to aid debugging.
 
 ## Architecture
 
-### Core Components
+| Layer | Responsibility |
+| --- | --- |
+| Semantic (`ExprChecker`) | Accepts `&`/`&mut` on any typed operand. If the operand is already a place, normal mutability rules are enforced. Otherwise no structural transformation occurs. |
+| MIR Lowering (`FunctionLowerer`) | Detects non-place operands inside `lower_expr_impl(hir::UnaryOp)` via the operand's `ExprInfo`. If the operand is not a place, it calls `ensure_reference_operand_place` to materialize a new local and reuse it for the borrow. |
 
-1. **TempRefDesugger Helper Class**: A stateless helper class that provides the desugaring functionality
-2. **Integration Point**: Called from within `ExprChecker::check(hir::UnaryOp&)` when `is_place == false`
-3. **HIR Transformation**: Creates Block, LetStmt, and Variable nodes to implement the desugaring
+Key helpers inside `mir/lower_internal.hpp` / `mir/lower_expr.cpp`:
 
-### Data Structures
+- `LocalId create_synthetic_local(TypeId type, bool mutable_reference)` allocates a new MIR local appended to `mir_function.locals`.
+- `Place make_local_place(LocalId id)` builds a `mir::Place` targeting that local.
+- `Place ensure_reference_operand_place(const hir::Expr&, const ExprInfo&, bool mutable_reference)` either lowers the operand as a place (fast path) or evaluates + stores the operand value into a synthetic local before returning a place.
 
-The helper works with existing HIR structures:
-- [`hir::Block`](src/semantic/hir/hir.hpp:388): Contains statements and optional final expression
-- [`hir::LetStmt`](src/semantic/hir/hir.hpp:429): Variable declaration with initializer
-- [`hir::Variable`](src/semantic/hir/hir.hpp:189): Reference to a local variable
-- [`hir::Local`](src/semantic/hir/hir.hpp:97): Local variable definition
-- [`ExprInfo`](src/semantic/pass/semantic_check/expr_info.hpp): Contains type, mutability, and place information
+The helper is invoked exclusively from the unary-reference lowering path, so other expression kinds remain unchanged.
 
-### Algorithm
+## Why MIR?
 
-The desugaring algorithm follows these steps:
+- **Purity of semantic pass** – `ExprChecker` no longer mutates HIR, simplifying caching and memoization.
+- **Single ownership model** – MIR already owns its stack locals, so creating short-lived temporaries there avoids threading newly created `hir::Local` objects back into earlier passes.
+- **Precise evaluation order** – Lowering controls operand evaluation and can guarantee the temporary is initialized exactly once before being borrowed.
 
-1. **Detection**: In `ExprChecker::check(hir::UnaryOp&)`, when `op == REFERENCE` or `op == MUTABLE_REFERENCE` and `!operand_info.is_place`
-2. **Temporary Creation**: Create a new `hir::Local` with appropriate mutability
-3. **Block Construction**: Build a `hir::Block` containing:
-   - A `hir::LetStmt` that initializes the temporary with the original operand
-   - A final expression that takes a reference to the temporary
-4. **Type Preservation**: Ensure the resulting block has the same type as the original reference operation
-5. **Integration**: Replace the original `UnaryOp` with the constructed block
+## Implementation Notes
 
-## Implementation Guide
+- Mutability checks still happen in semantics for true places. The MIR helper simply asserts that we never reach it with `&mut` on an immutable place.
+- Synthetic locals record the operand's resolved type; lowering will throw if the operand lacks a type.
+- The first statement emitted for these cases is always an `AssignStatement` storing the evaluated operand into the synthetic local, immediately followed by a `DefineStatement` containing the `RefRValue`.
 
-### Integration Point
+## Related Files
 
-The helper should be integrated into [`src/semantic/pass/semantic_check/expr_check.cpp`](src/semantic/pass/semantic_check/expr_check.cpp:328-345) in the `UnaryOp` handling:
-
-```cpp
-case hir::UnaryOp::REFERENCE:
-case hir::UnaryOp::MUTABLE_REFERENCE: {
-  if (!operand_info.is_place) {
-    // NEW: Call temporary reference desugaring helper
-    return TempRefDesugger::desugar_reference_to_temporary(
-        expr, operand_info, *this);
-  }
-  
-  // Existing validation logic for places...
-  // ...
-}
-```
-
-### Helper Interface
-
-```cpp
-class TempRefDesugger {
-public:
-  static ExprInfo desugar_reference_to_temporary(
-      hir::UnaryOp& expr,
-      const ExprInfo& operand_info,
-      ExprChecker& checker);
-      
-private:
-  static std::unique_ptr<hir::Local> create_temporary_local(
-      const ExprInfo& operand_info,
-      bool is_mutable_reference,
-      ExprChecker& checker);
-      
-  static std::unique_ptr<hir::Block> create_temporary_block(
-      std::unique_ptr<hir::Local> temp_local,
-      std::unique_ptr<hir::Expr> original_operand,
-      bool is_mutable_reference,
-      const ExprInfo& operand_info,
-      ExprChecker& checker);
-};
-```
-
-### Transformation Steps
-
-1. **Create Temporary Local**:
-   ```cpp
-   auto temp_local = std::make_unique<hir::Local>(
-       ast::Identifier{"_temp"},  // Generated name
-       is_mutable_reference,      // Mutability matches reference type
-       std::nullopt,              // No type annotation
-       nullptr                    // No def site
-   );
-   ```
-
-2. **Create Let Statement**:
-   ```cpp
-   auto let_stmt = std::make_unique<hir::LetStmt>(
-       std::make_unique<hir::Pattern>(
-           hir::BindingDef{hir::BindingDef::Unresolved{
-               is_mutable_reference,
-               false,
-               ast::Identifier{"_temp"}
-           }, nullptr}
-       ),
-       std::nullopt,              // No type annotation
-       std::move(original_operand) // Original expression as initializer
-   );
-   ```
-
-3. **Create Reference Expression**:
-   ```cpp
-   auto temp_var = std::make_unique<hir::Expr>(
-       hir::Variable{temp_local.get(), nullptr}
-   );
-   
-   auto reference_expr = std::make_unique<hir::Expr>(
-       hir::UnaryOp{
-           is_mutable_reference ? 
-               hir::UnaryOp::MUTABLE_REFERENCE : 
-               hir::UnaryOp::REFERENCE,
-           std::move(temp_var),
-           expr.ast_node
-       }
-   );
-   ```
-
-4. **Create Block**:
-   ```cpp
-   auto block = std::make_unique<hir::Block>();
-   block->stmts.push_back(std::make_unique<hir::Stmt>(
-       hir::LetStmt{...}
-   ));
-   block->final_expr = std::move(reference_expr);
-   ```
-
-5. **Replace Original Expression**:
-   ```cpp
-   // Transform the original UnaryOp into the Block
-   // This requires careful handling of the unique_ptr semantics
-   ```
-
-## Implementation Challenges
-
-### 1. Local Variable Ownership
-- **Challenge**: The created `hir::Local` must be owned by the containing function/method
-- **Solution**: Add the temporary to the function's `locals` vector and store a pointer
-
-### 2. Unique Pointer Semantics
-- **Challenge**: HIR nodes use unique pointers, making in-place transformation complex
-- **Solution**: Use move semantics and careful pointer management to avoid leaks
-
-### 3. Type Preservation
-- **Challenge**: The resulting block must have the same type as the original reference
-- **Solution**: Explicitly set the block's `ExprInfo` to match the expected reference type
-
-### 4. Name Generation
-- **Challenge**: Temporary variable names must be unique and follow conventions
-- **Solution**: Use a counter-based naming scheme like `_tempN`
-
-### 5. AST Node Preservation
-- **Challenge**: Original AST nodes must be preserved for error reporting
-- **Solution**: Propagate the original `ast_node` pointers to the new HIR nodes
-
-## Dependencies
-
-### Core Dependencies
-- [`hir/hir.hpp`](src/semantic/hir/hir.hpp): HIR node definitions
-- [`expr_info.hpp`](src/semantic/pass/semantic_check/expr_info.hpp): Expression information structure
-- [`expr_check.hpp`](src/semantic/pass/semantic_check/expr_check.hpp): Expression checker interface
-
-### Helper Dependencies
-- [`semantic/type/helper.hpp`](src/semantic/type/helper.hpp): Type system utilities
-- [`hir/helper.hpp`](src/semantic/hir/helper.hpp): HIR construction utilities
-- [`utils/error.hpp`](src/utils/error.hpp): Error handling utilities
-
-## Future Work
-
-1. **Optimization**: Add a pass to eliminate unnecessary temporaries when possible
-2. **Lifetime Analysis**: Integrate with borrow checker for proper lifetime tracking
-3. **Debug Info**: Generate debug information for temporary variables
-4. **Pattern Matching**: Extend support to pattern matching with temporary references
+- `src/semantic/pass/semantic_check/expr_check.cpp` – updates to reference checking (no AST rewriting, field/index place fixes).
+- `src/mir/lower.cpp` / `src/mir/lower_expr.cpp` – synthetic local helpers and `ensure_reference_operand_place` implementation.
+- `test/semantic/test_temp_ref_desugaring.cpp` – verifies expressions stay intact during semantic checking.
+- `test/mir/test_mir_lower.cpp` – covers MIR output for both shared and mutable rvalue references.
 
 ## Change Log
 
-- 2025-10-18: Initial design created for temporary reference desugaring helper
-
-## Files Affected
-
-- [`src/semantic/pass/semantic_check/expr_check.cpp`](src/semantic/pass/semantic_check/expr_check.cpp): Integration point
-- [`src/semantic/pass/semantic_check/temp_ref_desugger.hpp`](src/semantic/pass/semantic_check/temp_ref_desugger.hpp): New helper header (to be created)
-- [`src/semantic/pass/semantic_check/temp_ref_desugger.cpp`](src/semantic/pass/semantic_check/temp_ref_desugger.cpp): New helper implementation (to be created)
-- [`test/semantic/test_temp_ref_desugaring.cpp`](test/semantic/test_temp_ref_desugaring.cpp): New test file (to be created)
+- 2025-11-25: Switched temporary reference materialization from semantic desugaring to MIR lowering.

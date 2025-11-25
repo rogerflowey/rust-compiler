@@ -1078,6 +1078,92 @@ TEST(MirLowerTest, LowersReferenceToIndexedPlace) {
     ASSERT_TRUE(std::holds_alternative<mir::IndexProjection>(ref_rvalue.place.projections[0]));
 }
 
+TEST(MirLowerTest, LowersReferenceToRValueByMaterializingLocal) {
+    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    semantic::TypeId ref_type = semantic::get_typeID(semantic::Type{semantic::ReferenceType{int_type, false}});
+
+    hir::Literal literal{
+        .value = hir::Literal::Integer{.value = 5, .suffix_type = ast::IntegerLiteralExpr::I32, .is_negative = false},
+        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+    };
+    auto literal_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
+    literal_expr->expr_info = make_value_info(int_type, false);
+
+    hir::UnaryOp ref_unary;
+    ref_unary.op = hir::UnaryOp::REFERENCE;
+    ref_unary.rhs = std::move(literal_expr);
+    auto ref_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(ref_unary)});
+    ref_expr->expr_info = make_value_info(ref_type, false);
+
+    hir::Function function;
+    function.return_type = hir::TypeAnnotation(ref_type);
+    auto body = std::make_unique<hir::Block>();
+    body->final_expr = std::move(ref_expr);
+    function.body = std::move(body);
+
+    mir::MirFunction lowered = mir::lower_function(function);
+    ASSERT_EQ(lowered.locals.size(), 1u);
+    EXPECT_EQ(lowered.locals[0].type, int_type);
+    EXPECT_EQ(lowered.locals[0].debug_name.rfind("_ref_tmp", 0), 0u);
+
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+    ASSERT_EQ(block.statements.size(), 2u);
+    const auto& assign = std::get<mir::AssignStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(assign.dest.base));
+    EXPECT_EQ(std::get<mir::LocalPlace>(assign.dest.base).id, 0u);
+    ASSERT_TRUE(std::holds_alternative<mir::Constant>(assign.src.value));
+
+    const auto& define = std::get<mir::DefineStatement>(block.statements[1].value);
+    ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define.rvalue.value));
+    const auto& ref_rvalue = std::get<mir::RefRValue>(define.rvalue.value);
+    ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(ref_rvalue.place.base));
+    EXPECT_EQ(std::get<mir::LocalPlace>(ref_rvalue.place.base).id, 0u);
+    EXPECT_TRUE(ref_rvalue.place.projections.empty());
+}
+
+TEST(MirLowerTest, LowersMutableReferenceToRValueByMaterializingLocal) {
+    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    semantic::TypeId ref_type = semantic::get_typeID(semantic::Type{semantic::ReferenceType{int_type, true}});
+
+    hir::Literal literal{
+        .value = hir::Literal::Integer{.value = 9, .suffix_type = ast::IntegerLiteralExpr::I32, .is_negative = false},
+        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+    };
+    auto literal_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
+    literal_expr->expr_info = make_value_info(int_type, false);
+
+    hir::UnaryOp ref_unary;
+    ref_unary.op = hir::UnaryOp::MUTABLE_REFERENCE;
+    ref_unary.rhs = std::move(literal_expr);
+    auto ref_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(ref_unary)});
+    ref_expr->expr_info = make_value_info(ref_type, false);
+
+    hir::Function function;
+    function.return_type = hir::TypeAnnotation(ref_type);
+    auto body = std::make_unique<hir::Block>();
+    body->final_expr = std::move(ref_expr);
+    function.body = std::move(body);
+
+    mir::MirFunction lowered = mir::lower_function(function);
+    ASSERT_EQ(lowered.locals.size(), 1u);
+    EXPECT_EQ(lowered.locals[0].type, int_type);
+    EXPECT_EQ(lowered.locals[0].debug_name.rfind("_ref_mut_tmp", 0), 0u);
+
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+    ASSERT_EQ(block.statements.size(), 2u);
+    const auto& assign = std::get<mir::AssignStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(assign.dest.base));
+    EXPECT_EQ(std::get<mir::LocalPlace>(assign.dest.base).id, 0u);
+
+    const auto& define = std::get<mir::DefineStatement>(block.statements[1].value);
+    ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define.rvalue.value));
+    const auto& ref_rvalue = std::get<mir::RefRValue>(define.rvalue.value);
+    ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(ref_rvalue.place.base));
+    EXPECT_EQ(std::get<mir::LocalPlace>(ref_rvalue.place.base).id, 0u);
+}
+
 TEST(MirLowerTest, LowersAssignmentToIndexedPlace) {
     semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
     semantic::TypeId unit_type = make_unit_type();

@@ -6,7 +6,6 @@
 #include "semantic/type/type.hpp"
 #include "semantic/utils.hpp"
 #include "type/impl_table.hpp"
-#include <cstddef>
 #include <stdexcept>
 #include <string>
 
@@ -19,12 +18,6 @@ class SemanticContext;
 class ExprChecker {
     SemanticContext& context;
     ImplTable& impl_table;
-    hir::Function* current_function = nullptr;
-    hir::Method* current_method = nullptr;
-    hir::Expr* current_expr = nullptr;
-    size_t temp_local_counter = 0;
-
-    ast::Identifier generate_temp_identifier();
 
 public:
     ExprChecker(SemanticContext& context, ImplTable& impl_table)
@@ -98,66 +91,6 @@ public:
     }
     ExprInfo check(hir::Block& expr, TypeExpectation exp);
 
-    class FunctionScopeGuard {
-        ExprChecker& checker;
-        hir::Function* previous_function;
-        hir::Method* previous_method;
-        size_t previous_temp_counter;
-
-    public:
-        FunctionScopeGuard(ExprChecker& checker,
-                           hir::Function* previous_function,
-                           hir::Method* previous_method,
-                           size_t previous_temp_counter)
-            : checker(checker),
-              previous_function(previous_function),
-              previous_method(previous_method),
-              previous_temp_counter(previous_temp_counter) {}
-        FunctionScopeGuard(FunctionScopeGuard&&) noexcept = default;
-        FunctionScopeGuard& operator=(FunctionScopeGuard&&) = delete;
-        ~FunctionScopeGuard() {
-            checker.current_function = previous_function;
-            checker.current_method = previous_method;
-            checker.temp_local_counter = previous_temp_counter;
-        }
-
-        FunctionScopeGuard(const FunctionScopeGuard&) = delete;
-        FunctionScopeGuard& operator=(const FunctionScopeGuard&) = delete;
-    };
-
-    class MethodScopeGuard {
-        ExprChecker& checker;
-        hir::Function* previous_function;
-        hir::Method* previous_method;
-        size_t previous_temp_counter;
-
-    public:
-        MethodScopeGuard(ExprChecker& checker,
-                         hir::Function* previous_function,
-                         hir::Method* previous_method,
-                         size_t previous_temp_counter)
-            : checker(checker),
-              previous_function(previous_function),
-              previous_method(previous_method),
-              previous_temp_counter(previous_temp_counter) {}
-        MethodScopeGuard(MethodScopeGuard&&) noexcept = default;
-        MethodScopeGuard& operator=(MethodScopeGuard&&) = delete;
-        ~MethodScopeGuard() {
-            checker.current_function = previous_function;
-            checker.current_method = previous_method;
-            checker.temp_local_counter = previous_temp_counter;
-        }
-
-        MethodScopeGuard(const MethodScopeGuard&) = delete;
-        MethodScopeGuard& operator=(const MethodScopeGuard&) = delete;
-    };
-
-    FunctionScopeGuard enter_function_scope(hir::Function& function);
-    MethodScopeGuard enter_method_scope(hir::Method& method);
-
-    hir::Expr& current_expr_ref();
-    void replace_current_expr(hir::ExprVariant new_expr);
-    hir::Local* create_temporary_local(bool is_mutable, TypeId type);
     // Static variants (should be resolved by name resolution)
     ExprInfo check(hir::StructConst& expr, TypeExpectation exp);
     ExprInfo check(hir::EnumVariant& expr, TypeExpectation exp);

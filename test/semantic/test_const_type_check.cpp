@@ -1,5 +1,6 @@
 #include "semantic/pass/semantic_check/expr_check.hpp"
 #include "semantic/hir/hir.hpp"
+#include "semantic/query/semantic_context.hpp"
 #include "semantic/type/type.hpp"
 #include "semantic/const/const.hpp"
 #include "semantic/type/helper.hpp"
@@ -15,11 +16,13 @@ using namespace semantic;
 class ConstTypeCheckTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        expr_checker = std::make_unique<ExprChecker>(impl_table);
+        semantic_context = std::make_unique<SemanticContext>(impl_table);
+        expr_checker = &semantic_context->get_checker();
     }
     
     ImplTable impl_table;
-    std::unique_ptr<ExprChecker> expr_checker;
+    std::unique_ptr<SemanticContext> semantic_context;
+    ExprChecker* expr_checker = nullptr;
     
     // Helper to create a const definition with type annotation
     std::unique_ptr<hir::ConstDef> create_const_def(TypeId type, std::unique_ptr<hir::Expr> expr) {

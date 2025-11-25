@@ -52,6 +52,7 @@ private:
 	std::vector<bool> block_terminated;
 	std::unordered_map<const hir::Local*, LocalId> local_ids;
 	std::vector<std::pair<const void*, LoopContext>> loop_stack;
+	size_t synthetic_local_counter = 0;
 
 	void initialize(FunctionId id, std::string name);
 	const hir::Block* get_body() const;
@@ -94,9 +95,14 @@ private:
 
 	LocalId require_local_id(const hir::Local* local) const;
 	Place make_local_place(const hir::Local* local) const;
+	Place make_local_place(LocalId local_id) const;
+	LocalId create_synthetic_local(semantic::TypeId type, bool is_mutable_reference);
 	Operand load_place_value(Place place, semantic::TypeId type);
 	Operand lower_expr(const hir::Expr& expr);
 	Place lower_expr_place(const hir::Expr& expr);
+	Place ensure_reference_operand_place(const hir::Expr& operand,
+					  const semantic::ExprInfo& operand_info,
+					  bool mutable_reference);
 
 	template <typename T>
 	Place lower_place_impl(const T& node, const semantic::ExprInfo& info);

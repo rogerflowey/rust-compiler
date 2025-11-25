@@ -10,6 +10,7 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <utility>
 
@@ -500,10 +501,28 @@ LocalId FunctionLowerer::require_local_id(const hir::Local* local) const {
 	return it->second;
 }
 
-Place FunctionLowerer::make_local_place(const hir::Local* local) const {
+Place FunctionLowerer::make_local_place(LocalId local_id) const {
 	Place place;
-	place.base = LocalPlace{require_local_id(local)};
+	place.base = LocalPlace{local_id};
 	return place;
+}
+
+Place FunctionLowerer::make_local_place(const hir::Local* local) const {
+	return make_local_place(require_local_id(local));
+}
+
+LocalId FunctionLowerer::create_synthetic_local(semantic::TypeId type,
+					      bool is_mutable_reference) {
+	if (!type) {
+		throw std::logic_error("Synthetic local missing resolved type during MIR lowering");
+	}
+	LocalId id = static_cast<LocalId>(mir_function.locals.size());
+	LocalInfo info;
+	info.type = type;
+	info.debug_name = is_mutable_reference ? "_ref_mut_tmp" : "_ref_tmp";
+	info.debug_name += std::to_string(synthetic_local_counter++);
+	mir_function.locals.push_back(std::move(info));
+	return id;
 }
 
 } // namespace detail

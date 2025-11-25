@@ -66,7 +66,12 @@ TEST_F(ExprCheckAdvancedTest, FieldAccessOnStructReference) {
     auto base_ref = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(ref_expr)});
     
     // Set the type manually since we're not going through the checker
-    base_ref->expr_info = semantic::ExprInfo{struct_ref_type, true, false, false, {semantic::NormalEndpoint{}}};
+    base_ref->expr_info = semantic::ExprInfo{struct_ref_type,
+                                             true,
+                                             false,
+                                             false,
+                                             {semantic::NormalEndpoint{}},
+                                             std::nullopt};
     
     auto field_access = createFieldAccess(std::move(base_ref), ast::Identifier{"field2"});
     

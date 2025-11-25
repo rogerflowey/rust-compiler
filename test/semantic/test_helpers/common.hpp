@@ -4,6 +4,7 @@
 #include "src/semantic/pass/semantic_check/expr_check.hpp"
 #include "src/semantic/pass/semantic_check/expr_info.hpp"
 #include "src/semantic/hir/hir.hpp"
+#include "src/semantic/query/semantic_context.hpp"
 #include "src/semantic/type/type.hpp"
 #include "src/semantic/type/helper.hpp"
 #include "src/semantic/type/impl_table.hpp"
@@ -58,8 +59,9 @@ protected:
         // Create test impl table
         impl_table = std::make_unique<semantic::ImplTable>();
         
-        // Create expression checker
-        expr_checker = std::make_unique<semantic::ExprChecker>(*impl_table);
+        // Create semantic context and expression checker view
+        semantic_context = std::make_unique<semantic::SemanticContext>(*impl_table);
+        expr_checker = &semantic_context->get_checker();
         
         // Setup test structures
         setupTestStructures();
@@ -448,7 +450,8 @@ static std::unique_ptr<hir::Expr> createReturn(std::unique_ptr<hir::Expr> value 
     
     // Test infrastructure
     std::unique_ptr<semantic::ImplTable> impl_table;
-    std::unique_ptr<semantic::ExprChecker> expr_checker;
+    std::unique_ptr<semantic::SemanticContext> semantic_context;
+    semantic::ExprChecker* expr_checker = nullptr;
     
     // Test structures
     std::unique_ptr<StructDef> test_struct_def;

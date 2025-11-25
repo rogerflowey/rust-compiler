@@ -144,7 +144,6 @@ public:
         }
 
         auto context_guard = expr_checker.enter_context("function", hir::helper::get_name(function).name);
-        auto function_scope = expr_checker.enter_function_scope(function);
 
         // Check function body
         if (function.body) {
@@ -194,7 +193,6 @@ public:
         }
 
         auto context_guard = expr_checker.enter_context("method", hir::helper::get_name(method).name);
-        auto method_scope = expr_checker.enter_method_scope(method);
 
         // Check method body
         if (method.body) {

@@ -29,12 +29,12 @@ struct LiteralVisitor {
             return UintConst{static_cast<uint32_t>(magnitude)};
         case Type::I32:
         case Type::ISIZE:
+            return IntConst{static_cast<int32_t>(signed_value)};
         case Type::NOT_SPECIFIED:
-            if(lit.is_negative){
+            if (lit.is_negative) {
                 return IntConst{static_cast<int32_t>(signed_value)};
-            } else {
-                return UintConst{static_cast<uint32_t>(signed_value)};
             }
+            return UintConst{static_cast<uint32_t>(magnitude)};
         }
         throw std::logic_error("Unsupported integer literal suffix");
     }
@@ -59,7 +59,17 @@ struct UnaryOpVisitor {
         if (op == hir::UnaryOp::NEGATE) {
             return IntConst{static_cast<int32_t>(-operand.value)};
         }
+        if (op == hir::UnaryOp::NOT) {
+            return IntConst{static_cast<int32_t>(~operand.value)};
+        }
         throw std::logic_error("Unsupported unary operator for signed integer");
+    }
+
+    ConstVariant operator()(const UintConst &operand) const {
+        if (op == hir::UnaryOp::NOT) {
+            return UintConst{static_cast<uint32_t>(~operand.value)};
+        }
+        throw std::logic_error("Unsupported unary operator for unsigned integer");
     }
 
     ConstVariant operator()(const BoolConst &operand) const {

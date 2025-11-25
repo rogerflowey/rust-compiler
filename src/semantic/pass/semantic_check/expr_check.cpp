@@ -1,5 +1,4 @@
 #include "expr_check.hpp"
-#include "temp_ref_desugger.hpp"
 #include "hir/helper.hpp"
 #include "hir/hir.hpp"
 #include "semantic/const/evaluator.hpp"
@@ -24,6 +23,14 @@ using namespace hir::helper;
 namespace semantic {
 
 namespace {
+
+template <typename T>
+T& mut_ptr(const T* ptr, const char* description) {
+  if (!ptr) {
+    throw std::logic_error(std::string(description) + " is null");
+  }
+  return *const_cast<T*>(ptr);
+}
 
 std::string get_function_display_name(const hir::Function &fn) {
   if (fn.ast_node && fn.ast_node->name) {
@@ -68,86 +75,9 @@ ExprChecker::throw_in_context(const std::string &message) const {
 }
 
 ExprInfo ExprChecker::evaluate(hir::Expr &expr, TypeExpectation exp) {
-  struct CurrentExprGuard {
-    ExprChecker &checker;
-    hir::Expr *previous;
-    CurrentExprGuard(ExprChecker &checker, hir::Expr *current)
-        : checker(checker), previous(checker.current_expr) {
-      checker.current_expr = current;
-    }
-    ~CurrentExprGuard() { checker.current_expr = previous; }
-  } guard(*this, &expr);
-
   return std::visit(
       [this, &exp](auto &&arg) -> ExprInfo { return this->check(arg, exp); },
       expr.value);
-}
-
-ExprChecker::FunctionScopeGuard
-ExprChecker::enter_function_scope(hir::Function &function) {
-  hir::Function *previous_function = current_function;
-  hir::Method *previous_method = current_method;
-  size_t previous_counter = temp_local_counter;
-
-  current_function = &function;
-  current_method = nullptr;
-  temp_local_counter = 0;
-
-  return FunctionScopeGuard(*this, previous_function, previous_method,
-                            previous_counter);
-}
-
-ExprChecker::MethodScopeGuard
-ExprChecker::enter_method_scope(hir::Method &method) {
-  hir::Function *previous_function = current_function;
-  hir::Method *previous_method = current_method;
-  size_t previous_counter = temp_local_counter;
-
-  current_function = nullptr;
-  current_method = &method;
-  temp_local_counter = 0;
-
-  return MethodScopeGuard(*this, previous_function, previous_method,
-                          previous_counter);
-}
-
-hir::Expr &ExprChecker::current_expr_ref() {
-  if (!current_expr) {
-    throw std::logic_error("Current expression context not set");
-  }
-  return *current_expr;
-}
-
-void ExprChecker::replace_current_expr(hir::ExprVariant new_expr) {
-  auto &expr = current_expr_ref();
-  expr.value = std::move(new_expr);
-  expr.expr_info.reset();
-}
-
-hir::Local *ExprChecker::create_temporary_local(bool is_mutable,
-                                                TypeId type) {
-  auto temp_identifier = generate_temp_identifier();
-  auto local = std::make_unique<hir::Local>();
-  local->name = std::move(temp_identifier);
-  local->is_mutable = is_mutable;
-  local->type_annotation = type;
-  local->def_site = nullptr;
-
-  auto *local_ptr = local.get();
-  if (current_function) {
-    current_function->locals.push_back(std::move(local));
-  } else if (current_method) {
-    current_method->locals.push_back(std::move(local));
-  } else {
-    throw std::logic_error(
-        "Temporary local created outside of function or method context");
-  }
-  return local_ptr;
-}
-
-ast::Identifier ExprChecker::generate_temp_identifier() {
-  const std::string name = "_temp" + std::to_string(temp_local_counter++);
-  return ast::Identifier{name};
 }
 
 // Literal expressions
@@ -167,10 +97,10 @@ ExprInfo ExprChecker::check(hir::Literal &expr, TypeExpectation exp) {
                    case ast::IntegerLiteralExpr::ISIZE:
                      type = get_typeID(Type{PrimitiveKind::ISIZE});
                      break;
-                   case ast::IntegerLiteralExpr::USIZE:
-                     type = get_typeID(Type{PrimitiveKind::USIZE});
-                     break;
-                   default:
+                  case ast::IntegerLiteralExpr::USIZE:
+                    type = get_typeID(Type{PrimitiveKind::USIZE});
+                    break;
+                  default:
                      if (exp.has_expected &&
                          is_integer_type(exp.expected)) {
                        type = exp.expected;
@@ -180,14 +110,24 @@ ExprInfo ExprChecker::check(hir::Literal &expr, TypeExpectation exp) {
                      break;
                    }
 
-                   overflow_int_literal_check(integer);
+                     overflow_int_literal_check(integer);
 
-                   return ExprInfo{.type = type,
-                                   .has_type = has_type,
-                                   .is_mut = false,
-                                   .is_place = false,
-                                   .endpoints = {NormalEndpoint{}},
-                                   .const_value = detail::LiteralVisitor{}(integer)};
+                     auto const_value = detail::LiteralVisitor{}(integer);
+                     if ((integer.suffix_type == ast::IntegerLiteralExpr::I32 ||
+                      integer.suffix_type == ast::IntegerLiteralExpr::ISIZE) &&
+                       std::holds_alternative<UintConst>(const_value)) {
+                     const auto unsigned_value =
+                       std::get<UintConst>(const_value).value;
+                     const_value = IntConst{
+                       static_cast<int32_t>(unsigned_value)};
+                     }
+
+                     return ExprInfo{.type = type,
+                             .has_type = has_type,
+                             .is_mut = false,
+                             .is_place = false,
+                             .endpoints = {NormalEndpoint{}},
+                             .const_value = const_value};
                  },
                  [](bool &value) -> ExprInfo {
                    return ExprInfo{.type =
@@ -250,22 +190,26 @@ ExprInfo ExprChecker::check(hir::ConstUse &expr, TypeExpectation) {
     throw std::logic_error("Const definition is null");
   }
 
-  const std::string const_name = get_const_display_name(*expr.def);
+  auto &const_def = mut_ptr(expr.def, "const definition");
+  const std::string const_name = get_const_display_name(const_def);
 
   // Get const's declared type
-  TypeId declared_type = context.type_query(*expr.def->type);
+  if (!const_def.type) {
+    throw std::logic_error("Const '" + const_name + "' missing type annotation");
+  }
+  TypeId declared_type = context.type_query(*const_def.type);
 
   // Perform type validation on const expression
-  if (expr.def->expr) {
+  if (const_def.expr) {
     // Check the original expression's type matches declared type
     ExprInfo expr_info;
     auto evaluate = [&]() {
       if (debug::is_current("const", const_name)) {
-        return check(*expr.def->expr,
+        return check(*const_def.expr,
                      TypeExpectation::exact(declared_type));
       }
       auto guard = enter_context("const", const_name);
-      return check(*expr.def->expr, TypeExpectation::exact(declared_type));
+      return check(*const_def.expr, TypeExpectation::exact(declared_type));
     };
     expr_info = evaluate();
 
@@ -288,7 +232,7 @@ ExprInfo ExprChecker::check(hir::ConstUse &expr, TypeExpectation) {
   }
 
   std::optional<ConstVariant> const_value;
-  const_value = context.const_query(*expr.def);
+  const_value = context.const_query(const_def);
 
   return ExprInfo{.type = declared_type,
                   .has_type = true,
@@ -316,24 +260,27 @@ ExprInfo ExprChecker::check(hir::FieldAccess &expr, TypeExpectation) {
     throw_in_context("Field access base must be a struct");
   }
 
+  auto &struct_def = mut_ptr(struct_type->symbol, "struct definition");
+
   // resolve field
   auto name_ptr = std::get_if<ast::Identifier>(&expr.field);
   if (!name_ptr) {
     throw std::logic_error("Field access already resolved");
   }
-  auto field_id = struct_type->symbol->find_field(*name_ptr);
+  auto field_id = struct_def.find_field(*name_ptr);
   if (!field_id) {
     throw_in_context("Field '" + name_ptr->name + "' not found in struct '" +
-                     get_name(*struct_type->symbol).name + "'");
+                     get_name(struct_def).name + "'");
   }
   expr.field = *field_id;
   TypeId type =
-      context.type_query(struct_type->symbol->field_type_annotations[*field_id]);
-  struct_type->symbol->fields[*field_id].type = type;
+      context.type_query(struct_def.field_type_annotations[*field_id]);
+  struct_def.fields[*field_id].type = type;
+  const bool is_place = base_info.is_place;
   return ExprInfo{.type = type,
                   .has_type = true,
-                  .is_mut = base_info.is_mut,
-                  .is_place = true,
+                  .is_mut = is_place ? base_info.is_mut : false,
+                  .is_place = is_place,
                   .endpoints = base_info.endpoints};
 }
 
@@ -360,10 +307,11 @@ ExprInfo ExprChecker::check(hir::Index &expr, TypeExpectation) {
   }
 
   EndpointSet endpoints = sequence_endpoints(base_info, index_info);
+  const bool is_place = base_info.is_place;
   return ExprInfo{.type = array_type->element_type,
                   .has_type = true,
-                  .is_mut = base_info.is_mut,
-                  .is_place = true,
+                  .is_mut = is_place ? base_info.is_mut : false,
+                  .is_place = is_place,
                   .endpoints = std::move(endpoints)};
 }
 
@@ -597,14 +545,14 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
 
   switch (expr.op) {
   case hir::UnaryOp::NOT: {
-    std::optional<ConstVariant> folded;
-    if (operand_info.const_value) {
-      folded = std::visit(detail::UnaryOpVisitor{expr.op}, *operand_info.const_value);
-    }
     if (!operand_info.has_type) {
       return unresolved();
     }
     if (is_bool_type(operand_info.type)) {
+      std::optional<ConstVariant> folded;
+      if (operand_info.const_value) {
+        folded = std::visit(detail::UnaryOpVisitor{expr.op}, *operand_info.const_value);
+      }
       return ExprInfo{.type = bool_type,
                       .has_type = true,
                       .is_mut = false,
@@ -613,6 +561,10 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
                       .const_value = folded};
     }
     if (is_numeric_type(operand_info.type)) {
+      std::optional<ConstVariant> folded;
+      if (operand_info.const_value) {
+        folded = std::visit(detail::UnaryOpVisitor{expr.op}, *operand_info.const_value);
+      }
       return ExprInfo{.type = operand_info.type,
                       .has_type = true,
                       .is_mut = false,
@@ -623,15 +575,15 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
     throw_in_context("NOT operand must be boolean or integer");
   }
   case hir::UnaryOp::NEGATE: {
-    std::optional<ConstVariant> folded;
-    if (operand_info.const_value) {
-      folded = std::visit(detail::UnaryOpVisitor{expr.op}, *operand_info.const_value);
-    }
     if (!operand_info.has_type) {
       return unresolved();
     }
     if (!is_numeric_type(operand_info.type)) {
       throw_in_context("NEGATE operand must be numeric");
+    }
+    std::optional<ConstVariant> folded;
+    if (operand_info.const_value) {
+      folded = std::visit(detail::UnaryOpVisitor{expr.op}, *operand_info.const_value);
     }
     return ExprInfo{.type = operand_info.type,
                     .has_type = true,
@@ -655,15 +607,8 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
   case hir::UnaryOp::REFERENCE:
   case hir::UnaryOp::MUTABLE_REFERENCE: {
     ensure_operand_type("Cannot infer type for referenced value");
-
-    if (!operand_info.is_place) {
-      return TempRefDesugger::desugar_reference_to_temporary(expr,
-                                                             operand_info,
-                                                             *this);
-    }
-
     bool is_mut = (expr.op == hir::UnaryOp::MUTABLE_REFERENCE);
-    if (is_mut && !operand_info.is_mut) {
+    if (operand_info.is_place && is_mut && !operand_info.is_mut) {
       throw_in_context("Cannot borrow immutable value as mutable");
     }
 
@@ -887,19 +832,21 @@ ExprInfo ExprChecker::check(hir::Call &expr, TypeExpectation) {
     throw_in_context("Call target must be a function");
   }
 
-  // Check argument types
-  const std::string func_name = get_function_display_name(*func_type->def);
+  auto &function_def = mut_ptr(func_type->def, "function definition");
 
-  if (func_type->def->params.size() != expr.args.size()) {
+  // Check argument types
+  const std::string func_name = get_function_display_name(function_def);
+
+  if (function_def.params.size() != expr.args.size()) {
     throw_in_context("Argument count mismatch when calling function '" +
                      func_name + "'");
   }
 
   std::vector<ExprInfo> arg_infos;
   arg_infos.reserve(expr.args.size());
-  for (size_t i = 0; i < func_type->def->params.size(); ++i) {
+  for (size_t i = 0; i < function_def.params.size(); ++i) {
     TypeId param_type =
-        context.type_query(*func_type->def->param_type_annotations[i]);
+        context.type_query(*function_def.param_type_annotations[i]);
     ExprInfo arg_info =
         check(*expr.args[i], TypeExpectation::exact(param_type));
     if (!arg_info.has_type) {
@@ -916,7 +863,7 @@ ExprInfo ExprChecker::check(hir::Call &expr, TypeExpectation) {
 
   EndpointSet endpoints = sequence_endpoints(arg_infos);
 
-  return ExprInfo{.type = context.type_query(*func_type->def->return_type),
+  return ExprInfo{.type = context.type_query(*function_def.return_type),
                   .has_type = true,
                   .is_mut = false,
                   .is_place = false,

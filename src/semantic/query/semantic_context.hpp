@@ -2,6 +2,7 @@
 
 #include "semantic/const/const.hpp"
 #include "semantic/hir/hir.hpp"
+#include "semantic/pass/semantic_check/expr_check.hpp"
 #include "semantic/pass/semantic_check/expr_info.hpp"
 #include "semantic/query/expectation.hpp"
 #include "semantic/type/impl_table.hpp"

@@ -150,7 +150,8 @@ TEST(SemanticQueryTest, ResolvesAnnotationsAndConstants) {
     hir::Function function;
     function.params = std::move(params);
     function.param_type_annotations = std::move(param_type_annotations);
-    function.return_type = std::nullopt;
+    function.return_type = hir::TypeAnnotation(
+        semantic::get_typeID(semantic::Type{semantic::UnitType{}}));
     function.body = std::move(body);
     function.ast_node = function_ast_ptr;
 
@@ -267,7 +268,8 @@ TEST(SemanticQueryTest, ResolvesReferencePatterns) {
     hir::Function function;
     function.params = std::move(params);
     function.param_type_annotations = std::move(param_type_annotations);
-    function.return_type = std::nullopt;
+    function.return_type = hir::TypeAnnotation(
+        semantic::get_typeID(semantic::Type{semantic::UnitType{}}));
     function.body = std::move(body);
     function.ast_node = function_ast_ptr;
 

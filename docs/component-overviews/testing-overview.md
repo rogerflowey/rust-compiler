@@ -301,25 +301,29 @@ TEST(ExprCheckTest, BinaryOperationTypeChecking) {
 - **Propagation**: Spreading constant values
 
 #### Temporary Reference Tests ([`test/semantic/test_temp_ref_desugaring.cpp`](../../test/semantic/test_temp_ref_desugaring.cpp))
-- **Reference Desugaring**: Temporary variable handling
-- **Lifetime Analysis**: Reference validity checking
-- **Memory Safety**: Preventing dangling references
+
+- **Semantic Acceptance**: `ExprChecker` allows `&` / `&mut` on rvalues without rewriting HIR
+- **MIR Materialization**: MIR lowering introduces stack locals for rvalue borrows
+- **Regression Coverage**: Prevents reintroduction of AST-level rewrites
 
 ## Test Data and Fixtures
 
 ### Test Case Organization
 
 #### Positive Test Cases
+
 - **Valid Programs**: Should compile without errors
 - **Expected Behavior**: Correct AST/HIR generation
 - **Performance**: Reasonable compilation times
 
 #### Negative Test Cases
+
 - **Invalid Programs**: Should produce specific errors
 - **Error Messages**: Clear and helpful error reporting
 - **Error Recovery**: Graceful handling of multiple errors
 
 #### Edge Cases
+
 - **Boundary Conditions**: Empty inputs, maximum sizes
 - **Complex Scenarios**: Nested structures, deep recursion
 - **Performance**: Large inputs, stress testing
@@ -421,18 +425,21 @@ jobs:
 ## Test Quality Metrics
 
 ### Coverage Goals
+
 - **Statement Coverage**: > 90% for critical components
 - **Branch Coverage**: > 85% for complex logic
 - **Function Coverage**: 100% for public APIs
 - **Line Coverage**: > 80% overall
 
 ### Performance Benchmarks
+
 - **Lexer Speed**: > 1000 lines/second
 - **Parser Speed**: > 500 lines/second
 - **Semantic Analysis**: > 100 lines/second
 - **Memory Usage**: < 100MB for typical programs
 
 ### Quality Gates
+
 - **All Tests Pass**: No test failures allowed
 - **Coverage Threshold**: Minimum coverage requirements
 - **Performance Regression**: No significant slowdowns
@@ -454,6 +461,7 @@ jobs:
 ## Usage Examples
 
 ### Writing New Tests
+
 ```cpp
 // Example: Testing a new language feature
 TEST(NewFeatureTest, BasicFunctionality) {
@@ -486,6 +494,7 @@ TEST(NewFeatureTest, ErrorHandling) {
 ```
 
 ### Debugging Test Failures
+
 ```cpp
 // Helper for debugging test failures
 void debug_ast_difference(const ASTNode* expected, const ASTNode* actual) {
