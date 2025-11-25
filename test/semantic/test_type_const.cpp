@@ -12,7 +12,8 @@
 #include "src/ast/type.hpp"
 #include "src/semantic/hir/hir.hpp"
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
-#include "src/semantic/pass/type&const/visitor.hpp"
+#include "src/semantic/pass/semantic_check/semantic_check.hpp"
+#include "src/semantic/query/semantic_context.hpp"
 #include "src/semantic/type/impl_table.hpp"
 
 namespace {
@@ -81,7 +82,7 @@ struct AstArena {
 
 } // namespace
 
-TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
+TEST(SemanticQueryTest, ResolvesAnnotationsAndConstants) {
     AstArena arena;
     auto program = std::make_unique<hir::Program>();
 
@@ -160,8 +161,9 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
     semantic::NameResolver name_resolver{impl_table};
     name_resolver.visit_program(*program);
 
-    semantic::TypeConstResolver type_const_resolver;
-    type_const_resolver.visit_program(*program);
+    semantic::SemanticContext semantic_ctx{impl_table};
+    semantic::SemanticCheckVisitor semantic_checker{semantic_ctx};
+    semantic_checker.check_program(*program);
 
     // Struct field types are resolved
     ASSERT_EQ(struct_def_ptr->fields.size(), 1u);
@@ -210,7 +212,7 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
     EXPECT_EQ(std::get<size_t>(array_repeat->count), 4u);
 }
 
-TEST(TypeConstResolverTest, ResolvesReferencePatterns) {
+TEST(SemanticQueryTest, ResolvesReferencePatterns) {
     AstArena arena;
     auto program = std::make_unique<hir::Program>();
 
@@ -276,8 +278,9 @@ TEST(TypeConstResolverTest, ResolvesReferencePatterns) {
     semantic::NameResolver name_resolver{impl_table};
     name_resolver.visit_program(*program);
 
-    semantic::TypeConstResolver type_const_resolver;
-    type_const_resolver.visit_program(*program);
+    semantic::SemanticContext semantic_ctx{impl_table};
+    semantic::SemanticCheckVisitor semantic_checker{semantic_ctx};
+    semantic_checker.check_program(*program);
 
     // Check that parameter patterns have resolved types
     ASSERT_EQ(function_ptr->params.size(), 2u);
