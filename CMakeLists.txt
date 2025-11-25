@@ -39,7 +39,7 @@ endif()
 
 
 # --- Dependencies ---
-# Add the parsecpp library from the subdirectory.
+add_subdirectory(lib/llvmbuilder)
 add_subdirectory(lib/parsecpp)
 
 # --- Project Modules ---
@@ -85,6 +85,7 @@ if(BUILD_TESTING)
             parser
             semantic
             mir
+            llvmbuilder
             gtest_main
             compiler_tests_properties
         )
