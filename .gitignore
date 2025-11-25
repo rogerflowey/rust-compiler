@@ -17,4 +17,3 @@ uv.lock
 regression_failures.log
 .kilocode/
 RCompiler-Testcases/
-scripts/
