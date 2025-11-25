@@ -4,6 +4,7 @@
 #include "semantic/hir/hir.hpp"
 #include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/hir/helper.hpp"
+#include "semantic/query/semantic_context.hpp"
 #include "semantic/type/type.hpp"
 #include "semantic/type/impl_table.hpp"
 #include "type_compatibility.hpp"
@@ -29,15 +30,16 @@ namespace semantic {
  * - Implementation correctness
  */
 class SemanticCheckVisitor : public hir::HirVisitorBase<SemanticCheckVisitor> {
-    ExprChecker expr_checker;
+    SemanticContext& context;
+    ExprChecker& expr_checker;
 
 public:
     /**
      * @brief Construct a new SemanticCheckVisitor
      * @param impl_table Reference to the implementation table for method resolution
      */
-    explicit SemanticCheckVisitor(ImplTable& impl_table) 
-        : expr_checker(impl_table) {}
+    explicit SemanticCheckVisitor(SemanticContext& context)
+        : context(context), expr_checker(context.get_checker()) {}
 
     /**
      * @brief Apply semantic checking to the entire program
@@ -84,7 +86,7 @@ public:
         if (!const_def.expr) {
             throw std::logic_error("Constant definition missing expression");
         }
-        
+
         if (!const_def.type) {
             throw std::logic_error("Constant definition missing type annotation");
         }
@@ -92,7 +94,7 @@ public:
         auto context_guard = expr_checker.enter_context("const", hir::helper::get_name(const_def).name);
 
         // Get the declared type up front so the expression can use it as an expectation
-        TypeId declared_type = hir::helper::get_resolved_type(*const_def.type);
+        TypeId declared_type = context.type_query(*const_def.type);
 
         // Check the expression with the declared type expectation so literals get resolved
         auto info = expr_checker.check(
@@ -105,7 +107,9 @@ public:
         if (!is_assignable_to(info.type, declared_type)) {
             expr_checker.throw_in_context("Constant expression type doesn't match declared type");
         }
-        
+
+        const_def.const_value = context.const_query(const_def);
+
         // Base visitor handles any nested items
         base().visit(const_def);
     }
@@ -121,18 +125,29 @@ public:
         if (function.params.size() != function.param_type_annotations.size()) {
             throw std::logic_error("Function parameter count mismatch with type annotations");
         }
-        
+
         // Ensure return type is present (defaults to unit type)
         if (!function.return_type) {
             throw std::logic_error("Function missing return type annotation");
         }
-        
+
+        TypeId return_type = context.type_query(*function.return_type);
+
+        for (size_t i = 0; i < function.params.size(); ++i) {
+            if (!function.param_type_annotations[i]) {
+                throw std::logic_error("Function parameter missing type annotation");
+            }
+            TypeId param_type = context.type_query(*function.param_type_annotations[i]);
+            if (function.params[i]) {
+                context.bind_pattern_type(*function.params[i], param_type);
+            }
+        }
+
         auto context_guard = expr_checker.enter_context("function", hir::helper::get_name(function).name);
         auto function_scope = expr_checker.enter_function_scope(function);
 
         // Check function body
         if (function.body) {
-            TypeId return_type = hir::helper::get_resolved_type(*function.return_type);
             auto info = expr_checker.check(
                 *function.body,
                 TypeExpectation::exact(return_type));
@@ -165,13 +180,24 @@ public:
         if (!method.return_type) {
             throw std::logic_error("Method missing return type annotation");
         }
-        
+
+        TypeId return_type = context.type_query(*method.return_type);
+
+        for (size_t i = 0; i < method.params.size(); ++i) {
+            if (!method.param_type_annotations[i]) {
+                throw std::logic_error("Method parameter missing type annotation");
+            }
+            TypeId param_type = context.type_query(*method.param_type_annotations[i]);
+            if (method.params[i]) {
+                context.bind_pattern_type(*method.params[i], param_type);
+            }
+        }
+
         auto context_guard = expr_checker.enter_context("method", hir::helper::get_name(method).name);
         auto method_scope = expr_checker.enter_method_scope(method);
 
         // Check method body
         if (method.body) {
-            TypeId return_type = hir::helper::get_resolved_type(*method.return_type);
             auto info = expr_checker.check(
                 *method.body,
                 TypeExpectation::exact(return_type));
@@ -200,11 +226,15 @@ public:
             throw std::logic_error("Struct field count mismatch with type annotations");
         }
         auto context_guard = expr_checker.enter_context("struct", hir::helper::get_name(struct_def).name);
-        
+
         // Validate all field type annotations are resolved
         for (const auto& type_annotation : struct_def.field_type_annotations) {
-            // Ensure the type annotation is resolved (invariant from previous passes)
-            hir::helper::get_resolved_type(type_annotation);
+            context.type_query(const_cast<hir::TypeAnnotation&>(type_annotation));
+        }
+
+        for (size_t idx = 0; idx < struct_def.fields.size(); ++idx) {
+            TypeId type_id = context.type_query(struct_def.field_type_annotations[idx]);
+            struct_def.fields[idx].type = type_id;
         }
         
         // Check for duplicate field names
@@ -283,9 +313,10 @@ public:
      * Note: Full trait implementation validation is handled by the TraitValidator pass.
      */
     void visit(hir::Impl& impl) {
-        auto context_guard = expr_checker.enter_context("impl", describe_impl_name(impl));
         // Validate the for_type
-        hir::helper::get_resolved_type(impl.for_type);
+        context.type_query(impl.for_type);
+
+        auto context_guard = expr_checker.enter_context("impl", describe_impl_name(impl));
         
         // Check all associated items with expression checking
         for (auto& item : impl.items) {

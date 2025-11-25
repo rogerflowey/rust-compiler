@@ -2,6 +2,7 @@
 
 #include "expr_info.hpp"
 #include "semantic/hir/hir.hpp"
+#include "semantic/query/expectation.hpp"
 #include "semantic/type/type.hpp"
 #include "semantic/utils.hpp"
 #include "type/impl_table.hpp"
@@ -13,15 +14,10 @@
 
 namespace semantic {
 
-struct TypeExpectation {
-    bool has_expected = false;
-    TypeId expected = invalid_type_id;
-
-    static TypeExpectation none() { return {}; }
-    static TypeExpectation exact(TypeId t) { return {true, t}; }
-};
+class SemanticContext;
 
 class ExprChecker {
+    SemanticContext& context;
     ImplTable& impl_table;
     hir::Function* current_function = nullptr;
     hir::Method* current_method = nullptr;
@@ -31,7 +27,8 @@ class ExprChecker {
     ast::Identifier generate_temp_identifier();
 
 public:
-    explicit ExprChecker(ImplTable& impl_table) : impl_table(impl_table) {}
+    ExprChecker(SemanticContext& context, ImplTable& impl_table)
+        : context(context), impl_table(impl_table) {}
 
     class ContextGuard {
         debug::Context::Guard guard;
@@ -51,35 +48,8 @@ public:
     [[noreturn]] void throw_in_context(const std::string& message) const;
 
     // Main entry point for checking an expression
-    ExprInfo check(hir::Expr& expr) {
-        return check(expr, TypeExpectation::none());
-    }
-
-    ExprInfo check(hir::Expr& expr, TypeExpectation exp) {
-        if (expr.expr_info && expr.expr_info->has_type) {
-            return *expr.expr_info;
-        }
-        struct CurrentExprGuard {
-            ExprChecker& checker;
-            hir::Expr* previous;
-            CurrentExprGuard(ExprChecker& checker, hir::Expr* current)
-                : checker(checker), previous(checker.current_expr) {
-                checker.current_expr = current;
-            }
-            ~CurrentExprGuard() { checker.current_expr = previous; }
-        } guard(*this, &expr);
-        auto info = std::visit(
-            [this, &exp](auto&& arg) -> ExprInfo {
-                return this->check(arg, exp);
-            },
-            expr.value);
-        if (info.has_type) {
-            expr.expr_info = info;
-        } else {
-            expr.expr_info.reset();
-        }
-        return info;
-    }
+    ExprInfo check(hir::Expr& expr);
+    ExprInfo check(hir::Expr& expr, TypeExpectation exp);
     
     // Visitor methods for each expression type
     // Literal expressions
@@ -191,6 +161,11 @@ public:
     // Static variants (should be resolved by name resolution)
     ExprInfo check(hir::StructConst& expr, TypeExpectation exp);
     ExprInfo check(hir::EnumVariant& expr, TypeExpectation exp);
+
+private:
+    friend class SemanticContext;
+
+    ExprInfo evaluate(hir::Expr& expr, TypeExpectation exp);
 
 };
 

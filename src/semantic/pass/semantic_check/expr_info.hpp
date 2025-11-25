@@ -1,6 +1,9 @@
 #pragma once
 
 // this file defines the struct of Expr Info used in the top-down expr type checks
+#pragma once
+
+#include "semantic/const/const.hpp"
 #include "type/type.hpp"
 #include <variant>
 #include <unordered_set>
@@ -127,6 +130,7 @@ struct ExprInfo {
     bool is_mut = false; // mutability of the expr
     bool is_place = false;
     EndpointSet endpoints = {NormalEndpoint{}}; // Set of possible exit points from this expression
+    std::optional<ConstVariant> const_value;
 
     // Check if expression can complete normally
     bool has_normal_endpoint() const { return endpoints.contains(NormalEndpoint{}); }
