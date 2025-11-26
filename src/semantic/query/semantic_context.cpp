@@ -7,6 +7,7 @@
 #include "semantic/type/helper.hpp"
 #include "semantic/type/type.hpp"
 #include "semantic/utils.hpp"
+#include "src/utils/error.hpp"
 #include <stdexcept>
 
 namespace semantic {
@@ -141,7 +142,7 @@ TypeId SemanticContext::resolve_type_annotation(hir::TypeAnnotation& annotation)
 
     auto* node_ptr = std::get_if<std::unique_ptr<hir::TypeNode>>(&annotation);
     if (!node_ptr || !*node_ptr) {
-        throw std::runtime_error("Type annotation is null");
+        throw SemanticError("Type annotation is null");
     }
 
     TypeId resolved = resolve_type_node(**node_ptr);
@@ -195,7 +196,7 @@ TypeId SemanticContext::resolve_type_node(const hir::TypeNode& node) {
 
     auto resolved = std::visit(Visitor{*this}, node.value);
     if (!resolved) {
-        throw std::runtime_error("Failed to resolve type node");
+        throw SemanticError("Failed to resolve type node", node.span);
     }
     return *resolved;
 }
@@ -221,12 +222,12 @@ bool SemanticContext::can_reuse_cached(const ExprInfo& info, TypeExpectation exp
 
 void SemanticContext::bind_reference_pattern(hir::ReferencePattern& ref_pattern, TypeId expected_type) {
     if (!helper::type_helper::is_reference_type(expected_type)) {
-        throw std::runtime_error("Reference pattern expects reference type");
+        throw SemanticError("Reference pattern expects reference type", ref_pattern.span);
     }
 
     bool expected_mutability = helper::type_helper::get_reference_mutability(expected_type);
     if (ref_pattern.is_mutable != expected_mutability) {
-        throw std::runtime_error("Reference pattern mutability mismatch");
+        throw SemanticError("Reference pattern mutability mismatch", ref_pattern.span);
     }
 
     TypeId referenced_type = helper::type_helper::get_referenced_type(expected_type);

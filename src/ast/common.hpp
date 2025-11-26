@@ -7,6 +7,8 @@
 #include <variant>
 #include <vector>
 
+#include "../span/span.hpp"
+
 namespace ast{
 
 // 1. Forward declare the variant wrapper structs to break recursion
@@ -28,6 +30,7 @@ using BlockExprPtr = std::unique_ptr<BlockExpr>;
 
 struct Identifier {
     std::string name;
+    span::Span span = span::Span::invalid();
     Identifier() = default;
     Identifier(std::string name) : name(std::move(name)) {};
     Identifier(const char* name) : name(name) {};
@@ -49,10 +52,12 @@ enum class PathSegType { IDENTIFIER, SELF, self };
 struct PathSegment {
     PathSegType type;
     std::optional<IdPtr> id;
+    span::Span span = span::Span::invalid();
 };
 
 struct Path {
     std::vector<PathSegment> segments;
+    span::Span span = span::Span::invalid();
     Path(std::vector<PathSegment> segments) : segments(std::move(segments)) {}
     std::optional<ast::Identifier> get_name(size_t index) const {
         if(index >= segments.size()){

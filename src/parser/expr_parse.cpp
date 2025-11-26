@@ -18,6 +18,13 @@ struct ParsedIntegerLiteral {
     ast::IntegerLiteralExpr::Type type;
 };
 
+template <typename T>
+ExprPtr annotate_expr(ExprPtr expr, const span::Span &sp) {
+    expr->span = sp;
+    std::get<T>(expr->value).span = sp;
+    return expr;
+}
+
 bool isValidDigitForBase(char c, int base) {
     unsigned char uc = static_cast<unsigned char>(c);
     switch (base) {
@@ -126,50 +133,88 @@ void ExprParserBuilder::finalize(
 
 ExprParser ExprParserBuilder::buildLiteralParser() const {
     auto p_string = satisfy<Token>([](const Token& t) { return t.type == TOKEN_STRING; }, "string literal")
-        .map([](Token t) -> ExprPtr { return make_expr<StringLiteralExpr>(t.value); });
+        .map([](Token t) -> ExprPtr {
+            auto expr = make_expr<StringLiteralExpr>(t.value);
+            return annotate_expr<StringLiteralExpr>(std::move(expr), t.span);
+        });
     auto p_char = satisfy<Token>([](const Token& t) { return t.type == TOKEN_CHAR; }, "char literal")
-        .map([](Token t) -> ExprPtr { return make_expr<CharLiteralExpr>(t.value[0]); });
+        .map([](Token t) -> ExprPtr {
+            auto expr = make_expr<CharLiteralExpr>(t.value[0]);
+            return annotate_expr<CharLiteralExpr>(std::move(expr), t.span);
+        });
     auto p_bool = satisfy<Token>([](const Token& t) { return t.type == TOKEN_KEYWORD && (t.value == "true" || t.value == "false"); }, "boolean literal")
-        .map([](Token t) -> ExprPtr { return make_expr<BoolLiteralExpr>(t.value == "true"); });
+        .map([](Token t) -> ExprPtr {
+            auto expr = make_expr<BoolLiteralExpr>(t.value == "true");
+            return annotate_expr<BoolLiteralExpr>(std::move(expr), t.span);
+        });
     auto p_number = satisfy<Token>([](const Token& t) -> bool { return t.type == TOKEN_NUMBER; }, "number literal")
         .map([](Token t) -> ExprPtr {
             auto parsed = parseIntegerLiteral(t.value);
-            return make_expr<IntegerLiteralExpr>(parsed.value, parsed.type);
+            auto expr = make_expr<IntegerLiteralExpr>(parsed.value, parsed.type);
+            return annotate_expr<IntegerLiteralExpr>(std::move(expr), t.span);
         });
     return (p_string | p_char | p_bool | p_number).label("a literal expression");
 }
 
 ExprParser ExprParserBuilder::buildGroupedParser(const ExprParser& self) const {
     return (equal({TOKEN_DELIMITER, "("}) > self < equal({TOKEN_DELIMITER, ")"}))
-        .map([](ExprPtr&& inner) -> ExprPtr { return make_expr<GroupedExpr>(std::move(inner)); }).label("a grouped expression");
+        .map([](ExprPtr&& inner) -> ExprPtr {
+            auto expr = make_expr<GroupedExpr>(std::move(inner));
+            auto span = std::get<GroupedExpr>(expr->value).expr ? std::get<GroupedExpr>(expr->value).expr->span : span::Span::invalid();
+            return annotate_expr<GroupedExpr>(std::move(expr), span);
+        }).label("a grouped expression");
 }
 
 ExprParser ExprParserBuilder::buildArrayParser(const ExprParser& self) const {
     auto p_list = self.tuple(equal({TOKEN_SEPARATOR, ","}))
-        .map([](std::vector<ExprPtr>&& elems) -> ExprPtr { return make_expr<ArrayInitExpr>(std::move(elems)); });
+        .map([](std::vector<ExprPtr>&& elems) -> ExprPtr {
+            auto expr = make_expr<ArrayInitExpr>(std::move(elems));
+            std::vector<span::Span> spans;
+            for (const auto &e : std::get<ArrayInitExpr>(expr->value).elements) {
+                if (e) spans.push_back(e->span);
+            }
+            auto merged = merge_span_list(spans);
+            return annotate_expr<ArrayInitExpr>(std::move(expr), merged);
+        });
     auto p_repeat = (self < equal({TOKEN_SEPARATOR, ";"}))
         .andThen(self)
-        .map([](auto&& pair) -> ExprPtr { return make_expr<ArrayRepeatExpr>(std::move(std::get<0>(pair)), std::move(std::get<1>(pair))); });
+        .map([](auto&& pair) -> ExprPtr {
+            auto expr = make_expr<ArrayRepeatExpr>(std::move(std::get<0>(pair)), std::move(std::get<1>(pair)));
+            auto &node = std::get<ArrayRepeatExpr>(expr->value);
+            auto merged = merge_span_pair(node.value ? node.value->span : span::Span::invalid(), node.count ? node.count->span : span::Span::invalid());
+            return annotate_expr<ArrayRepeatExpr>(std::move(expr), merged);
+        });
     auto p_body = (p_repeat | p_list).optional();
     return (equal({TOKEN_DELIMITER, "["}) > p_body < equal({TOKEN_DELIMITER, "]"}))
         .map([](std::optional<ExprPtr>&& maybe_elements) -> ExprPtr {
             if (maybe_elements) return std::move(*maybe_elements);
-            return make_expr<ArrayInitExpr>(std::vector<ExprPtr>{});
+            auto expr = make_expr<ArrayInitExpr>(std::vector<ExprPtr>{});
+            return annotate_expr<ArrayInitExpr>(std::move(expr), span::Span::invalid());
         }).label("an array expression");
 }
 
 ExprParser ExprParserBuilder::buildPathExprParser(const PathParser& pathParser) const {
     return pathParser.map([](PathPtr&& p) -> ExprPtr {
         if (p->segments.size() == 1 && p->segments[0].id && (*p->segments[0].id)->name == "_") {
-            return make_expr<UnderscoreExpr>();
+            auto expr = make_expr<UnderscoreExpr>();
+            return annotate_expr<UnderscoreExpr>(std::move(expr), p->span);
         }
-        return make_expr<PathExpr>(std::move(p));
+        auto expr = make_expr<PathExpr>(std::move(p));
+        auto span = std::get<PathExpr>(expr->value).path ? std::get<PathExpr>(expr->value).path->span : span::Span::invalid();
+        return annotate_expr<PathExpr>(std::move(expr), span);
     }).label("a path expression");
 }
 
 ExprParser ExprParserBuilder::buildStructExprParser(const PathParser& pathParser, const ExprParser& self) const {
     auto p_field_init = p_identifier.andThen(equal({TOKEN_SEPARATOR, ":"}) > self)
-        .map([](auto&& pair) { return StructExpr::FieldInit{std::move(std::get<0>(pair)), std::move(std::get<1>(pair))}; });
+        .map([](auto&& pair) {
+            StructExpr::FieldInit init{std::move(std::get<0>(pair)), std::move(std::get<1>(pair))};
+            span::Span merged = span::Span::invalid();
+            if (init.name) merged = span::Span::merge(merged, init.name->span);
+            if (init.value) merged = span::Span::merge(merged, init.value->span);
+            init.span = merged;
+            return init;
+        });
     auto p_fields_block = equal({TOKEN_DELIMITER, "{"}) > p_field_init.tuple(equal({TOKEN_SEPARATOR, ","})).optional() < equal({TOKEN_DELIMITER, "}"});
     return pathParser.andThen(p_fields_block)
         .map([](auto&& pair) -> ExprPtr {
@@ -177,7 +222,13 @@ ExprParser ExprParserBuilder::buildStructExprParser(const PathParser& pathParser
             auto maybe_fields = std::move(std::get<1>(pair));
             std::vector<StructExpr::FieldInit> fields;
             if (maybe_fields) fields = std::move(*maybe_fields);
-            return make_expr<StructExpr>(std::move(path), std::move(fields));
+            auto expr = make_expr<StructExpr>(std::move(path), std::move(fields));
+            auto &node = std::get<StructExpr>(expr->value);
+            std::vector<span::Span> spans;
+            if (node.path) spans.push_back(node.path->span);
+            for (const auto &f : node.fields) spans.push_back(f.span);
+            auto merged = merge_span_list(spans);
+            return annotate_expr<StructExpr>(std::move(expr), merged);
         }).label("a struct expression");
 }
 
@@ -206,7 +257,15 @@ ExprParser ExprParserBuilder::buildBlockParser(const StmtParser& stmtParser, con
                 }
             }
 
-            return make_expr<BlockExpr>(std::move(statements), std::move(final_expr));
+            auto expr = make_expr<BlockExpr>(std::move(statements), std::move(final_expr));
+            auto &node = std::get<BlockExpr>(expr->value);
+            std::vector<span::Span> spans;
+            for (const auto &stmt : node.statements) {
+                if (stmt) spans.push_back(stmt->span);
+            }
+            if (node.final_expr && *node.final_expr) spans.push_back((*node.final_expr)->span);
+            auto merged = merge_span_list(spans);
+            return annotate_expr<BlockExpr>(std::move(expr), merged);
         }).label("a block expression");
 }
 

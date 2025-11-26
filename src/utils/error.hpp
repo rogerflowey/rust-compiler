@@ -1,8 +1,12 @@
 #pragma once
 
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <sstream>
+#include <vector>
+
+#include "../span/span.hpp"
 
 class LexerError : public std::runtime_error {
 public:
@@ -11,7 +15,19 @@ public:
 
 class SemanticError : public std::runtime_error {
 public:
-    explicit SemanticError(const std::string& message) : std::runtime_error(message) {}
+    explicit SemanticError(const std::string& message, span::Span span = span::Span::invalid())
+        : std::runtime_error(message), span_(span) {}
+
+    span::Span span() const { return span_; }
+
+private:
+    span::Span span_ = span::Span::invalid();
+};
+
+struct Diagnostic {
+    std::string message;
+    span::Span span = span::Span::invalid();
+    std::vector<std::string> notes;
 };
 
 // Forward declaration

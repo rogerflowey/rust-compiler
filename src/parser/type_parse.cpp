@@ -34,20 +34,36 @@ TypeParser TypeParserBuilder::buildPrimitiveParser() const {
     return satisfy<Token>([&](const Token &t) {
         return t.type == TokenType::TOKEN_IDENTIFIER && kmap.count(t.value);
     }, "a primitive type").map([&](Token t) -> TypePtr {
-        return std::make_unique<Type>(Type{ PrimitiveType{kmap.at(t.value)} });
+        PrimitiveType prim{kmap.at(t.value)};
+        prim.span = t.span;
+        auto type = std::make_unique<Type>(Type{ prim });
+        type->span = t.span;
+        return type;
     });
 }
 
 TypeParser TypeParserBuilder::buildUnitParser() const {
-    return (equal({TOKEN_DELIMITER, "("}) > equal({TOKEN_DELIMITER, ")"}))
-        .map([](auto &&) -> TypePtr { 
-            return std::make_unique<Type>(Type{ UnitType{} }); 
+    return (equal({TOKEN_DELIMITER, "("}).andThen(equal({TOKEN_DELIMITER, ")"})))
+        .map([](auto &&pair) -> TypePtr {
+            auto left = std::get<0>(pair);
+            auto right = std::get<1>(pair);
+            UnitType unit{};
+            unit.span = merge_span_pair(left.span, right.span);
+            auto type = std::make_unique<Type>(Type{ unit });
+            type->span = unit.span;
+            return type;
         });
 }
 
 TypeParser TypeParserBuilder::buildPathTypeParser(const PathParser& pathParser) const {
     return pathParser.map([](PathPtr&& p) -> TypePtr {
-        return std::make_unique<Type>(Type{ PathType{std::move(p)} });
+        PathType path_type{std::move(p)};
+        if (path_type.path) {
+            path_type.span = path_type.path->span;
+        }
+        auto type = std::make_unique<Type>(Type{ std::move(path_type) });
+        type->span = std::get<PathType>(type->value).span;
+        return type;
     });
 }
 
@@ -55,13 +71,26 @@ TypeParser TypeParserBuilder::buildArrayParser(const TypeParser& self, const Exp
     return (equal({TOKEN_DELIMITER, "["}) > self)
         .andThen(equal({TOKEN_SEPARATOR, ";"}) > exprParser < equal({TOKEN_DELIMITER, "]"}))
         .map([](auto&& pair) -> TypePtr {
-            return std::make_unique<Type>(Type{ ArrayType{std::move(std::get<0>(pair)), std::move(std::get<1>(pair))} });
+            auto element = std::move(std::get<0>(pair));
+            auto size = std::move(std::get<1>(pair));
+            ArrayType array{std::move(element), std::move(size)};
+            span::Span aggregated = span::Span::invalid();
+            if (array.element_type) aggregated = span::Span::merge(aggregated, array.element_type->span);
+            if (array.size) aggregated = span::Span::merge(aggregated, array.size->span);
+            array.span = aggregated;
+            auto type = std::make_unique<Type>(Type{ std::move(array) });
+            type->span = aggregated;
+            return type;
         });
 }
 
 TypeParser TypeParserBuilder::buildReferenceParser(const TypeParser& self) const {
     return (equal({TOKEN_OPERATOR, "&"}) >> equal({TOKEN_KEYWORD, "mut"}).optional() >> self)
         .map([](std::tuple<Token, std::optional<Token>, TypePtr>&& res) -> TypePtr {
-            return std::make_unique<Type>(Type{ ReferenceType{std::move(std::get<2>(res)), std::get<1>(res).has_value()} });
+            ReferenceType ref{std::move(std::get<2>(res)), std::get<1>(res).has_value()};
+            ref.span = span::Span::merge(std::get<0>(res).span, ref.referenced_type ? ref.referenced_type->span : span::Span::invalid());
+            auto type = std::make_unique<Type>(Type{ std::move(ref) });
+            type->span = ref.span;
+            return type;
         });
 }
