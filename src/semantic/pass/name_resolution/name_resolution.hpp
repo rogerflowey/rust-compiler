@@ -9,6 +9,7 @@
 #include "semantic/type/impl_table.hpp"
 #include "semantic/type/type.hpp"
 #include "semantic/utils.hpp"
+#include "src/utils/error.hpp"
 #include <algorithm>
 #include <iostream>
 #include <optional>
@@ -121,6 +122,11 @@ class NameResolver : public hir::HirVisitorBase<NameResolver> {
     unresolved_statics.clear();
   }
 
+  [[noreturn]] void throw_semantic_error(const std::string &message,
+                                         span::Span span = span::Span::invalid()) const {
+    throw SemanticError(message, span);
+  }
+
 public:
   NameResolver(ImplTable &impl_table) : impl_table(impl_table){};
   using hir::HirVisitorBase<NameResolver>::visit;
@@ -146,7 +152,8 @@ public:
         },
         item.value);
     if (!scopes.top().define(name, symbol_def)) {
-      throw std::runtime_error("Duplicate definition of " + name.name);
+      throw_semantic_error("Duplicate definition of " + name.name,
+                           name.span);
     }
   }
 
@@ -194,13 +201,14 @@ public:
     // add the Self declaration
     auto self_type_def = scopes.top().lookup_type(ast::Identifier{"Self"});
     if (!self_type_def) {
-      throw std::runtime_error("Method scope missing Self type");
+      throw_semantic_error("Method scope missing Self type", method.span);
     }
     
     // Self is stored as a TypeDef variant, extract the struct pointer from it
     auto *self_struct = std::get_if<hir::StructDef *>(&self_type_def.value());
     if (!self_struct || !*self_struct) {
-      throw std::runtime_error("Self does not resolve to a struct in method");
+      throw_semantic_error("Self does not resolve to a struct in method",
+                           method.span);
     }
 
     // create Local for self
@@ -210,6 +218,7 @@ public:
         get_typeID(Type{StructType{.symbol = *self_struct}}),
         nullptr
     });
+    self_local->span = method.self_param.span.is_valid() ? method.self_param.span : method.span;
     
     auto *self_ptr = self_local.get();
     method.self_local = std::move(self_local);
@@ -249,7 +258,7 @@ public:
       std::cerr << "DEBUG: Resolving impl type: " << ident->name << std::endl;
       auto type_def = scopes.top().lookup_type(*ident);
       if (!type_def) {
-        throw std::runtime_error("Undefined type " + ident->name);
+        throw_semantic_error("Undefined type " + ident->name, ident->span);
       }
       // Record the resolved nominal type so downstream passes see the canonical
       // handle.
@@ -274,10 +283,12 @@ public:
       if (auto *trait_ident = std::get_if<ast::Identifier>(&trait_variant)) {
         auto type_def = scopes.top().lookup_type(*trait_ident);
         if (!type_def) {
-          throw std::runtime_error("Undefined trait " + trait_ident->name);
+          throw_semantic_error("Undefined trait " + trait_ident->name,
+                               trait_ident->span);
         }
         if (!std::holds_alternative<hir::Trait *>(*type_def)) {
-          throw std::runtime_error(trait_ident->name + " is not a trait");
+          throw_semantic_error(trait_ident->name + " is not a trait",
+                               trait_ident->span);
         }
         trait_variant = std::get<hir::Trait *>(*type_def);
       }
@@ -302,6 +313,7 @@ public:
       }
       auto local = std::make_unique<hir::Local>(
           hir::Local(unresolved->name, unresolved->is_mutable, std::nullopt, binding.ast_node));
+      local->span = binding.span.is_valid() ? binding.span : binding.ast_node ? binding.ast_node->span : span::Span::invalid();
       local_ptr = local.get();
       locals->push_back(std::move(local));
       binding.local = local_ptr;
@@ -361,7 +373,8 @@ public:
     if (type_name_ptr) {
       auto type_def = scopes.top().lookup_type(*type_name_ptr);
       if (!type_def) {
-        throw std::runtime_error("Undefined type " + type_name_ptr->name);
+        throw_semantic_error("Undefined type " + type_name_ptr->name,
+                             type_name_ptr->span);
       }
       // Replace the syntactic path with the resolved nominal type handle.
       ts.type = *type_def;
@@ -372,7 +385,8 @@ public:
   void visit(hir::UnresolvedIdentifier &ident, hir::Expr &container) {
     auto def = scopes.top().lookup_value(ident.name);
     if (!def) {
-      throw std::runtime_error("Undefined identifier " + ident.name.name);
+      throw_semantic_error("Undefined identifier " + ident.name.name,
+                           ident.name.span);
     }
     auto resolved = std::visit(
         Overloaded{[&](hir::Local *local) -> hir::ExprVariant {
@@ -389,9 +403,10 @@ public:
                    },
                    [&](hir::Method *method) -> hir::ExprVariant {
                      (void)method; // Suppress unused parameter warning
-                     throw std::runtime_error(
+                     throw_semantic_error(
                          "Direct method use is not supported. Methods must be "
-                         "called through method call syntax.");
+                         "called through method call syntax.",
+                         ident.span);
                    }},
         *def);
     container.value = std::move(resolved);
@@ -406,11 +421,11 @@ public:
 
     auto def = scopes.top().lookup_type(name);
     if (!def) {
-      throw std::runtime_error("Undefined struct " + name.name);
+      throw_semantic_error("Undefined struct " + name.name, name.span);
     }
     auto *struct_def = std::get_if<hir::StructDef *>(&def.value());
     if (!struct_def) {
-      throw std::runtime_error(name.name + " is not a struct");
+      throw_semantic_error(name.name + " is not a struct", name.span);
     }
     // Swap the identifier for the resolved struct definition pointer.
     sl.struct_path = *struct_def;
@@ -419,8 +434,8 @@ public:
     auto syntactic_fields =
         std::get_if<hir::StructLiteral::SyntacticFields>(&sl.fields);
     if (!syntactic_fields) {
-      throw std::runtime_error(
-          "Struct literal fields are not in the expected format");
+      throw_semantic_error(
+          "Struct literal fields are not in the expected format", sl.span);
     }
     std::vector<std::unique_ptr<hir::Expr>> fields;
     fields.resize((*struct_def)->fields.size());
@@ -429,13 +444,15 @@ public:
           (*struct_def)->fields.begin(), (*struct_def)->fields.end(),
           [&](const semantic::Field &f) { return f.name == init.first.name; });
       if (it == (*struct_def)->fields.end()) {
-        throw std::runtime_error("Field " + init.first.name +
-                                 " not found in struct " + name.name);
+        throw_semantic_error("Field " + init.first.name +
+                                 " not found in struct " + name.name,
+                             init.first.span);
       }
       size_t index = std::distance((*struct_def)->fields.begin(), it);
       if (fields[index]) {
-        throw std::runtime_error("Duplicate initialization of field " +
-                                 init.first.name + " in struct " + name.name);
+        throw_semantic_error("Duplicate initialization of field " +
+                                 init.first.name + " in struct " + name.name,
+                             init.first.span);
       }
       fields[index] = std::move(init.second);
     }
@@ -449,7 +466,7 @@ public:
     if (auto *name = std::get_if<ast::Identifier>(&def_type.def)) {
       auto type_def = scopes.top().lookup_type(*name);
       if (!type_def) {
-        throw std::runtime_error("Undefined type " + name->name);
+        throw_semantic_error("Undefined type " + name->name, name->span);
       }
       // Attach the resolved type handle directly to the HIR node.
       def_type.def = *type_def;

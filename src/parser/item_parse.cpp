@@ -75,9 +75,16 @@ ItemParser ItemParserBuilder::buildFunctionParser(
   auto selfParam = p_amp.andThen(p_mut)
                        .andThen(p_self_tok)
                        .map([](auto &&t) -> FunctionItem::SelfParamPtr {
-                         auto &[amp, mut, _] = t;
+                         auto &[amp, mut, self_tok] = t;
+                         span::Span merged_span = self_tok.span;
+                         if (amp) {
+                           merged_span = merge_span_pair(merged_span, amp->span);
+                         }
+                         if (mut) {
+                           merged_span = merge_span_pair(merged_span, mut->span);
+                         }
                          return std::make_unique<FunctionItem::SelfParam>(
-                             amp.has_value(), mut.has_value());
+                             amp.has_value(), mut.has_value(), merged_span);
                        });
 
   auto funcParam =
