@@ -5,12 +5,23 @@
 ## Essential Commands
 
 - **Build**
+
 ```bash
 cd /home/rogerw/project/compiler
 cmake --preset ninja-debug
 cmake --build build/ninja-debug
 ```
+
+Note: If you don't have access to google test, use the flag to disable tests:
+
+```bash
+cmake --preset ninja-debug -- -DBUILD_TESTING=OFF
+```
+
+**always** ensure build success before finishing your work.
+
 - **Test**
+
 ```bash
 #first build
 cd /home/rogerw/project/compiler
@@ -34,11 +45,13 @@ The RCompiler documentation system is organized into two complementary tiers:
 ## Finding Information
 
 ### For High-Level Understanding
+
 - Start with [`docs/README.md`](docs/README.md) for project overview
 - Use [`docs/component-overviews/README.md`](docs/component-overviews/README.md) for component architecture
 - Each major component has an overview document in `docs/component-overviews/`
 
 ### For Implementation Details
+
 - Navigate to the relevant source directory (`src/ast/`, `src/lexer/`, etc.)
 - Each major component has its own `README.md` with implementation details
 - Subcomponents have their own documentation (e.g., `src/ast/visitor/`)
