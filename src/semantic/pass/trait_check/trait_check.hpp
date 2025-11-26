@@ -7,6 +7,7 @@
 #include "semantic/query/semantic_context.hpp"
 #include "semantic/utils.hpp"
 #include "ast/common.hpp"
+#include "src/utils/error.hpp"
 
 #include <unordered_map>
 #include <variant>
@@ -401,13 +402,15 @@ TraitValidator::find_impl_item(hir::Impl& impl, const ast::Identifier& name) {
 }
 
 inline void TraitValidator::report_missing_item(const ast::Identifier& trait_name, const ast::Identifier& item_name) {
-    throw std::runtime_error("Trait '" + trait_name.name + "' requires item '" + item_name.name + "' but it's not implemented");
+    const span::Span span = item_name.span.is_valid() ? item_name.span : trait_name.span;
+    throw SemanticError("Trait '" + trait_name.name + "' requires item '" + item_name.name + "' but it's not implemented", span);
 }
 
-inline void TraitValidator::report_signature_mismatch(const ast::Identifier& trait_name, 
+inline void TraitValidator::report_signature_mismatch(const ast::Identifier& trait_name,
                                                      const ast::Identifier& item_name,
                                                      const std::string& details) {
-    throw std::runtime_error("Item '" + item_name.name + "' in trait '" + trait_name.name + "' has signature mismatch: " + details);
+    const span::Span span = item_name.span.is_valid() ? item_name.span : trait_name.span;
+    throw SemanticError("Item '" + item_name.name + "' in trait '" + trait_name.name + "' has signature mismatch: " + details, span);
 }
 
 

@@ -1,5 +1,6 @@
 #include "control_flow_linking.hpp"
 #include "semantic/utils.hpp"
+#include "src/utils/error.hpp"
 
 void ControlFlowLinker::link_control_flow(hir::Program& program) {
     visit_program(program);
@@ -78,7 +79,7 @@ void ControlFlowLinker::visit(hir::Return& return_stmt) {
     // Find the current function target
     auto* target = context_.find_current_function();
     if (!target) {
-        throw std::logic_error("Return statement outside of function");
+        throw SemanticError("Return statement outside of function", return_stmt.span);
     }
     
     // Set the target
@@ -92,7 +93,7 @@ void ControlFlowLinker::visit(hir::Break& break_stmt) {
     // Find the nearest loop target
     auto* target = context_.find_nearest_loop();
     if (!target) {
-        throw std::logic_error("Break statement outside of loop");
+        throw SemanticError("Break statement outside of loop", break_stmt.span);
     }
     
     // Set the target
@@ -106,7 +107,7 @@ void ControlFlowLinker::visit(hir::Continue& continue_stmt) {
     // Find the nearest loop target
     auto* target = context_.find_nearest_loop();
     if (!target) {
-        throw std::logic_error("Continue statement outside of loop");
+        throw SemanticError("Continue statement outside of loop", continue_stmt.span);
     }
     
     // Set the target

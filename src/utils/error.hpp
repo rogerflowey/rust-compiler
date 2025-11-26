@@ -10,7 +10,13 @@
 
 class LexerError : public std::runtime_error {
 public:
-    explicit LexerError(const std::string& message) : std::runtime_error(message) {}
+    explicit LexerError(const std::string& message, span::Span span = span::Span::invalid())
+        : std::runtime_error(message), span_(span) {}
+
+    span::Span span() const { return span_; }
+
+private:
+    span::Span span_ = span::Span::invalid();
 };
 
 class SemanticError : public std::runtime_error {

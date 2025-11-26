@@ -33,29 +33,34 @@ void print_error_context(const parsec::ParseError& error,
                          const span::SourceManager& sources) {
     std::cerr << "--> Parsing failed" << std::endl;
 
-    if (error.position >= tokens.size()) {
-        std::cerr << "Unexpected end of input." << std::endl;
-    } else {
-        const Token& error_token = tokens[error.position];
-        if (error_token.span.is_valid()) {
-            auto loc = sources.to_line_col(error_token.span.file, error_token.span.start);
-            std::cerr << "Unexpected token: '" << error_token.value << "' at "
-                      << sources.get_filename(error_token.span.file) << ":" << loc.line << ":" << loc.column << std::endl;
-
-            auto line_view = sources.line_view(error_token.span.file, loc.line);
-            std::cerr << std::endl;
-            std::cerr << " " << loc.line << " | " << line_view << std::endl;
-            std::cerr << " " << std::string(std::to_string(loc.line).length(), ' ') << " | ";
-            std::cerr << std::string(loc.column > 0 ? loc.column - 1 : 0, ' ');
-            size_t caret_len = error_token.span.length();
-            std::cerr << "^";
-            if (caret_len > 1) {
-                std::cerr << std::string(caret_len - 1, '^');
-            }
-            std::cerr << std::endl;
-        } else {
-            std::cerr << "Unexpected token: '" << error_token.value << "'" << std::endl;
+    span::Span error_span = error.span;
+    const Token* error_token = nullptr;
+    if (error.position < tokens.size()) {
+        error_token = &tokens[error.position];
+        if (!error_span.is_valid()) {
+            error_span = error_token->span;
         }
+    }
+
+    if (!error_span.is_valid()) {
+        if (error_token) {
+            std::cerr << "Unexpected token: '" << error_token->value << "'" << std::endl;
+        } else {
+            std::cerr << "Unexpected end of input." << std::endl;
+        }
+    } else {
+        auto loc = sources.to_line_col(error_span.file, error_span.start);
+        std::string token_value = error_token ? error_token->value : std::string("<input>");
+        std::cerr << "Unexpected token: '" << token_value << "' at "
+                  << sources.get_filename(error_span.file) << ":" << loc.line << ":" << loc.column << std::endl;
+
+        auto line_view = sources.line_view(error_span.file, loc.line);
+        std::cerr << std::endl;
+        std::cerr << " " << loc.line << " | " << line_view << std::endl;
+        std::cerr << " " << std::string(std::to_string(loc.line).length(), ' ') << " | ";
+        std::cerr << std::string(loc.column > 0 ? loc.column - 1 : 0, ' ');
+        size_t caret_len = std::max<size_t>(1, error_span.length());
+        std::cerr << std::string(caret_len, '^') << std::endl;
     }
 
     std::cerr << std::endl << "Expected one of: ";
@@ -63,6 +68,24 @@ void print_error_context(const parsec::ParseError& error,
         std::cerr << "'" << error.expected[i] << "'" << (i == error.expected.size() - 1 ? "" : ", ");
     }
     std::cerr << std::endl;
+}
+
+void print_lexer_error(const LexerError& error, const span::SourceManager& sources) {
+    std::cerr << "Error: " << error.what() << std::endl;
+    auto error_span = error.span();
+    if (!error_span.is_valid()) {
+        return;
+    }
+
+    auto loc = sources.to_line_col(error_span.file, error_span.start);
+    auto line_view = sources.line_view(error_span.file, loc.line);
+    std::cerr << "--> " << sources.get_filename(error_span.file) << ":" << loc.line << ":" << loc.column << std::endl;
+    std::cerr << " " << loc.line << " | " << line_view << std::endl;
+    std::cerr << " " << std::string(std::to_string(loc.line).length(), ' ') << " | ";
+    size_t caret_start = loc.column > 0 ? loc.column - 1 : 0;
+    std::cerr << std::string(caret_start, ' ');
+    size_t caret_len = std::max<size_t>(1, error_span.length());
+    std::cerr << std::string(caret_len, '^') << std::endl;
 }
 
 void print_semantic_error(const SemanticError& error,
@@ -211,6 +234,9 @@ int main(int argc, char* argv[]) {
         std::cout << "Success: Semantic analysis completed successfully" << std::endl;
         return 0;
 
+    } catch (const LexerError& e) {
+        print_lexer_error(e, sources);
+        return 1;
     } catch (const SemanticError& e) {
         print_semantic_error(e, sources);
         return 1;

@@ -142,7 +142,8 @@ TypeId SemanticContext::resolve_type_annotation(hir::TypeAnnotation& annotation)
 
     auto* node_ptr = std::get_if<std::unique_ptr<hir::TypeNode>>(&annotation);
     if (!node_ptr || !*node_ptr) {
-        throw SemanticError("Type annotation is null");
+        span::Span annotation_span = node_ptr && *node_ptr ? (*node_ptr)->span : span::Span::invalid();
+        throw SemanticError("Type annotation is null", annotation_span);
     }
 
     TypeId resolved = resolve_type_node(**node_ptr);
