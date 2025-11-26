@@ -12,7 +12,8 @@
 #include "src/ast/type.hpp"
 #include "src/semantic/hir/hir.hpp"
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
-#include "src/semantic/pass/type&const/visitor.hpp"
+#include "src/semantic/pass/semantic_check/semantic_check.hpp"
+#include "src/semantic/query/semantic_context.hpp"
 #include "src/semantic/type/impl_table.hpp"
 
 namespace {
@@ -21,7 +22,7 @@ hir::TypeAnnotation make_primitive_type(ast::PrimitiveType::Kind kind) {
     auto node = std::make_unique<hir::TypeNode>();
     node->value = std::make_unique<hir::PrimitiveType>(hir::PrimitiveType{
         .kind = kind,
-        .ast_node = nullptr
+        
     });
     return hir::TypeAnnotation(std::move(node));
 }
@@ -30,7 +31,7 @@ hir::TypeAnnotation make_array_type(hir::TypeAnnotation element_type, std::uniqu
     auto array_type = std::make_unique<hir::ArrayType>(hir::ArrayType{
         .element_type = std::move(element_type),
         .size = std::move(size_expr),
-        .ast_node = nullptr
+        
     });
     auto node = std::make_unique<hir::TypeNode>();
     node->value = std::move(array_type);
@@ -40,14 +41,14 @@ hir::TypeAnnotation make_array_type(hir::TypeAnnotation element_type, std::uniqu
 std::unique_ptr<hir::Expr> make_unresolved_identifier_expr(const std::string &name) {
     return std::make_unique<hir::Expr>(hir::UnresolvedIdentifier{
         .name = ast::Identifier{name},
-        .ast_node = nullptr
+        
     });
 }
 
 std::unique_ptr<hir::Expr> make_integer_literal(uint64_t value, ast::IntegerLiteralExpr::Type suffix = ast::IntegerLiteralExpr::NOT_SPECIFIED) {
     return std::make_unique<hir::Expr>(hir::Literal{
         hir::Literal::Integer{ .value = value, .suffix_type = suffix },
-        static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+        span::Span::invalid()
     });
 }
 
@@ -57,8 +58,7 @@ std::unique_ptr<hir::Pattern> make_binding_pattern(const std::string &name) {
             .is_mutable = false,
             .is_ref = false,
             .name = ast::Identifier{name}
-        },
-        nullptr
+        }
     });
 }
 
@@ -66,7 +66,7 @@ hir::TypeAnnotation make_reference_type(hir::TypeAnnotation referenced_type, boo
     auto ref_type = std::make_unique<hir::ReferenceType>(hir::ReferenceType{
         .referenced_type = std::move(referenced_type),
         .is_mutable = is_mutable,
-        .ast_node = nullptr
+        
     });
     auto node = std::make_unique<hir::TypeNode>();
     node->value = std::move(ref_type);
@@ -81,7 +81,7 @@ struct AstArena {
 
 } // namespace
 
-TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
+TEST(SemanticQueryTest, ResolvesAnnotationsAndConstants) {
     AstArena arena;
     auto program = std::make_unique<hir::Program>();
 
@@ -92,7 +92,7 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
     arena.structs.push_back(std::move(struct_ast));
 
     hir::StructDef struct_def;
-    struct_def.ast_node = struct_ast_ptr;
+    struct_def.name = *struct_ast_ptr->name;
     struct_def.fields.push_back(semantic::Field{ .name = ast::Identifier{"x"}, .type = std::nullopt });
     struct_def.field_type_annotations.emplace_back(make_primitive_type(ast::PrimitiveType::I32));
     program->items.push_back(std::make_unique<hir::Item>(std::move(struct_def)));
@@ -107,7 +107,7 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
     hir::ConstDef const_def;
     const_def.type = make_primitive_type(ast::PrimitiveType::USIZE);
     const_def.expr = make_integer_literal(4, ast::IntegerLiteralExpr::USIZE);
-    const_def.ast_node = const_ast_ptr;
+    const_def.name = *const_ast_ptr->name;
     program->items.push_back(std::make_unique<hir::Item>(std::move(const_def)));
     auto *const_def_ptr = &std::get<hir::ConstDef>(program->items.back()->value);
 
@@ -134,14 +134,14 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
     auto let_initializer = std::make_unique<hir::Expr>(hir::ArrayRepeat{
         .value = make_integer_literal(0),
         .count = make_unresolved_identifier_expr("LEN"),
-        .ast_node = nullptr
+        
     });
 
     hir::LetStmt let_stmt;
     let_stmt.pattern = std::move(let_pattern);
     let_stmt.type_annotation = std::move(array_type);
     let_stmt.initializer = std::move(let_initializer);
-    let_stmt.ast_node = nullptr;
+    
 
     auto body = std::make_unique<hir::Block>();
     body->stmts.push_back(std::make_unique<hir::Stmt>(std::move(let_stmt)));
@@ -149,9 +149,10 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
     hir::Function function;
     function.params = std::move(params);
     function.param_type_annotations = std::move(param_type_annotations);
-    function.return_type = std::nullopt;
+    function.return_type = hir::TypeAnnotation(
+        semantic::get_typeID(semantic::Type{semantic::UnitType{}}));
     function.body = std::move(body);
-    function.ast_node = function_ast_ptr;
+    function.name = *function_ast_ptr->name;
 
     program->items.push_back(std::make_unique<hir::Item>(std::move(function)));
     auto *function_ptr = &std::get<hir::Function>(program->items.back()->value);
@@ -160,8 +161,9 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
     semantic::NameResolver name_resolver{impl_table};
     name_resolver.visit_program(*program);
 
-    semantic::TypeConstResolver type_const_resolver;
-    type_const_resolver.visit_program(*program);
+    semantic::SemanticContext semantic_ctx{impl_table};
+    semantic::SemanticCheckVisitor semantic_checker{semantic_ctx};
+    semantic_checker.check_program(*program);
 
     // Struct field types are resolved
     ASSERT_EQ(struct_def_ptr->fields.size(), 1u);
@@ -210,7 +212,7 @@ TEST(TypeConstResolverTest, ResolvesAnnotationsAndConstants) {
     EXPECT_EQ(std::get<size_t>(array_repeat->count), 4u);
 }
 
-TEST(TypeConstResolverTest, ResolvesReferencePatterns) {
+TEST(SemanticQueryTest, ResolvesReferencePatterns) {
     AstArena arena;
     auto program = std::make_unique<hir::Program>();
 
@@ -247,7 +249,7 @@ TEST(TypeConstResolverTest, ResolvesReferencePatterns) {
     ref_let_stmt.pattern = std::move(ref_binding_pattern);
     ref_let_stmt.type_annotation = std::move(ref_binding_type);
     ref_let_stmt.initializer = std::move(ref_binding_initializer);
-    ref_let_stmt.ast_node = nullptr;
+    
     body->stmts.push_back(std::make_unique<hir::Stmt>(std::move(ref_let_stmt)));
 
     // let mut_ref_binding: &mut i32 = mut_ref_param;
@@ -259,15 +261,16 @@ TEST(TypeConstResolverTest, ResolvesReferencePatterns) {
     mut_ref_let_stmt.pattern = std::move(mut_ref_binding_pattern);
     mut_ref_let_stmt.type_annotation = std::move(mut_ref_binding_type);
     mut_ref_let_stmt.initializer = std::move(mut_ref_binding_initializer);
-    mut_ref_let_stmt.ast_node = nullptr;
+    
     body->stmts.push_back(std::make_unique<hir::Stmt>(std::move(mut_ref_let_stmt)));
 
     hir::Function function;
     function.params = std::move(params);
     function.param_type_annotations = std::move(param_type_annotations);
-    function.return_type = std::nullopt;
+    function.return_type = hir::TypeAnnotation(
+        semantic::get_typeID(semantic::Type{semantic::UnitType{}}));
     function.body = std::move(body);
-    function.ast_node = function_ast_ptr;
+    function.name = *function_ast_ptr->name;
 
     program->items.push_back(std::make_unique<hir::Item>(std::move(function)));
     auto *function_ptr = &std::get<hir::Function>(program->items.back()->value);
@@ -276,8 +279,9 @@ TEST(TypeConstResolverTest, ResolvesReferencePatterns) {
     semantic::NameResolver name_resolver{impl_table};
     name_resolver.visit_program(*program);
 
-    semantic::TypeConstResolver type_const_resolver;
-    type_const_resolver.visit_program(*program);
+    semantic::SemanticContext semantic_ctx{impl_table};
+    semantic::SemanticCheckVisitor semantic_checker{semantic_ctx};
+    semantic_checker.check_program(*program);
 
     // Check that parameter patterns have resolved types
     ASSERT_EQ(function_ptr->params.size(), 2u);

@@ -8,6 +8,7 @@
 #include <tuple> // For Token::operator<
 
 #include "../utils/error.hpp"
+#include "../span/span.hpp"
 #include "stream.hpp"
 
 enum TokenType {
@@ -27,6 +28,7 @@ enum TokenType {
 struct Token {
   TokenType type;
   std::string value;
+  span::Span span{};
 
   bool operator==(const Token &other) const {
     return type == other.type && value == other.value;
@@ -36,13 +38,14 @@ struct Token {
   }
 };
 
-const Token T_EOF = {TOKEN_EOF, "EOF"};
+const Token T_EOF = {TOKEN_EOF, "EOF", span::Span::invalid()};
 
 
 class Lexer {
   std::vector<Token> tokens;
-  std::vector<Position> token_positions; // MODIFIED: Added parallel vector for positions
+  std::vector<span::Span> token_spans;
   PositionedStream input;
+  span::FileId file_id = span::kInvalidFileId;
 
   static const std::unordered_set<std::string> keywords;
   static const std::unordered_set<char> delimiters;
@@ -50,15 +53,16 @@ class Lexer {
   static const std::unordered_set<std::string> operators;
 
 public:
-  Lexer(std::istream &inputStream) : input(inputStream) {}
+  Lexer(std::istream &inputStream, span::FileId file = span::kInvalidFileId)
+      : input(inputStream), file_id(file) {}
 
   const std::vector<Token> &tokenize();
   const std::vector<Token> &getTokens() const { return tokens; }
-  const std::vector<Position> &getTokenPositions() const { return token_positions; } // MODIFIED: Added getter for positions
+  const std::vector<span::Span> &getTokenSpans() const { return token_spans; }
 
   void clearTokens() {
     tokens.clear();
-    token_positions.clear(); // MODIFIED: Also clear positions
+    token_spans.clear();
   }
 
 private:
@@ -93,8 +97,14 @@ private:
 
   // Helpers (declarations are unchanged)
   char parseEscapeSequence();
-  char parseHexEscape();
+  char parseHexEscape(const Position& start);
   Token parseRawStringBody();
+
+  span::Span make_span(const Position& start, const Position& end) const {
+    return {file_id, static_cast<uint32_t>(start.offset), static_cast<uint32_t>(end.offset)};
+  }
+
+  span::Span point_span(const Position& pos) const { return make_span(pos, pos); }
 };
 
 // MODIFIED: Now also tracks position for the EOF token
@@ -104,7 +114,7 @@ inline const std::vector<Token> &Lexer::tokenize() {
     parseNext();
   }
   tokens.push_back(T_EOF);
-  token_positions.push_back(input.getPosition()); // Add final position for EOF
+  token_spans.push_back({file_id, static_cast<uint32_t>(input.getPosition().offset), static_cast<uint32_t>(input.getPosition().offset)});
   return tokens;
 }
 
@@ -141,13 +151,20 @@ inline void Lexer::parseNext() {
   } else if (matchOperator()) {
     token = parseOperator();
   } else {
-    throw LexerError("Unrecognized character: '" + std::string(1, input.get()) +
-                     "' at " + start_pos.toString());
+    char offending = input.peek();
+    Position end_pos = start_pos;
+    end_pos.offset += 1;
+    throw LexerError(
+        "Unrecognized character: '" + std::string(1, offending) + "' at " +
+            start_pos.toString(),
+        make_span(start_pos, end_pos));
   }
 
   // Push the token and its corresponding position into their vectors
+  Position end_pos = input.getPosition();
+  token.span = {file_id, static_cast<uint32_t>(start_pos.offset), static_cast<uint32_t>(end_pos.offset)};
   tokens.push_back(token);
-  token_positions.push_back(start_pos);
+  token_spans.push_back(token.span);
 }
 
 // --- ALL INDIVIDUAL PARSERS AND HELPERS BELOW ARE UNCHANGED ---
@@ -187,8 +204,11 @@ inline bool Lexer::matchChar() const { return input.peek() == '\''; }
 
 // --- Centralized Helper Implementations ---
 inline char Lexer::parseEscapeSequence() {
-  if (input.eof()) throw LexerError("Unterminated escape sequence.");
-  switch (char escaped_char = input.get()) {
+  Position start = input.getPosition();
+  if (input.eof()) throw LexerError("Unterminated escape sequence.", point_span(start));
+  char escaped_char = input.get();
+  Position end = input.getPosition();
+  switch (escaped_char) {
   case 'n': return '\n';
   case 'r': return '\r';
   case 't': return '\t';
@@ -196,17 +216,26 @@ inline char Lexer::parseEscapeSequence() {
   case '\\': return '\\';
   case '"': return '"';
   case '\'': return '\'';
-  case 'x': return parseHexEscape();
-  default: throw LexerError("Unknown escape sequence: \\" + std::string(1, escaped_char));
+  case 'x': return parseHexEscape(start);
+  default:
+    throw LexerError("Unknown escape sequence: \\" + std::string(1, escaped_char),
+                     make_span(start, end));
   }
 }
-inline char Lexer::parseHexEscape() {
+inline char Lexer::parseHexEscape(const Position& start) {
   std::string hex_code = input.peek_str(2);
-  if (hex_code.length() < 2) throw LexerError("Incomplete hex escape sequence: '\\x'.");
-  if (!std::isxdigit(hex_code[0]) || !std::isxdigit(hex_code[1])) throw LexerError("Invalid hex escape sequence: '\\x" + hex_code + "'.");
+  Position end = start;
+  end.offset += hex_code.length();
+  if (hex_code.length() < 2)
+    throw LexerError("Incomplete hex escape sequence: '\\x'.", make_span(start, end));
+  if (!std::isxdigit(hex_code[0]) || !std::isxdigit(hex_code[1]))
+    throw LexerError("Invalid hex escape sequence: '\\x" + hex_code + "'.",
+                     make_span(start, end));
   input.advance(2);
+  end = input.getPosition();
   int val = std::stoi(hex_code, nullptr, 16);
-  if (val > 0x7F) throw LexerError("Hex escape out of 7-bit ASCII range.");
+  if (val > 0x7F)
+    throw LexerError("Hex escape out of 7-bit ASCII range.", make_span(start, end));
   return static_cast<char>(val);
 }
 inline void Lexer::removeWhitespace() {
@@ -217,6 +246,7 @@ inline void Lexer::removeWhitespace() {
 
 // --- Individual Token Parser Implementations (Unchanged) ---
 inline Token Lexer::parseString() {
+  Position start = input.getPosition();
   if (input.peek() == 'b') input.advance(1);
   input.advance(1);
   std::string value;
@@ -228,7 +258,7 @@ inline Token Lexer::parseString() {
       value += input.get();
     }
   }
-  if (input.eof()) throw LexerError("Unterminated string literal.");
+  if (input.eof()) throw LexerError("Unterminated string literal.", make_span(start, input.getPosition()));
   input.advance(1);
   return {TOKEN_STRING, value};
 }
@@ -245,15 +275,17 @@ inline Token Lexer::parseCrawString() {
   return token;
 }
 inline Token Lexer::parseRawStringBody() {
+  Position start = input.getPosition();
   size_t hash_count = 0;
   while (input.peek() == '#') {
     hash_count++;
     input.advance(1);
   }
-  if (input.get() != '"') throw LexerError("Expected '\"' to start raw string literal.");
+  if (input.get() != '"')
+    throw LexerError("Expected '\"' to start raw string literal.", make_span(start, input.getPosition()));
   std::string value;
   while (true) {
-    if (input.eof()) throw LexerError("Unterminated raw string literal.");
+    if (input.eof()) throw LexerError("Unterminated raw string literal.", make_span(start, input.getPosition()));
     if (input.peek() == '"') {
       bool closing = true;
       for (size_t i = 0; i < hash_count; ++i) {
@@ -277,17 +309,20 @@ inline Token Lexer::parseRawString() {
   return parseRawStringBody();
 }
 inline Token Lexer::parseChar() {
+  Position start = input.getPosition();
   input.advance(1);
   std::string value;
-  if (input.eof()) throw LexerError("Unterminated character literal.");
+  if (input.eof()) throw LexerError("Unterminated character literal.", make_span(start, input.getPosition()));
   if (input.peek() == '\\') {
     input.advance(1);
     value += parseEscapeSequence();
   } else {
     value += input.get();
   }
-  if (input.eof() || input.get() != '\'') throw LexerError("Character literal must be closed by a single quote.");
-  if (value.length() != 1) throw LexerError("Character literal must contain exactly one character.");
+  if (input.eof() || input.get() != '\'')
+    throw LexerError("Character literal must be closed by a single quote.", make_span(start, input.getPosition()));
+  if (value.length() != 1)
+    throw LexerError("Character literal must contain exactly one character.", make_span(start, input.getPosition()));
   return {TOKEN_CHAR, value};
 }
 inline Token Lexer::parseIdentifierOrKeyword() {
@@ -370,7 +405,8 @@ inline Token Lexer::parseSeparator() {
     input.advance(1);
     return {TOKEN_SEPARATOR, sep1};
   }
-  throw LexerError("Internal error: parseSeparator called on non-separator.");
+  throw LexerError("Internal error: parseSeparator called on non-separator.",
+                   point_span(input.getPosition()));
 }
 inline Token Lexer::parseOperator() {
   if (!input.eof(2)) {
@@ -392,16 +428,18 @@ inline Token Lexer::parseOperator() {
     input.advance(1);
     return {TOKEN_OPERATOR, op1};
   }
-  throw LexerError("Internal error: parseOperator called on non-operator.");
+  throw LexerError("Internal error: parseOperator called on non-operator.",
+                   point_span(input.getPosition()));
 }
 inline void Lexer::parseComment() {
+  Position start = input.getPosition();
   if (input.match("//")) {
     while (!input.eof() && input.get() != '\n');
   } else if (input.match("/*")) {
     input.advance(2);
     int nesting = 1;
     while (nesting > 0) {
-      if (input.eof()) throw LexerError("Unterminated block comment.");
+      if (input.eof()) throw LexerError("Unterminated block comment.", make_span(start, input.getPosition()));
       if (input.match("/*")) {
         nesting++;
         input.advance(2);

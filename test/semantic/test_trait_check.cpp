@@ -37,7 +37,7 @@ protected:
         // Create a mock AST node for the trait and keep it alive
         auto ast_node = std::make_unique<ast::TraitItem>();
         ast_node->name = std::make_unique<ast::Identifier>(name);
-        trait->ast_node = ast_node.get();
+        trait->name = *ast_node->name;
         ast_traits.push_back(std::move(ast_node));
         
         return trait;
@@ -54,7 +54,7 @@ protected:
         // Create a mock AST node for the function and keep it alive
         auto ast_node = std::make_unique<ast::FunctionItem>();
         ast_node->name = std::make_unique<ast::Identifier>(name);
-        function->ast_node = ast_node.get();
+        function->name = *ast_node->name;
         ast_functions.push_back(std::move(ast_node));
         
         // Set up parameter type annotations
@@ -87,7 +87,7 @@ protected:
         // Create a mock AST node for the method and keep it alive
         auto ast_node = std::make_unique<ast::FunctionItem>();
         ast_node->name = std::make_unique<ast::Identifier>(name);
-        method->ast_node = ast_node.get();
+        method->name = *ast_node->name;
         ast_functions.push_back(std::move(ast_node));
         
         // Set up self parameter
@@ -121,7 +121,7 @@ protected:
         // Create a mock AST node for the constant and keep it alive
         auto ast_node = std::make_unique<ast::ConstItem>();
         ast_node->name = std::make_unique<ast::Identifier>(name);
-        constant->ast_node = ast_node.get();
+        constant->name = *ast_node->name;
         ast_consts.push_back(std::move(ast_node));
         
         // Set up type annotation

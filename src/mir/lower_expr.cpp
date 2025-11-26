@@ -83,6 +83,30 @@ Place FunctionLowerer::lower_place_impl(const hir::UnaryOp& unary, const semanti
 	return place;
 }
 
+Place FunctionLowerer::ensure_reference_operand_place(const hir::Expr& operand,
+					      const semantic::ExprInfo& operand_info,
+					      bool mutable_reference) {
+	if (!operand_info.has_type) {
+		throw std::logic_error("Reference operand missing resolved type during MIR lowering");
+	}
+	if (operand_info.is_place) {
+		if (mutable_reference && !operand_info.is_mut) {
+			throw std::logic_error("Mutable reference to immutable place encountered during MIR lowering");
+		}
+		return lower_expr_place(operand);
+	}
+
+	Operand value = lower_expr(operand);
+	LocalId temp_local = create_synthetic_local(operand_info.type, mutable_reference);
+	AssignStatement assign;
+	assign.dest = make_local_place(temp_local);
+	assign.src = value;
+	Statement stmt;
+	stmt.value = std::move(assign);
+	append_statement(std::move(stmt));
+	return make_local_place(temp_local);
+}
+
 Operand FunctionLowerer::lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info) {
 	Constant constant = lower_literal(literal, info.type);
 	return make_constant_operand(constant);
@@ -381,7 +405,9 @@ Operand FunctionLowerer::lower_expr_impl(const hir::UnaryOp& unary, const semant
 			return emit_unary_value(unary.op, *unary.rhs, info.type);
 		case hir::UnaryOp::REFERENCE:
 		case hir::UnaryOp::MUTABLE_REFERENCE: {
-			Place place = lower_expr_place(*unary.rhs);
+			semantic::ExprInfo operand_info = hir::helper::get_expr_info(*unary.rhs);
+			bool mutable_reference = (unary.op == hir::UnaryOp::MUTABLE_REFERENCE);
+			Place place = ensure_reference_operand_place(*unary.rhs, operand_info, mutable_reference);
 			TempId dest = allocate_temp(info.type);
 			RefRValue ref_rvalue{.place = std::move(place)};
 			RValue rvalue;

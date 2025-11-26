@@ -4,8 +4,10 @@
 #include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/hir/helper.hpp"
 #include "semantic/type/type.hpp"
+#include "semantic/query/semantic_context.hpp"
 #include "semantic/utils.hpp"
 #include "ast/common.hpp"
+#include "src/utils/error.hpp"
 
 #include <unordered_map>
 #include <variant>
@@ -15,8 +17,6 @@
 namespace semantic {
 
 using namespace hir::helper;
-
-// Use hir::helper::hir::helper::get_resolved_type instead of duplicate function
 
 // Data structures for trait validation
 struct TraitItemInfo {
@@ -50,8 +50,11 @@ private:
         VALIDATION
     } current_phase = Phase::EXTRACTION;
 
+    SemanticContext* context = nullptr;
+
 public:
     TraitValidator() = default;
+    explicit TraitValidator(SemanticContext& ctx) : context(&ctx) {}
     
     // Main entry point
     void validate(hir::Program& program);
@@ -92,6 +95,13 @@ private:
     void report_signature_mismatch(const ast::Identifier& trait_name,
                                   const ast::Identifier& item_name,
                                   const std::string& details);
+
+    TypeId resolve_type(const hir::TypeAnnotation& annotation) const {
+        if (context) {
+            return context->type_query(const_cast<hir::TypeAnnotation&>(annotation));
+        }
+        return hir::helper::get_resolved_type(annotation);
+    }
 };
 
 // Inline implementations
@@ -159,19 +169,13 @@ inline void TraitValidator::extract_trait_definition(hir::Trait& trait) {
     for (auto& item : trait.items) {
         std::visit(Overloaded{
             [&](hir::Function& fn) {
-                if (fn.ast_node && fn.ast_node->name) {
-                    info.required_items.emplace(*fn.ast_node->name, TraitItemInfo(*fn.ast_node->name, &fn));
-                }
+                info.required_items.emplace(fn.name, TraitItemInfo(fn.name, &fn));
             },
             [&](hir::Method& method) {
-                if (method.ast_node && method.ast_node->name) {
-                    info.required_items.emplace(*method.ast_node->name, TraitItemInfo(*method.ast_node->name, &method));
-                }
+                info.required_items.emplace(method.name, TraitItemInfo(method.name, &method));
             },
             [&](hir::ConstDef& constant) {
-                if (constant.ast_node && constant.ast_node->name) {
-                    info.required_items.emplace(*constant.ast_node->name, TraitItemInfo(*constant.ast_node->name, &constant));
-                }
+                info.required_items.emplace(constant.name, TraitItemInfo(constant.name, &constant));
             },
             [&](auto&) {
                 // Other item types are not trait items
@@ -208,8 +212,7 @@ inline void TraitValidator::validate_trait_impl(hir::Impl& impl, const hir::Trai
     }
     
     // Get trait name for error reporting
-    ast::Identifier trait_name = trait.ast_node && trait.ast_node->name ? 
-        *trait.ast_node->name : ast::Identifier("<unknown>");
+    ast::Identifier trait_name = trait.name;
     
     // Check each required item is implemented
     for (const auto& [item_name, trait_item] : trait_info->required_items) {
@@ -255,8 +258,8 @@ inline bool TraitValidator::validate_function_signature(const hir::Function& tra
     
     // Check return type TypeId equality
     if (trait_fn.return_type && impl_fn.return_type) {
-        auto trait_return_type = hir::helper::get_resolved_type(*trait_fn.return_type);
-        auto impl_return_type = hir::helper::get_resolved_type(*impl_fn.return_type);
+        auto trait_return_type = resolve_type(*trait_fn.return_type);
+        auto impl_return_type = resolve_type(*impl_fn.return_type);
         if (trait_return_type != impl_return_type) {
             return false;
         }
@@ -268,8 +271,8 @@ inline bool TraitValidator::validate_function_signature(const hir::Function& tra
     // Check parameter type TypeId equality
     for (size_t i = 0; i < trait_fn.param_type_annotations.size(); ++i) {
         if (trait_fn.param_type_annotations[i] && impl_fn.param_type_annotations[i]) {
-            auto trait_param_type = hir::helper::get_resolved_type(*trait_fn.param_type_annotations[i]);
-            auto impl_param_type = hir::helper::get_resolved_type(*impl_fn.param_type_annotations[i]);
+            auto trait_param_type = resolve_type(*trait_fn.param_type_annotations[i]);
+            auto impl_param_type = resolve_type(*impl_fn.param_type_annotations[i]);
             if (trait_param_type != impl_param_type) {
                 return false;
             }
@@ -296,8 +299,8 @@ inline bool TraitValidator::validate_method_signature(const hir::Method& trait_m
     
     // Check return type TypeId equality
     if (trait_method.return_type && impl_method.return_type) {
-        auto trait_return_type = hir::helper::get_resolved_type(*trait_method.return_type);
-        auto impl_return_type = hir::helper::get_resolved_type(*impl_method.return_type);
+        auto trait_return_type = resolve_type(*trait_method.return_type);
+        auto impl_return_type = resolve_type(*impl_method.return_type);
         if (trait_return_type != impl_return_type) {
             return false;
         }
@@ -309,8 +312,8 @@ inline bool TraitValidator::validate_method_signature(const hir::Method& trait_m
     // Check parameter type TypeId equality
     for (size_t i = 0; i < trait_method.param_type_annotations.size(); ++i) {
         if (trait_method.param_type_annotations[i] && impl_method.param_type_annotations[i]) {
-            auto trait_param_type = hir::helper::get_resolved_type(*trait_method.param_type_annotations[i]);
-            auto impl_param_type = hir::helper::get_resolved_type(*impl_method.param_type_annotations[i]);
+            auto trait_param_type = resolve_type(*trait_method.param_type_annotations[i]);
+            auto impl_param_type = resolve_type(*impl_method.param_type_annotations[i]);
             if (trait_param_type != impl_param_type) {
                 return false;
             }
@@ -326,8 +329,8 @@ inline bool TraitValidator::validate_method_signature(const hir::Method& trait_m
 inline bool TraitValidator::validate_const_signature(const hir::ConstDef& trait_const, const hir::ConstDef& impl_const) {
     // Check const type TypeId equality
     if (trait_const.type && impl_const.type) {
-        auto trait_type = hir::helper::get_resolved_type(*trait_const.type);
-        auto impl_type = hir::helper::get_resolved_type(*impl_const.type);
+        auto trait_type = resolve_type(*trait_const.type);
+        auto impl_type = resolve_type(*impl_const.type);
         if (trait_type != impl_type) {
             return false;
         }
@@ -361,26 +364,23 @@ inline std::optional<TraitItemInfo> TraitValidator::find_trait_item(const hir::T
 inline std::optional<std::variant<hir::Function*, hir::Method*, hir::ConstDef*>> 
 TraitValidator::find_impl_item(hir::Impl& impl, const ast::Identifier& name) {
     for (auto& item : impl.items) {
-        std::optional<ast::Identifier> item_name;
-        
+        const ast::Identifier* item_name = nullptr;
+
         std::visit(Overloaded{
             [&](hir::Function& fn) {
-                item_name = fn.ast_node && fn.ast_node->name ? 
-                    std::optional<ast::Identifier>(*fn.ast_node->name) : std::nullopt;
+                item_name = &fn.name;
             },
             [&](hir::Method& method) {
-                item_name = method.ast_node && method.ast_node->name ? 
-                    std::optional<ast::Identifier>(*method.ast_node->name) : std::nullopt;
+                item_name = &method.name;
             },
             [&](hir::ConstDef& constant) {
-                item_name = constant.ast_node && constant.ast_node->name ? 
-                    std::optional<ast::Identifier>(*constant.ast_node->name) : std::nullopt;
+                item_name = &constant.name;
             },
             [&](auto&) {
-                item_name = std::nullopt;
+                item_name = nullptr;
             }
         }, item->value);
-        
+
         if (item_name && *item_name == name) {
             return std::visit([](auto&& arg) -> std::variant<hir::Function*, hir::Method*, hir::ConstDef*> {
                 return &arg;
@@ -392,13 +392,15 @@ TraitValidator::find_impl_item(hir::Impl& impl, const ast::Identifier& name) {
 }
 
 inline void TraitValidator::report_missing_item(const ast::Identifier& trait_name, const ast::Identifier& item_name) {
-    throw std::runtime_error("Trait '" + trait_name.name + "' requires item '" + item_name.name + "' but it's not implemented");
+    const span::Span span = item_name.span.is_valid() ? item_name.span : trait_name.span;
+    throw SemanticError("Trait '" + trait_name.name + "' requires item '" + item_name.name + "' but it's not implemented", span);
 }
 
-inline void TraitValidator::report_signature_mismatch(const ast::Identifier& trait_name, 
+inline void TraitValidator::report_signature_mismatch(const ast::Identifier& trait_name,
                                                      const ast::Identifier& item_name,
                                                      const std::string& details) {
-    throw std::runtime_error("Item '" + item_name.name + "' in trait '" + trait_name.name + "' has signature mismatch: " + details);
+    const span::Span span = item_name.span.is_valid() ? item_name.span : trait_name.span;
+    throw SemanticError("Item '" + item_name.name + "' in trait '" + trait_name.name + "' has signature mismatch: " + details, span);
 }
 
 

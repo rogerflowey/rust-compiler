@@ -1,8 +1,9 @@
 #include "exit_check.hpp"
 
 #include <algorithm>
-#include <stdexcept>
 #include <utility>
+
+#include "src/utils/error.hpp"
 
 namespace semantic {
 
@@ -22,7 +23,7 @@ void ExitCheckVisitor::visit(hir::Function& function) {
     if (ctx.is_main) {
         validate_main_context(ctx);
     } else if (!ctx.exit_calls.empty()) {
-        throw std::runtime_error("exit() cannot be used in non-main functions");
+        throw SemanticError("exit() cannot be used in non-main functions", function.span);
     }
 }
 
@@ -33,7 +34,7 @@ void ExitCheckVisitor::visit(hir::Method& method) {
     context_stack_.pop_back();
 
     if (!ctx.exit_calls.empty()) {
-        throw std::runtime_error("exit() cannot be used in methods");
+        throw SemanticError("exit() cannot be used in methods", method.span);
     }
 }
 
@@ -62,15 +63,15 @@ void ExitCheckVisitor::visit(hir::Trait& trait) {
 void ExitCheckVisitor::visit(hir::Call& call) {
     if (is_exit_call(call)) {
         if (context_stack_.empty()) {
-            throw std::runtime_error("exit() cannot be used in non-main functions");
+            throw SemanticError("exit() cannot be used in non-main functions", call.span);
         }
 
         auto& ctx = context_stack_.back();
         if (ctx.kind == ContextKind::Method) {
-            throw std::runtime_error("exit() cannot be used in methods");
+            throw SemanticError("exit() cannot be used in methods", call.span);
         }
         if (!ctx.is_main) {
-            throw std::runtime_error("exit() cannot be used in non-main functions");
+            throw SemanticError("exit() cannot be used in non-main functions", call.span);
         }
 
         ctx.exit_calls.push_back(&call);
@@ -83,13 +84,7 @@ bool ExitCheckVisitor::is_main_function(const hir::Function& function, bool is_t
     if (!is_top_level) {
         return false;
     }
-    if (!function.ast_node) {
-        return false;
-    }
-    if (!function.ast_node->name) {
-        return false;
-    }
-    return function.ast_node->name->name == "main";
+    return function.name.name == "main";
 }
 
 bool ExitCheckVisitor::is_exit_call(const hir::Call& call) const {
@@ -98,34 +93,17 @@ bool ExitCheckVisitor::is_exit_call(const hir::Call& call) const {
     }
 
     auto* func_use = std::get_if<hir::FuncUse>(&call.callee->value);
-    if (!func_use) {
+    if (!func_use || !func_use->def) {
         return false;
     }
 
-    const auto* path_expr = func_use->ast_node;
-    if (!path_expr || !path_expr->path) {
-        return false;
-    }
-
-    const auto& segments = path_expr->path->segments;
-    if (segments.empty()) {
-        return false;
-    }
-
-    const auto& last_segment = segments.back();
-    if (last_segment.type != ast::PathSegType::IDENTIFIER) {
-        return false;
-    }
-    if (!last_segment.id || !last_segment.id.value()) {
-        return false;
-    }
-
-    return last_segment.id.value()->name == "exit";
+    return func_use->def->name.name == "exit";
 }
 
 void ExitCheckVisitor::validate_main_context(Context& ctx) {
+    span::Span span = ctx.function ? ctx.function->span : span::Span::invalid();
     if (!ctx.function || !ctx.function->body) {
-        throw std::runtime_error("main function must have an exit() call as the final statement");
+        throw SemanticError("main function must have an exit() call as the final statement", span);
     }
 
     auto& block = *ctx.function->body;
@@ -150,7 +128,7 @@ void ExitCheckVisitor::validate_main_context(Context& ctx) {
     }
 
     if (!has_exit) {
-        throw std::runtime_error("main function must have an exit() call as the final statement");
+        throw SemanticError("main function must have an exit() call as the final statement", span);
     }
 
     bool has_non_final_exit = false;
@@ -164,7 +142,8 @@ void ExitCheckVisitor::validate_main_context(Context& ctx) {
     }
 
     if (has_final_expr || has_non_final_exit) {
-        throw std::runtime_error("exit() must be the final statement in main function");
+        auto diagnostic_span = final_exit_call ? final_exit_call->span : span;
+        throw SemanticError("exit() must be the final statement in main function", diagnostic_span);
     }
 }
 

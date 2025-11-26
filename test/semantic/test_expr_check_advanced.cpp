@@ -61,12 +61,17 @@ TEST_F(ExprCheckAdvancedTest, FieldAccessOnStructReference) {
     auto ref_expr = hir::UnaryOp{
         .op = hir::UnaryOp::REFERENCE,
         .rhs = std::move(base_var),
-        .ast_node = &dummy_ast
+        
     };
     auto base_ref = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(ref_expr)});
     
     // Set the type manually since we're not going through the checker
-    base_ref->expr_info = semantic::ExprInfo{struct_ref_type, true, false, false, {semantic::NormalEndpoint{}}};
+    base_ref->expr_info = semantic::ExprInfo{struct_ref_type,
+                                             true,
+                                             false,
+                                             false,
+                                             {semantic::NormalEndpoint{}},
+                                             std::nullopt};
     
     auto field_access = createFieldAccess(std::move(base_ref), ast::Identifier{"field2"});
     
@@ -83,8 +88,7 @@ TEST_F(ExprCheckAdvancedTest, ArrayIndexing) {
     auto array_local = std::make_unique<hir::Local>(hir::Local(
         ast::Identifier{"test_array"},
         true,
-        i32_array_5_type,
-        nullptr
+        i32_array_5_type
     ));
     
     auto base = createVariable(array_local.get());
@@ -219,8 +223,7 @@ TEST_F(ExprCheckAdvancedTest, ErrorAssignmentToImmutablePlace) {
     auto immutable_local = std::make_unique<hir::Local>(hir::Local(
         ast::Identifier{"immutable_var"},
         false,
-        i32_type,
-        nullptr
+        i32_type
     ));
     
     auto lhs = createVariable(immutable_local.get());
@@ -252,8 +255,7 @@ TEST_F(ExprCheckAdvancedTest, ErrorLetWithoutInitializer) {
     auto local = std::make_unique<hir::Local>(hir::Local(
         ast::Identifier{"x"},
         true,
-        i32_type,
-        nullptr
+        i32_type
     ));
     
     auto binding_def = hir::BindingDef();
@@ -265,7 +267,7 @@ TEST_F(ExprCheckAdvancedTest, ErrorLetWithoutInitializer) {
         .pattern = std::move(pattern),
         .type_annotation = i32_type,
         .initializer = nullptr, // No initializer
-        .ast_node = &dummy_ast
+        
     };
     
     auto stmt = std::make_unique<hir::Stmt>(hir::StmtVariant{std::move(let_stmt)});
@@ -281,8 +283,7 @@ TEST_F(ExprCheckAdvancedTest, ErrorArrayIndexWithNonUsizeIndex) {
     auto array_local = std::make_unique<hir::Local>(hir::Local(
         ast::Identifier{"test_array"},
         true,
-        i32_array_5_type,
-        nullptr
+        i32_array_5_type
     ));
     
     auto base = createVariable(array_local.get());

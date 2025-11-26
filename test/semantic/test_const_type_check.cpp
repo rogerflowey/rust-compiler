@@ -1,5 +1,6 @@
 #include "semantic/pass/semantic_check/expr_check.hpp"
 #include "semantic/hir/hir.hpp"
+#include "semantic/query/semantic_context.hpp"
 #include "semantic/type/type.hpp"
 #include "semantic/const/const.hpp"
 #include "semantic/type/helper.hpp"
@@ -15,11 +16,13 @@ using namespace semantic;
 class ConstTypeCheckTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        expr_checker = std::make_unique<ExprChecker>(impl_table);
+        semantic_context = std::make_unique<SemanticContext>(impl_table);
+        expr_checker = &semantic_context->get_checker();
     }
     
     ImplTable impl_table;
-    std::unique_ptr<ExprChecker> expr_checker;
+    std::unique_ptr<SemanticContext> semantic_context;
+    ExprChecker* expr_checker = nullptr;
     
     // Helper to create a const definition with type annotation
     std::unique_ptr<hir::ConstDef> create_const_def(TypeId type, std::unique_ptr<hir::Expr> expr) {
@@ -44,7 +47,7 @@ TEST_F(ConstTypeCheckTest, ConstUseWithMatchingType) {
     // Create a literal expression of type i32
     auto literal_expr = std::make_unique<hir::Expr>(hir::Literal{
         .value = hir::Literal::Integer{42, ast::IntegerLiteralExpr::I32},
-        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+        
     });
     
     // Create const definition with i32 type
@@ -71,7 +74,7 @@ TEST_F(ConstTypeCheckTest, ConstUseWithTypeMismatch) {
     // Create a literal expression of type bool
     auto literal_expr = std::make_unique<hir::Expr>(hir::Literal{
         .value = true,
-        .ast_node = static_cast<const ast::BoolLiteralExpr*>(nullptr)
+        
     });
     
     // Create const definition with i32 type but bool expression
@@ -120,19 +123,19 @@ TEST_F(ConstTypeCheckTest, ConstUseWithComplexExpression) {
     // Create binary expression: 1 + 2
     auto lhs_expr = std::make_unique<hir::Expr>(hir::Literal{
         .value = hir::Literal::Integer{1, ast::IntegerLiteralExpr::I32},
-        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+        
     });
     
     auto rhs_expr = std::make_unique<hir::Expr>(hir::Literal{
         .value = hir::Literal::Integer{2, ast::IntegerLiteralExpr::I32},
-        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+        
     });
     
     auto binary_expr = std::make_unique<hir::Expr>(hir::BinaryOp{
         .op = hir::BinaryOp::ADD,
         .lhs = std::move(lhs_expr),
         .rhs = std::move(rhs_expr),
-        .ast_node = static_cast<const ast::BinaryExpr*>(nullptr)
+        
     });
     
     // Create const definition
@@ -155,7 +158,7 @@ TEST_F(ConstTypeCheckTest, ConstUseWithCoercibleType) {
     // Create an unsuffixed literal that requires the const type expectation
     auto literal_expr = std::make_unique<hir::Expr>(hir::Literal{
         .value = hir::Literal::Integer{42, ast::IntegerLiteralExpr::NOT_SPECIFIED, true},
-        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+        
     });
     
     // Create const definition with i32 type
@@ -181,7 +184,7 @@ TEST_F(ConstTypeCheckTest, CompleteConstTypeCheckingPipeline) {
     // Step 1: Create const definition with valid expression
     auto literal_expr = std::make_unique<hir::Expr>(hir::Literal{
         .value = hir::Literal::Integer{100, ast::IntegerLiteralExpr::U32},
-        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+        
     });
     
     auto const_def = create_const_def(u32_type, std::move(literal_expr));

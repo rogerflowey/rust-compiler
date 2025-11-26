@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -13,45 +14,55 @@
 
 // Semantic analysis includes
 #include "src/semantic/hir/converter.hpp"
+#include "src/semantic/query/semantic_context.hpp"
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
-#include "src/semantic/pass/type&const/visitor.hpp"
 #include "src/semantic/pass/trait_check/trait_check.hpp"
 #include "src/semantic/pass/semantic_check/semantic_check.hpp"
 #include "src/semantic/pass/control_flow_linking/control_flow_linking.hpp"
 #include "src/semantic/pass/exit_check/exit_check.hpp"
 #include "src/semantic/type/impl_table.hpp"
 #include "src/semantic/symbol/predefined.hpp"
+#include "src/span/source_manager.hpp"
+#include "src/utils/error.hpp"
 
 // HIR pretty printer
 #include "src/semantic/hir/pretty_print/pretty_print.hpp"
 
 void print_error_context(const parsec::ParseError& error,
                          const std::vector<Token>& tokens,
-                         const std::vector<Position>& positions, 
-                         const std::string& code) {
+                         const span::SourceManager& sources) {
     std::cerr << "--> Parsing failed" << std::endl;
 
-    if (error.position >= tokens.size()) {
-        std::cerr << "Unexpected end of input." << std::endl;
-    } else {
-        const Token& error_token = tokens[error.position];
-        const Position& pos = positions[error.position];
-
-        std::cerr << "Unexpected token: '" << error_token.value << "' at " << pos.toString() << std::endl;
-
-        // Find the specific line in the source code
-        std::string line_content;
-        std::istringstream code_stream(code);
-        for (int i = 0; i < pos.row; ++i) {
-            std::getline(code_stream, line_content);
+    span::Span error_span = error.span;
+    const Token* error_token = nullptr;
+    if (error.position < tokens.size()) {
+        error_token = &tokens[error.position];
+        if (!error_span.is_valid()) {
+            error_span = error_token->span;
         }
+    }
 
-        // Print the context
+    if (!error_span.is_valid()) {
+        if (error_token) {
+            std::cerr << "Unexpected token: '" << error_token->value << "'" << std::endl;
+        } else {
+            std::cerr << "Unexpected end of input." << std::endl;
+        }
+        std::cerr << " (no location information)" << std::endl;
+        return;
+    } else {
+        auto loc = sources.to_line_col(error_span.file, error_span.start);
+        std::string token_value = error_token ? error_token->value : std::string("<input>");
+        std::cerr << "Unexpected token: '" << token_value << "' at "
+                  << sources.get_filename(error_span.file) << ":" << loc.line << ":" << loc.column << std::endl;
+
+        auto line_view = sources.line_view(error_span.file, loc.line);
         std::cerr << std::endl;
-        std::cerr << " " << pos.row << " | " << line_content << std::endl;
-        std::cerr << " " << std::string(std::to_string(pos.row).length(), ' ') << " | ";
-        std::cerr << std::string(pos.col - 1, ' ') << "^";
-        std::cerr << std::string(error_token.value.length() > 1 ? error_token.value.length() - 1 : 0, '^') << std::endl;
+        std::cerr << " " << loc.line << " | " << line_view << std::endl;
+        std::cerr << " " << std::string(std::to_string(loc.line).length(), ' ') << " | ";
+        std::cerr << std::string(loc.column > 0 ? loc.column - 1 : 0, ' ');
+        size_t caret_len = std::max<size_t>(1, error_span.length());
+        std::cerr << std::string(caret_len, '^') << std::endl;
     }
 
     std::cerr << std::endl << "Expected one of: ";
@@ -61,6 +72,45 @@ void print_error_context(const parsec::ParseError& error,
     std::cerr << std::endl;
 }
 
+void print_lexer_error(const LexerError& error, const span::SourceManager& sources) {
+    std::cerr << "Error: " << error.what() << std::endl;
+    auto error_span = error.span();
+    if (!error_span.is_valid()) {
+        std::cerr << " (no location information)" << std::endl;
+        return;
+    }
+
+    auto loc = sources.to_line_col(error_span.file, error_span.start);
+    auto line_view = sources.line_view(error_span.file, loc.line);
+    std::cerr << "--> " << sources.get_filename(error_span.file) << ":" << loc.line << ":" << loc.column << std::endl;
+    std::cerr << " " << loc.line << " | " << line_view << std::endl;
+    std::cerr << " " << std::string(std::to_string(loc.line).length(), ' ') << " | ";
+    size_t caret_start = loc.column > 0 ? loc.column - 1 : 0;
+    std::cerr << std::string(caret_start, ' ');
+    size_t caret_len = std::max<size_t>(1, error_span.length());
+    std::cerr << std::string(caret_len, '^') << std::endl;
+}
+
+void print_semantic_error(const SemanticError& error,
+                          const span::SourceManager& sources) {
+    std::cerr << "Error: " << error.what() << std::endl;
+    auto error_span = error.span();
+    if (!error_span.is_valid()) {
+        std::cerr << " (no location information)" << std::endl;
+        return;
+    }
+
+    auto loc = sources.to_line_col(error_span.file, error_span.start);
+    auto line_view = sources.line_view(error_span.file, loc.line);
+    std::cerr << "--> " << sources.get_filename(error_span.file) << ":" << loc.line << ":" << loc.column << std::endl;
+    std::cerr << " " << loc.line << " | " << line_view << std::endl;
+    std::cerr << " " << std::string(std::to_string(loc.line).length(), ' ') << " | ";
+    size_t caret_start = loc.column > 0 ? loc.column - 1 : 0;
+    std::cerr << std::string(caret_start, ' ');
+    size_t caret_len = std::max<size_t>(1, error_span.length());
+    std::cerr << std::string(caret_len, '^') << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     if (argc != 2) {
         std::cerr << "Usage: " << argv[0] << " <file>" << std::endl;
@@ -68,6 +118,8 @@ int main(int argc, char* argv[]) {
     }
 
     std::string filename = argv[1];
+
+    span::SourceManager sources;
 
     try {
         // Read input file
@@ -82,9 +134,10 @@ int main(int argc, char* argv[]) {
         std::string code = code_stream.str();
 
         // Phase 1: Lexical analysis
-        Lexer lexer(code_stream);
+        auto file_id = sources.add_file(filename, code);
+
+        Lexer lexer(code_stream, file_id);
         const auto& tokens = lexer.tokenize();
-        const auto& positions = lexer.getTokenPositions();
 
         // Phase 2: Parsing
         const auto &registry = getParserRegistry();
@@ -93,7 +146,7 @@ int main(int argc, char* argv[]) {
 
         if (!std::holds_alternative<std::vector<ast::ItemPtr>>(result)) {
             auto error = std::get<parsec::ParseError>(result);
-            print_error_context(error, tokens, positions, code);
+            print_error_context(error, tokens, sources);
             return 1;
         }
 
@@ -107,96 +160,39 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Print HIR after conversion
-        std::cout << "\n=== HIR after Conversion ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
-
         // Phase 4: Name Resolution
         semantic::ImplTable impl_table;
         semantic::inject_predefined_methods(impl_table);
         semantic::NameResolver name_resolver(impl_table);
-        try {
-            name_resolver.visit_program(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Name resolution failed - " << e.what() << std::endl;
-            return 1;
-        }
+        name_resolver.visit_program(*hir_program);
 
-        // Print HIR after name resolution
-        std::cout << "\n=== HIR after Name Resolution ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
+        semantic::SemanticContext semantic_ctx(impl_table);
 
-        // Phase 5: Type & Const Finalization
-        semantic::TypeConstResolver type_const_resolver;
-        try {
-            type_const_resolver.visit_program(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Type & const resolution failed - " << e.what() << std::endl;
-            return 1;
-        }
-
-        // Print HIR after type & const resolution
-        std::cout << "\n=== HIR after Type & Const Resolution ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
-
-        // Phase 6: Trait Validation
-        semantic::TraitValidator trait_validator;
-        try {
-            trait_validator.validate(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Trait validation failed - " << e.what() << std::endl;
-            return 1;
-        }
-
-        // Print HIR after trait validation
-        std::cout << "\n=== HIR after Trait Validation ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
+        // Phase 5: Trait Validation
+        semantic::TraitValidator trait_validator(semantic_ctx);
+        trait_validator.validate(*hir_program);
 
         // Phase 7: Control Flow Linking
         ControlFlowLinker control_flow_linker;
-        try {
-            control_flow_linker.link_control_flow(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Control flow linking failed - " << e.what() << std::endl;
-            return 1;
-        }
-
-        // Print HIR after control flow linking
-        std::cout << "\n=== HIR after Control Flow Linking ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
+        control_flow_linker.link_control_flow(*hir_program);
 
         // Phase 8: Semantic Checking
-        semantic::SemanticCheckVisitor semantic_checker(impl_table);
-        try {
-            // Apply comprehensive expression checking to the entire program
-            semantic_checker.check_program(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Semantic checking failed - " << e.what() << std::endl;
-            return 1;
-        }
-
-        // Print final HIR after semantic checking
-        std::cout << "\n=== Final HIR after Semantic Checking ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
+        semantic::SemanticCheckVisitor semantic_checker(semantic_ctx);
+        semantic_checker.check_program(*hir_program);
 
         // Phase 9: Exit Check
         semantic::ExitCheckVisitor exit_checker;
-        try {
-            exit_checker.check_program(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Exit check failed - " << e.what() << std::endl;
-            return 1;
-        }
+        exit_checker.check_program(*hir_program);
 
         std::cout << "Success: Semantic analysis completed successfully" << std::endl;
         return 0;
 
+    } catch (const LexerError& e) {
+        print_lexer_error(e, sources);
+        return 1;
+    } catch (const SemanticError& e) {
+        print_semantic_error(e, sources);
+        return 1;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;

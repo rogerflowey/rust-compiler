@@ -82,9 +82,9 @@ void NameResolver::visit(hir::UnresolvedIdentifier &ident, hir::Expr &container)
     if (!def) throw std::runtime_error("Undefined identifier " + ident.name.name);
 
     container.value = std::visit(Overloaded{
-        [&](hir::Local *local) { return hir::ExprVariant{hir::Variable(local, ident.ast_node)}; },
-        [&](hir::ConstDef *constant) { return hir::ExprVariant{hir::ConstUse(constant, ident.ast_node)}; },
-        [&](hir::Function *function) { return hir::ExprVariant{hir::FuncUse(function, ident.ast_node)}; },
+        [&](hir::Local *local) { return hir::ExprVariant{hir::Variable(local)}; },
+        [&](hir::ConstDef *constant) { return hir::ExprVariant{hir::ConstUse(constant)}; },
+        [&](hir::Function *function) { return hir::ExprVariant{hir::FuncUse(function)}; },
         [&](hir::Method *) -> hir::ExprVariant {
             throw std::runtime_error("Methods must be invoked via method call syntax");
         }

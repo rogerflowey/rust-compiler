@@ -10,7 +10,7 @@ Built-in types and functions automatically available in the global scope without
 ```cpp
 static hir::StructDef struct_String{
     .fields = {},
-    .ast_node = nullptr
+    
 };
 ```
 Represents text data; available without import.
@@ -76,7 +76,7 @@ hir::Function make_builtin_function() {
         .return_type = std::nullopt,
         .body = nullptr,
         .locals = {},
-        .ast_node = nullptr
+        
     };
 }
 ```

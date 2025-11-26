@@ -18,7 +18,14 @@ void PathParserBuilder::finalize(const ParserRegistry& /*registry*/, std::functi
             segments.reserve(1 + rest_vec.size());
             segments.push_back(std::move(first));
             for (auto &seg : rest_vec) segments.push_back(std::move(seg));
-            return std::make_unique<Path>(std::move(segments));
+            auto path = std::make_unique<Path>(std::move(segments));
+            std::vector<span::Span> spans;
+            spans.reserve(path->segments.size());
+            for (const auto &seg : path->segments) {
+                spans.push_back(seg.span);
+            }
+            path->span = merge_span_list(spans);
+            return path;
         }).label("a path");
     
     set_path_parser(pathParser);
@@ -34,6 +41,7 @@ parsec::Parser<PathSegment, Token> PathParserBuilder::buildSegmentParser() const
         if (t.type == TokenType::TOKEN_IDENTIFIER) {
             segment.type = PathSegType::IDENTIFIER;
             segment.id = std::make_unique<Identifier>(t.value);
+            segment.id.value().get()->span = t.span;
         } else if (t.value == "self") {
             segment.type = PathSegType::self;
             segment.id = std::make_unique<Identifier>(t.value);
@@ -41,6 +49,10 @@ parsec::Parser<PathSegment, Token> PathParserBuilder::buildSegmentParser() const
             segment.type = PathSegType::SELF;
             segment.id = std::make_unique<Identifier>(t.value);
         }
+        if (segment.id.has_value() && segment.id.value() != nullptr) {
+            segment.id.value().get()->span = t.span;
+        }
+        segment.span = t.span;
         return segment;
     });
 }

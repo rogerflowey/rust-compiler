@@ -4,6 +4,7 @@
 #include "src/semantic/pass/semantic_check/expr_check.hpp"
 #include "src/semantic/pass/semantic_check/expr_info.hpp"
 #include "src/semantic/hir/hir.hpp"
+#include "src/semantic/query/semantic_context.hpp"
 #include "src/semantic/type/type.hpp"
 #include "src/semantic/type/helper.hpp"
 #include "src/semantic/type/impl_table.hpp"
@@ -58,8 +59,9 @@ protected:
         // Create test impl table
         impl_table = std::make_unique<semantic::ImplTable>();
         
-        // Create expression checker
-        expr_checker = std::make_unique<semantic::ExprChecker>(*impl_table);
+        // Create semantic context and expression checker view
+        semantic_context = std::make_unique<semantic::SemanticContext>(*impl_table);
+        expr_checker = &semantic_context->get_checker();
         
         // Setup test structures
         setupTestStructures();
@@ -158,8 +160,7 @@ protected:
     // Helper to create a literal expression
     static std::unique_ptr<hir::Expr> createIntegerLiteral(uint64_t value, ast::IntegerLiteralExpr::Type suffix = ast::IntegerLiteralExpr::NOT_SPECIFIED, bool is_negative = false) {
         auto literal = hir::Literal{
-            .value = hir::Literal::Integer{value, suffix, is_negative},
-            .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+            .value = hir::Literal::Integer{value, suffix, is_negative}
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(literal)});
@@ -169,8 +170,7 @@ protected:
     // Helper to create a boolean literal
     static std::unique_ptr<hir::Expr> createBooleanLiteral(bool value) {
         auto literal = hir::Literal{
-            .value = value,
-            .ast_node = static_cast<const ast::BoolLiteralExpr*>(nullptr)
+            .value = value
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(literal)});
@@ -179,7 +179,7 @@ protected:
     
     // Helper to create a variable expression
     static std::unique_ptr<hir::Expr> createVariable(hir::Local* local) {
-        auto variable = hir::Variable(local, static_cast<const ast::PathExpr*>(nullptr));
+        auto variable = hir::Variable(local);
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(variable)});
         return expr;
@@ -190,8 +190,7 @@ protected:
         auto binary_op = hir::BinaryOp{
             .op = op,
             .lhs = std::move(lhs),
-            .rhs = std::move(rhs),
-            .ast_node = static_cast<const ast::BinaryExpr*>(nullptr)
+            .rhs = std::move(rhs)
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(binary_op)});
@@ -202,8 +201,7 @@ protected:
     static std::unique_ptr<hir::Expr> createUnaryOp(std::unique_ptr<hir::Expr> operand, hir::UnaryOp::Op op) {
         auto unary_op = hir::UnaryOp{
             .op = op,
-            .rhs = std::move(operand),
-            .ast_node = static_cast<const ast::UnaryExpr*>(nullptr)
+            .rhs = std::move(operand)
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(unary_op)});
@@ -214,8 +212,7 @@ protected:
     static std::unique_ptr<hir::Expr> createFieldAccess(std::unique_ptr<hir::Expr> base, const ast::Identifier& field) {
         auto field_access = hir::FieldAccess{
             .base = std::move(base),
-            .field = field,
-            .ast_node = static_cast<const ast::FieldAccessExpr*>(nullptr)
+            .field = field
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(field_access)});
@@ -226,8 +223,7 @@ protected:
     static std::unique_ptr<hir::Expr> createArrayIndex(std::unique_ptr<hir::Expr> base, std::unique_ptr<hir::Expr> index) {
         auto index_expr = hir::Index{
             .base = std::move(base),
-            .index = std::move(index),
-            .ast_node = static_cast<const ast::IndexExpr*>(nullptr)
+            .index = std::move(index)
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(index_expr)});
@@ -238,8 +234,7 @@ protected:
     static std::unique_ptr<hir::Expr> createAssignment(std::unique_ptr<hir::Expr> lhs, std::unique_ptr<hir::Expr> rhs) {
         auto assignment = hir::Assignment{
             .lhs = std::move(lhs),
-            .rhs = std::move(rhs),
-            .ast_node = static_cast<const ast::AssignExpr*>(nullptr)
+            .rhs = std::move(rhs)
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(assignment)});
@@ -250,8 +245,7 @@ protected:
     static std::unique_ptr<hir::Expr> createCast(std::unique_ptr<hir::Expr> expr, semantic::TypeId target_type) {
         auto cast = hir::Cast{
             .expr = std::move(expr),
-            .target_type = target_type,
-            .ast_node = static_cast<const ast::CastExpr*>(nullptr)
+            .target_type = target_type
         };
         
         auto expr_node = std::make_unique<Expr>(hir::ExprVariant{std::move(cast)});
@@ -282,8 +276,7 @@ static std::unique_ptr<hir::Stmt> createLetStmt(const ast::Identifier& name, sem
         auto let_stmt = hir::LetStmt{
             .pattern = std::move(pattern),
             .type_annotation = type,
-            .initializer = std::move(initializer),
-            .ast_node = static_cast<const ast::LetStmt*>(nullptr)
+            .initializer = std::move(initializer)
         };
         
         auto stmt = std::make_unique<Stmt>(hir::StmtVariant{std::move(let_stmt)});
@@ -293,8 +286,7 @@ static std::unique_ptr<hir::Stmt> createLetStmt(const ast::Identifier& name, sem
     // Helper to create an expression statement
     static std::unique_ptr<hir::Stmt> createExprStmt(std::unique_ptr<hir::Expr> expr) {
         auto expr_stmt = hir::ExprStmt{
-            .expr = std::move(expr),
-            .ast_node = static_cast<const ast::ExprStmt*>(nullptr)
+            .expr = std::move(expr)
         };
         
         auto stmt = std::make_unique<Stmt>(hir::StmtVariant{std::move(expr_stmt)});
@@ -309,14 +301,13 @@ static std::unique_ptr<hir::Stmt> createLetStmt(const ast::Identifier& name, sem
     
     // Helper to create a function call expression
 static std::unique_ptr<hir::Expr> createFunctionCall(hir::Function* func, std::vector<std::unique_ptr<hir::Expr>> args = {}) {
-    auto func_use = hir::FuncUse(func, static_cast<const ast::PathExpr*>(nullptr));
+    auto func_use = hir::FuncUse(func);
         
         auto callee = std::make_unique<Expr>(hir::ExprVariant{std::move(func_use)});
         
         auto call = hir::Call{
             .callee = std::move(callee),
-            .args = std::move(args),
-            .ast_node = static_cast<const ast::CallExpr*>(nullptr)
+            .args = std::move(args)
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(call)});
@@ -330,8 +321,7 @@ static std::unique_ptr<hir::Expr> createFunctionCall(hir::Function* func, std::v
         auto method_call = hir::MethodCall{
             .receiver = std::move(receiver),
             .method = method_name,
-            .args = std::move(args),
-            .ast_node = &dummy_ast
+            .args = std::move(args)
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(method_call)});
@@ -348,8 +338,7 @@ static std::unique_ptr<hir::Expr> createFunctionCall(hir::Function* func, std::v
         auto if_expr = hir::If{
             .condition = std::move(condition),
             .then_block = std::move(then_block),
-            .else_expr = std::move(else_opt),
-            .ast_node = &dummy_ast
+            .else_expr = std::move(else_opt)
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(if_expr)});
@@ -360,8 +349,7 @@ static std::unique_ptr<hir::Expr> createFunctionCall(hir::Function* func, std::v
     static std::unique_ptr<hir::Expr> createLoop(std::unique_ptr<hir::Block> body) {
         static ast::LoopExpr dummy_ast;
         auto loop = hir::Loop{
-            .body = std::move(body),
-            .ast_node = &dummy_ast
+            .body = std::move(body)
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(loop)});
@@ -373,8 +361,7 @@ static std::unique_ptr<hir::Expr> createFunctionCall(hir::Function* func, std::v
         static ast::WhileExpr dummy_ast;
         auto while_expr = hir::While{
             .condition = std::move(condition),
-            .body = std::move(body),
-            .ast_node = &dummy_ast
+            .body = std::move(body)
         };
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(while_expr)});
@@ -391,7 +378,6 @@ static std::unique_ptr<hir::Expr> createBreak(std::unique_ptr<hir::Expr> value =
     auto break_expr = hir::Break();
     break_expr.value = std::move(value_opt);
     break_expr.target = target;
-    break_expr.ast_node = &dummy_ast;
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(break_expr)});
         return expr;
@@ -402,7 +388,6 @@ static std::unique_ptr<hir::Expr> createContinue(std::variant<hir::Loop*, hir::W
     static ast::ContinueExpr dummy_ast;
     auto continue_expr = hir::Continue();
     continue_expr.target = target;
-    continue_expr.ast_node = &dummy_ast;
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(continue_expr)});
         return expr;
@@ -418,7 +403,6 @@ static std::unique_ptr<hir::Expr> createReturn(std::unique_ptr<hir::Expr> value 
     auto return_expr = hir::Return();
     return_expr.value = std::move(value_opt);
     return_expr.target = target;
-    return_expr.ast_node = &dummy_ast;
         
         auto expr = std::make_unique<Expr>(hir::ExprVariant{std::move(return_expr)});
         return expr;
@@ -448,7 +432,8 @@ static std::unique_ptr<hir::Expr> createReturn(std::unique_ptr<hir::Expr> value 
     
     // Test infrastructure
     std::unique_ptr<semantic::ImplTable> impl_table;
-    std::unique_ptr<semantic::ExprChecker> expr_checker;
+    std::unique_ptr<semantic::SemanticContext> semantic_context;
+    semantic::ExprChecker* expr_checker = nullptr;
     
     // Test structures
     std::unique_ptr<StructDef> test_struct_def;
@@ -499,11 +484,8 @@ protected:
     }
     
     void setupMethodImpl() {
-        // Create dummy AST node for method with proper name
-        static ast::FunctionItem dummy_method_ast;
-        static auto method_name = std::make_unique<ast::Identifier>("test_method");
-        dummy_method_ast.name = std::make_unique<ast::Identifier>("test_method");
-        test_method->ast_node = &dummy_method_ast;
+        // Assign method name directly on the HIR node
+        test_method->name = ast::Identifier{"test_method"};
         
         // Create test method parameters
         auto method_param_local = std::make_unique<Local>();
@@ -524,6 +506,7 @@ protected:
         
         // Create associated item for the method
         auto method_copy = hir::Method();
+        method_copy.name = test_method->name;
         method_copy.self_param.is_reference = test_method->self_param.is_reference;
         method_copy.self_param.is_mutable = test_method->self_param.is_mutable;
         method_copy.params = std::move(test_method->params);
@@ -532,7 +515,6 @@ protected:
         method_copy.body = std::move(test_method->body);
         method_copy.self_local = std::move(test_method->self_local);
         method_copy.locals = std::move(test_method->locals);
-        method_copy.ast_node = test_method->ast_node;
         
         auto method_item = std::make_unique<AssociatedItem>(hir::AssociatedItemVariant{std::move(method_copy)});
         
@@ -540,7 +522,7 @@ protected:
         
         // Create dummy AST node for impl
         static ast::InherentImplItem dummy_impl_ast;
-        test_impl->ast_node = &dummy_impl_ast;
+        
         
         // Register the impl in the impl table
         impl_table->add_impl(struct_type, *test_impl);

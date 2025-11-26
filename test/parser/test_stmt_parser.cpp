@@ -96,7 +96,7 @@ TEST_F(StmtParserTest, ParsesExprWithBlockOptionalSemicolon) {
         ASSERT_NE(blk, nullptr);
     }
     {
-        auto s = parse_stmt("if true { };");
+        auto s = parse_stmt("if (true) { };");
         auto es = get_node<ExprStmt>(s);
         ASSERT_NE(es, nullptr);
         auto iff = get_node<IfExpr>(es->expr);

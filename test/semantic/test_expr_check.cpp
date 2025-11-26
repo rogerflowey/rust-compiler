@@ -281,7 +281,7 @@ TEST_F(ExprCheckTest, ErrorShiftWithNonUsizeRightOperand) {
 // Test 20: Underscore Expression
 TEST_F(ExprCheckTest, UnderscoreExpression) {
     auto underscore = hir::Underscore{
-        .ast_node = static_cast<const ast::UnderscoreExpr*>(nullptr)
+        
     };
     
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(underscore)});
@@ -296,7 +296,7 @@ TEST_F(ExprCheckTest, UnderscoreExpression) {
 TEST_F(ExprCheckTest, ErrorFuncUseNotFirstClass) {
     auto func_use = hir::FuncUse();
     func_use.def = test_function.get();
-    func_use.ast_node = static_cast<const ast::PathExpr*>(nullptr);
+    
     
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(func_use)});
     EXPECT_THROW(expr_checker->check(*expr), std::runtime_error);
@@ -306,7 +306,7 @@ TEST_F(ExprCheckTest, ErrorFuncUseNotFirstClass) {
 TEST_F(ExprCheckTest, ErrorUnresolvedIdentifier) {
     auto unresolved = hir::UnresolvedIdentifier{
         .name = ast::Identifier{"undefined"},
-        .ast_node = static_cast<const ast::PathExpr*>(nullptr)
+        
     };
     
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(unresolved)});
@@ -318,7 +318,7 @@ TEST_F(ExprCheckTest, ErrorTypeStatic) {
     auto type_static = hir::TypeStatic{
         .type = ast::Identifier{"SomeType"},
         .name = ast::Identifier{"some_item"},
-        .ast_node = static_cast<const ast::PathExpr*>(nullptr)
+        
     };
     
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(type_static)});

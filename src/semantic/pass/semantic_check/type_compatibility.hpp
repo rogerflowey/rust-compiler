@@ -31,6 +31,9 @@ namespace semantic {
 // ===== Helper Functions =====
 
 inline std::string describe_type(TypeId type) {
+    if (!type) {
+        return "<invalid type>";
+    }
     return std::visit(
         Overloaded{
             [](PrimitiveKind kind) -> std::string {

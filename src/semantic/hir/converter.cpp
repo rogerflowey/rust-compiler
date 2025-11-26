@@ -24,19 +24,19 @@ struct ExprConverter {
                 .suffix_type = lit.type,
                 .is_negative = is_negative
             },
-            .ast_node = &lit
+            .span = lit.span
         };
     }
     hir::ExprVariant operator()(const ast::BoolLiteralExpr& lit) const {
-        return hir::Literal{ .value = lit.value, .ast_node = &lit };
+        return hir::Literal{ .value = lit.value, .span = lit.span };
     }
     hir::ExprVariant operator()(const ast::CharLiteralExpr& lit) const {
-        return hir::Literal{ .value = lit.value, .ast_node = &lit };
+        return hir::Literal{ .value = lit.value, .span = lit.span };
     }
     hir::ExprVariant operator()(const ast::StringLiteralExpr& lit) const {
         return hir::Literal{
             .value = hir::Literal::String{ .value = lit.value, .is_cstyle = lit.is_cstyle },
-            .ast_node = &lit
+            .span = lit.span
         };
     }
 
@@ -48,7 +48,7 @@ struct ExprConverter {
             throw std::logic_error("Path expression with no segments found.");
         }
         if (path.path->segments.size() == 1) {
-            return hir::UnresolvedIdentifier{ .name = path.path->get_name(0).value(), .ast_node = &path };
+            return hir::UnresolvedIdentifier{ .name = path.path->get_name(0).value(), .span = path.span };
         }
         if (path.path->segments.size() == 2) {
             const auto& first_segment_id = path.path->get_name(0);
@@ -59,7 +59,7 @@ struct ExprConverter {
             return hir::TypeStatic{
                 .type = *first_segment_id,
                 .name = **second_segment_id,
-                .ast_node = &path
+                .span = path.span
             };
         }
         throw std::logic_error("Paths with more than 2 segments are not supported in HIR conversion");
@@ -74,7 +74,19 @@ struct ExprConverter {
             case ast::UnaryExpr::REFERENCE:     hir_op = hir::UnaryOp::REFERENCE; break;
             case ast::UnaryExpr::MUTABLE_REFERENCE: hir_op = hir::UnaryOp::MUTABLE_REFERENCE; break;
         }
-        return hir::UnaryOp{ .op = hir_op, .rhs = converter.convert_expr(*op.operand), .ast_node = &op };
+        auto rhs_expr = converter.convert_expr(*op.operand);
+
+        if (op.op == ast::UnaryExpr::NEGATE && rhs_expr) {
+            if (auto* literal = std::get_if<hir::Literal>(&rhs_expr->value)) {
+                if (auto* integer = std::get_if<hir::Literal::Integer>(&literal->value)) {
+                    integer->is_negative = !integer->is_negative;
+                    literal->span = op.span;
+                    return std::move(*literal);
+                }
+            }
+        }
+
+        return hir::UnaryOp{ .op = hir_op, .rhs = std::move(rhs_expr), .span = op.span };
     }
 
     hir::ExprVariant operator()(const ast::BinaryExpr& op) const {
@@ -103,7 +115,7 @@ struct ExprConverter {
             .op = hir_op,
             .lhs = converter.convert_expr(*op.left),
             .rhs = converter.convert_expr(*op.right),
-            .ast_node = &op
+            .span = op.span
         };
     }
 
@@ -112,7 +124,7 @@ struct ExprConverter {
             return hir::Assignment{
                 .lhs = converter.convert_expr(*assign.left),
                 .rhs = converter.convert_expr(*assign.right),
-                .ast_node = &assign
+                .span = assign.span
             };
         }
 
@@ -136,13 +148,13 @@ struct ExprConverter {
                 .op = hir_op,
                 .lhs = converter.convert_expr(*assign.left),
                 .rhs = converter.convert_expr(*assign.right),
-                .ast_node = &assign
+                .span = assign.span
             }
         );
         return hir::Assignment{
             .lhs = converter.convert_expr(*assign.left),
             .rhs = std::move(desugared_rhs),
-            .ast_node = &assign
+            .span = assign.span
         };
     }
 
@@ -151,7 +163,7 @@ struct ExprConverter {
             .condition = converter.convert_expr(*if_expr.condition),
             .then_block = std::make_unique<hir::Block>(converter.convert_block(*if_expr.then_branch)),
             .else_expr = if_expr.else_branch ? std::optional(converter.convert_expr(**if_expr.else_branch)) : std::nullopt,
-            .ast_node = &if_expr
+            .span = if_expr.span
         };
     }
     hir::ExprVariant operator()(const ast::LoopExpr& loop) const {
@@ -161,7 +173,7 @@ struct ExprConverter {
         // Create the loop node
         hir::Loop hir_loop{
             .body = std::make_unique<hir::Block>(std::move(hir_body)),
-            .ast_node = &loop
+            .span = loop.span
         };
         
         return hir_loop;
@@ -175,7 +187,7 @@ struct ExprConverter {
         hir::While hir_while{
             .condition = std::move(hir_condition),
             .body = std::make_unique<hir::Block>(std::move(hir_body)),
-            .ast_node = &whle
+            .span = whle.span
         };
         
         return hir_while;
@@ -184,29 +196,26 @@ struct ExprConverter {
         return hir::Return{
             .value = ret.value ? std::optional(converter.convert_expr(**ret.value)) : std::nullopt,
             .target = std::nullopt, // Will be set during post-processing
-            .ast_node = &ret
+            .span = ret.span
         };
     }
     hir::ExprVariant operator()(const ast::BreakExpr& brk) const {
         return hir::Break{
             .value = brk.value ? std::optional(converter.convert_expr(**brk.value)) : std::nullopt,
-            .target = std::nullopt, // Will be set during post-processing
-            .ast_node = &brk
+            .span = brk.span
         };
     }
     hir::ExprVariant operator()(const ast::ContinueExpr& cont) const {
         return hir::Continue{
-            .target = std::nullopt, // Will be set during post-processing
-            .ast_node = &cont
+            .span = cont.span
         };
     }
 
-    // --- Function Calls ---
     hir::ExprVariant operator()(const ast::CallExpr& call) const {
         return hir::Call{
             .callee = converter.convert_expr(*call.callee),
             .args = converter.convert_vec<hir::Expr, ast::Expr>(call.args),
-            .ast_node = &call
+            .span = call.span
         };
     }
     hir::ExprVariant operator()(const ast::MethodCallExpr& call) const {
@@ -214,28 +223,32 @@ struct ExprConverter {
             .receiver = converter.convert_expr(*call.receiver),
             .method = *call.method_name,
             .args = converter.convert_vec<hir::Expr, ast::Expr>(call.args),
-            .ast_node = &call
+            .span = call.span
         };
     }
 
     hir::ExprVariant operator()(const ast::FieldAccessExpr& access) const {
-        return hir::FieldAccess{ .base = converter.convert_expr(*access.object), .field = *access.field_name, .ast_node = &access };
+        return hir::FieldAccess{
+            .base = converter.convert_expr(*access.object),
+            .field = *access.field_name,
+            .span = access.span
+        };
     }
     hir::ExprVariant operator()(const ast::IndexExpr& index) const {
         return hir::Index{
             .base = converter.convert_expr(*index.array),
             .index = converter.convert_expr(*index.index),
-            .ast_node = &index
+            .span = index.span
         };
     }
     hir::ExprVariant operator()(const ast::ArrayInitExpr& arr) const {
-        return hir::ArrayLiteral{ .elements = converter.convert_vec<hir::Expr, ast::Expr>(arr.elements), .ast_node = &arr };
+        return hir::ArrayLiteral{ .elements = converter.convert_vec<hir::Expr, ast::Expr>(arr.elements), .span = arr.span };
     }
     hir::ExprVariant operator()(const ast::ArrayRepeatExpr& arr) const {
         return hir::ArrayRepeat{
             .value = converter.convert_expr(*arr.value),
             .count = converter.convert_expr(*arr.count),
-            .ast_node = &arr
+            .span = arr.span
         };
     }
     hir::ExprVariant operator()(const ast::StructExpr& s) const {
@@ -256,12 +269,12 @@ struct ExprConverter {
         return hir::StructLiteral{
             .struct_path = s.path->get_name(0).value(),
             .fields = std::move(syntactic_fields),
-            .ast_node = &s
+            .span = s.span
         };
     }
 
     hir::ExprVariant operator()(const ast::CastExpr& cast) const {
-        return hir::Cast{ .expr = converter.convert_expr(*cast.expr), .target_type = convert_type(converter, *cast.type), .ast_node = &cast };
+        return hir::Cast{ .expr = converter.convert_expr(*cast.expr), .target_type = convert_type(converter, *cast.type), .span = cast.span };
     }
     hir::ExprVariant operator()(const ast::BlockExpr& block) const {
         // Block conversion doesn't need control flow context changes
@@ -271,7 +284,7 @@ struct ExprConverter {
         return std::move(converter.convert_expr(*grouped.expr)->value);
     }
     hir::ExprVariant operator()(const ast::UnderscoreExpr& underscore) const {
-        return hir::Underscore{ .ast_node = &underscore };
+        return hir::Underscore{ .span = underscore.span };
     }
 };
 
@@ -285,57 +298,63 @@ struct TypeConverter {
         }
         return std::make_unique<hir::DefType>(hir::DefType{
             .def = path_type.path->get_name(0).value(),
-            .ast_node = &path_type
+            .span = path_type.span
         });
     }
     hir::TypeNodeVariant operator()(const ast::PrimitiveType& prim_type) const {
         return std::make_unique<hir::PrimitiveType>(hir::PrimitiveType{
             .kind = prim_type.kind,
-            .ast_node = &prim_type
+            .span = prim_type.span
         });
     }
     hir::TypeNodeVariant operator()(const ast::ArrayType& array_type) const {
         return std::make_unique<hir::ArrayType>(hir::ArrayType{
             .element_type = convert_type(converter, *array_type.element_type), // This now correctly initializes a TypeAnnotation
             .size = converter.convert_expr(*array_type.size),
-            .ast_node = &array_type
+            .span = array_type.span
         });
     }
     hir::TypeNodeVariant operator()(const ast::ReferenceType& ref_type) const {
         return std::make_unique<hir::ReferenceType>(hir::ReferenceType{
             .referenced_type = convert_type(converter, *ref_type.referenced_type), // This now correctly initializes a TypeAnnotation
             .is_mutable = ref_type.is_mutable,
-            .ast_node = &ref_type
+            .span = ref_type.span
         });
     }
     hir::TypeNodeVariant operator()(const ast::UnitType& unit_type) const {
-        return std::make_unique<hir::UnitType>(hir::UnitType{ .ast_node = &unit_type });
+        return std::make_unique<hir::UnitType>(hir::UnitType{ .span = unit_type.span });
     }
 };
 
 static std::unique_ptr<hir::TypeNode> convert_type(AstToHirConverter& converter, const ast::Type& ast_type) {
     TypeConverter visitor{ converter, ast_type };
-    return std::make_unique<hir::TypeNode>(hir::TypeNode{ .value = std::visit(visitor, ast_type.value) });
+    return std::make_unique<hir::TypeNode>(hir::TypeNode{ .value = std::visit(visitor, ast_type.value), .span = ast_type.span });
 }
 
 static std::unique_ptr<hir::Pattern> convert_pattern(const ast::Pattern& ast_pattern) {
     if (const auto* ident_pattern = std::get_if<ast::IdentifierPattern>(&ast_pattern.value)) {
-        return std::make_unique<hir::Pattern>(hir::BindingDef(
+        auto pattern = std::make_unique<hir::Pattern>(hir::BindingDef(
             hir::BindingDef::Unresolved{
                 .is_mutable = ident_pattern->is_mut,
                 .is_ref = ident_pattern->is_ref,
                 .name = *ident_pattern->name,
-            },
-            ident_pattern
+            }
         ));
+        pattern->span = ident_pattern->span;
+        if (auto* binding = std::get_if<hir::BindingDef>(&pattern->value)) {
+            binding->span = ident_pattern->span;
+        }
+        return pattern;
     }
 
     if (const auto* ref_pattern = std::get_if<ast::ReferencePattern>(&ast_pattern.value)) {
-        return std::make_unique<hir::Pattern>(hir::ReferencePattern{
+        auto pattern = std::make_unique<hir::Pattern>(hir::ReferencePattern{
             .subpattern = convert_pattern(*ref_pattern->subpattern),
             .is_mutable = ref_pattern->is_mut,
-            .ast_node = ref_pattern,
+            .span = ref_pattern->span
         });
+        pattern->span = ref_pattern->span;
+        return pattern;
     }
     
     throw std::logic_error("Unsupported pattern type in HIR conversion");
@@ -350,7 +369,7 @@ struct StmtConverter {
             .pattern = convert_pattern(*let_stmt.pattern),
             .type_annotation = std::nullopt,
             .initializer = nullptr,
-            .ast_node = &let_stmt
+            .span = let_stmt.span
         };
 
         if (let_stmt.type_annotation) {
@@ -364,15 +383,15 @@ struct StmtConverter {
     }
     hir::StmtVariant operator()(const ast::ExprStmt& expr_stmt) const {
         auto hir_expr = converter.convert_expr(*expr_stmt.expr);
-        return hir::ExprStmt { .expr = std::move(hir_expr), .ast_node = &expr_stmt };
+        return hir::ExprStmt { .expr = std::move(hir_expr), .span = expr_stmt.span };
     }
     hir::StmtVariant operator()(const ast::ItemStmt&) const {
         // Item statements are handled by hoisting them into the block's item list.
         // Here we produce nothing.
-        return hir::ExprStmt{ .expr = nullptr, .ast_node = nullptr };
+        return hir::ExprStmt{ .expr = nullptr };
     }
     hir::StmtVariant operator()(const ast::EmptyStmt&) const {
-        return hir::ExprStmt{ .expr = nullptr, .ast_node = nullptr };
+        return hir::ExprStmt{ .expr = nullptr };
     }
 };
 
@@ -382,6 +401,9 @@ struct ItemConverter {
     const ast::Item& ast_item;
 
     hir::ItemVariant operator()(const ast::FunctionItem& fn) const {
+        if (!fn.name) {
+            throw std::logic_error("Function item missing name during HIR conversion");
+        }
         std::vector<std::unique_ptr<hir::Pattern>> params;
         std::vector<std::optional<hir::TypeAnnotation>> param_type_annotations;
         params.reserve(fn.params.size());
@@ -404,8 +426,9 @@ struct ItemConverter {
             fn.return_type ? std::optional(convert_type(converter, **fn.return_type)) : std::nullopt,
             nullptr, // Will be set after conversion
             {}, // Initialized empty
-            &fn
+            *fn.name
         );
+        hir_function.span = fn.span;
         
         // Convert the body
         if (fn.body) {
@@ -415,6 +438,9 @@ struct ItemConverter {
         return hir_function;
     }
     hir::ItemVariant operator()(const ast::StructItem& s) const {
+        if (!s.name) {
+            throw std::logic_error("Struct item missing name during HIR conversion");
+        }
         std::vector<semantic::Field> fields;
         std::vector<hir::TypeAnnotation> field_types;
         fields.reserve(s.fields.size());
@@ -426,29 +452,40 @@ struct ItemConverter {
             fields.push_back(semantic::Field{ .name = *f.first, .type = std::nullopt });
             field_types.emplace_back(hir::TypeAnnotation(detail::convert_type(converter, *f.second)));
         }
-        return hir::StructDef{ .fields = std::move(fields), .field_type_annotations = std::move(field_types), .ast_node = &s };
+        return hir::StructDef{ .name = *s.name, .fields = std::move(fields), .field_type_annotations = std::move(field_types), .span = s.span };
     }
     hir::ItemVariant operator()(const ast::EnumItem& e) const {
+        if (!e.name) {
+            throw std::logic_error("Enum item missing name during HIR conversion");
+        }
         std::vector<semantic::EnumVariant> variants;
         variants.reserve(e.variants.size());
         for(const auto& v : e.variants) {
             variants.push_back(semantic::EnumVariant{ .name = *v });
         }
-        return hir::EnumDef{ .variants = std::move(variants), .ast_node = &e };
+        return hir::EnumDef{ .name = *e.name, .variants = std::move(variants), .span = e.span };
     }
     hir::ItemVariant operator()(const ast::ConstItem& cnst) const {
+        if (!cnst.name) {
+            throw std::logic_error("Const item missing name during HIR conversion");
+        }
         return hir::ConstDef{
+            .name = *cnst.name,
             .expr = converter.convert_expr(*cnst.value),
             .const_value = std::nullopt, // Initialize as empty, will be filled later
             .type = cnst.type ? std::optional(convert_type(converter, *cnst.type)) : std::nullopt,
-            .ast_node = &cnst
+            .span = cnst.span
         };
     }
 
     hir::ItemVariant operator()(const ast::TraitItem& trait) const {
+        if (!trait.name) {
+            throw std::logic_error("Trait item missing name during HIR conversion");
+        }
         return hir::Trait{
+            .name = *trait.name,
             .items = converter.convert_vec<hir::Item, ast::Item>(trait.items),
-            .ast_node = &trait
+            .span = trait.span
         };
     }
 
@@ -458,12 +495,13 @@ struct ItemConverter {
         for (const auto& item_ptr : impl.items) {
             assoc_items.push_back(converter.convert_associated_item(*item_ptr));
         }
-        return hir::Impl(
+        auto hir_impl = hir::Impl(
             *impl.trait_name,
             convert_type(converter, *impl.for_type),
-            std::move(assoc_items),
-            &impl
+            std::move(assoc_items)
         );
+        hir_impl.span = impl.span;
+        return hir_impl;
     }
 
     hir::ItemVariant operator()(const ast::InherentImplItem& impl) const {
@@ -472,12 +510,13 @@ struct ItemConverter {
         for (const auto& item_ptr : impl.items) {
             assoc_items.push_back(converter.convert_associated_item(*item_ptr));
         }
-        return hir::Impl(
+        auto hir_impl = hir::Impl(
             std::nullopt,
             convert_type(converter, *impl.for_type),
-            std::move(assoc_items),
-            &impl
+            std::move(assoc_items)
         );
+        hir_impl.span = impl.span;
+        return hir_impl;
     }
 
     template<typename T>
@@ -524,12 +563,17 @@ std::unique_ptr<hir::Program> AstToHirConverter::convert_program(const ast::Prog
 std::unique_ptr<hir::Item> AstToHirConverter::convert_item(const ast::Item& item) {
     detail::ItemConverter visitor{ *this, item };
     hir::ItemVariant hir_variant = std::visit(visitor, item.value);
-    return std::make_unique<hir::Item>(std::move(hir_variant));
+    auto hir_item = std::make_unique<hir::Item>(std::move(hir_variant));
+    hir_item->span = item.span;
+    return hir_item;
 }
 
 std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(const ast::Item& item) {
     // Handle FunctionItem -> hir::Function (associated fn) or hir::Method
     if (const auto* fn_item = std::get_if<ast::FunctionItem>(&item.value)) {
+    if (!fn_item->name) {
+        throw std::logic_error("Function item missing name during HIR conversion");
+    }
     std::vector<std::unique_ptr<hir::Pattern>> params;
     std::vector<std::optional<hir::TypeAnnotation>> param_type_annotations;
     params.reserve(fn_item->params.size());
@@ -553,16 +597,17 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
         hir::Method::SelfParam hir_self;
         hir_self.is_reference = self.is_reference;
         hir_self.is_mutable = self.is_mutable;
-        hir_self.ast_node = &self;
+        hir_self.span = self.span;
 
         hir::Method hir_method(
+            *fn_item->name,
             std::move(hir_self),
             std::move(params),
             std::move(param_type_annotations),
             std::move(return_type),
-            nullptr, // Will be set after conversion
-            fn_item
+            nullptr // Will be set after conversion
         );
+        hir_method.span = fn_item->span;
         
         // Convert the body
         if (fn_item->body) {
@@ -577,8 +622,9 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
             std::move(return_type),
             nullptr, // Will be set after conversion
             {}, // Initialized empty
-            fn_item
+            *fn_item->name
         );
+        hir_fn.span = fn_item->span;
         
         // Convert the body
         if (fn_item->body) {
@@ -591,11 +637,15 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
 
     // Handle ConstItem -> hir::ConstDef
     if (const auto* cnst_item = std::get_if<ast::ConstItem>(&item.value)) {
+        if (!cnst_item->name) {
+            throw std::logic_error("Const item missing name during HIR conversion");
+        }
         hir::ConstDef hir_cnst{
+            .name = *cnst_item->name,
             .expr = convert_expr(*cnst_item->value),
             .const_value = std::nullopt, // Initialize as empty, will be filled later
             .type = cnst_item->type ? std::optional(detail::convert_type(*this, *cnst_item->type)) : std::nullopt,
-            .ast_node = cnst_item
+            .span = cnst_item->span
         };
         return std::make_unique<hir::AssociatedItem>(std::move(hir_cnst));
     }
@@ -612,12 +662,14 @@ std::unique_ptr<hir::Stmt> AstToHirConverter::convert_stmt(const ast::Statement&
         return nullptr;
     }
 
-    return std::make_unique<hir::Stmt>(std::move(hir_variant));
+    auto hir_stmt = std::make_unique<hir::Stmt>(std::move(hir_variant));
+    hir_stmt->span = stmt.span;
+    return hir_stmt;
 }
 
 hir::Block AstToHirConverter::convert_block(const ast::BlockExpr& block) {
     hir::Block hir_block;
-    hir_block.ast_node = &block;
+    hir_block.span = block.span;
 
     for (const auto& stmt_ptr : block.statements) {
         const auto& ast_stmt = *stmt_ptr;
@@ -646,5 +698,6 @@ hir::Block AstToHirConverter::convert_block(const ast::BlockExpr& block) {
 std::unique_ptr<hir::Expr> AstToHirConverter::convert_expr(const ast::Expr& expr) {
     detail::ExprConverter visitor{ *this, expr };
     hir::ExprVariant hir_variant = std::visit(visitor, expr.value);
-    return std::make_unique<hir::Expr>(std::move(hir_variant));
+    auto hir_expr = std::make_unique<hir::Expr>(std::move(hir_variant));
+    return hir_expr;
 }

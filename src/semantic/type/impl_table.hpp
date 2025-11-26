@@ -83,6 +83,7 @@ inline void ImplTable::add_impl(TypeId type, hir::Impl &impl_symbol) {
 inline hir::Method *ImplTable::get_array_len_method() {
     static hir::Method method = [] {
         hir::Method m{};
+        m.name = ast::Identifier("len");
         m.self_param.is_reference = true;
         m.self_param.is_mutable = false;
         m.return_type = hir::TypeAnnotation{get_typeID(Type{PrimitiveKind::USIZE})};

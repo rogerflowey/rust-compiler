@@ -244,14 +244,14 @@ TEST_F(ExprParserTest, AssignmentIsRightAssociative) {
 
 TEST_F(ExprParserTest, IfWhileLoopAndBlock) {
   {
-    auto e = parse_expr("if true { 1i32 }");
+    auto e = parse_expr("if (true) { 1i32 }");
     auto iff = get_node<IfExpr>(e);
     ASSERT_NE(iff, nullptr);
     ASSERT_NE(iff->then_branch, nullptr);
     ASSERT_FALSE(iff->else_branch.has_value());
   }
   {
-    auto e = parse_expr("if true { 1i32 } else { 2i32 }");
+    auto e = parse_expr("if (true) { 1i32 } else { 2i32 }");
     auto iff = get_node<IfExpr>(e);
     ASSERT_NE(iff, nullptr);
     ASSERT_NE(iff->then_branch, nullptr);
@@ -433,7 +433,7 @@ TEST_F(ExprParserTest, BlockAsExpressionValue) {
         ASSERT_TRUE(b->final_expr.has_value());
     }
     {
-        auto e = parse_expr("if { let x = true; x } { 1i32 } else { 0i32 }");
+        auto e = parse_expr("if ({ let x = true; x }) { 1i32 } else { 0i32 }");
         auto i = get_node<IfExpr>(e);
         ASSERT_NE(i, nullptr);
         auto cond_block = get_node<BlockExpr>(i->condition);
@@ -442,7 +442,7 @@ TEST_F(ExprParserTest, BlockAsExpressionValue) {
 }
 
 TEST_F(ExprParserTest, BlockFinalExprAbsorbsTrailingWithBlock) {
-    auto e = parse_expr("{ if true { 1i32 } }");
+    auto e = parse_expr("{ if (true) { 1i32 } }");
     auto block = get_node<BlockExpr>(e);
     ASSERT_NE(block, nullptr);
     EXPECT_TRUE(block->statements.empty());
@@ -453,8 +453,8 @@ TEST_F(ExprParserTest, BlockFinalExprAbsorbsTrailingWithBlock) {
 
 TEST_F(ExprParserTest, BlockFinalExprAbsorbsTrailingIfElseChain) {
   auto e = parse_expr(
-    "{ if low == high { return a[low]; } let p: usize = partition(a, low, high); "
-    "if k == p { a[p] } else if k < p { select_k(a, low, p - 1, k) } else { select_k(a, p + 1, high, k) } }"
+    "{ if (low == high) { return a[low]; } let p: usize = partition(a, low, high); "
+    "if (k == p) { a[p] } else if (k < p) { select_k(a, low, p - 1, k) } else { select_k(a, p + 1, high, k) } }"
   );
   auto block = get_node<BlockExpr>(e);
   ASSERT_NE(block, nullptr);
