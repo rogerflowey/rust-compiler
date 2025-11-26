@@ -48,6 +48,8 @@ void print_error_context(const parsec::ParseError& error,
         } else {
             std::cerr << "Unexpected end of input." << std::endl;
         }
+        std::cerr << " (no location information)" << std::endl;
+        return;
     } else {
         auto loc = sources.to_line_col(error_span.file, error_span.start);
         std::string token_value = error_token ? error_token->value : std::string("<input>");
@@ -74,6 +76,7 @@ void print_lexer_error(const LexerError& error, const span::SourceManager& sourc
     std::cerr << "Error: " << error.what() << std::endl;
     auto error_span = error.span();
     if (!error_span.is_valid()) {
+        std::cerr << " (no location information)" << std::endl;
         return;
     }
 
@@ -93,6 +96,7 @@ void print_semantic_error(const SemanticError& error,
     std::cerr << "Error: " << error.what() << std::endl;
     auto error_span = error.span();
     if (!error_span.is_valid()) {
+        std::cerr << " (no location information)" << std::endl;
         return;
     }
 
@@ -156,80 +160,29 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Print HIR after conversion
-        std::cout << "\n=== HIR after Conversion ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
-
         // Phase 4: Name Resolution
         semantic::ImplTable impl_table;
         semantic::inject_predefined_methods(impl_table);
         semantic::NameResolver name_resolver(impl_table);
-        try {
-            name_resolver.visit_program(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Name resolution failed - " << e.what() << std::endl;
-            return 1;
-        }
+        name_resolver.visit_program(*hir_program);
 
         semantic::SemanticContext semantic_ctx(impl_table);
 
-        // Print HIR after name resolution
-        std::cout << "\n=== HIR after Name Resolution ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
-
         // Phase 5: Trait Validation
         semantic::TraitValidator trait_validator(semantic_ctx);
-        try {
-            trait_validator.validate(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Trait validation failed - " << e.what() << std::endl;
-            return 1;
-        }
-
-        // Print HIR after trait validation
-        std::cout << "\n=== HIR after Trait Validation ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
+        trait_validator.validate(*hir_program);
 
         // Phase 7: Control Flow Linking
         ControlFlowLinker control_flow_linker;
-        try {
-            control_flow_linker.link_control_flow(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Control flow linking failed - " << e.what() << std::endl;
-            return 1;
-        }
-
-        // Print HIR after control flow linking
-        std::cout << "\n=== HIR after Control Flow Linking ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
+        control_flow_linker.link_control_flow(*hir_program);
 
         // Phase 8: Semantic Checking
         semantic::SemanticCheckVisitor semantic_checker(semantic_ctx);
-        try {
-            // Apply comprehensive expression checking to the entire program
-            semantic_checker.check_program(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Semantic checking failed - " << e.what() << std::endl;
-            return 1;
-        }
-
-        // Print final HIR after semantic checking
-        std::cout << "\n=== Final HIR after Semantic Checking ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
+        semantic_checker.check_program(*hir_program);
 
         // Phase 9: Exit Check
         semantic::ExitCheckVisitor exit_checker;
-        try {
-            exit_checker.check_program(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Exit check failed - " << e.what() << std::endl;
-            return 1;
-        }
+        exit_checker.check_program(*hir_program);
 
         std::cout << "Success: Semantic analysis completed successfully" << std::endl;
         return 0;

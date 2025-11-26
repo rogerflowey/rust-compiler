@@ -26,7 +26,7 @@ hir::TypeAnnotation make_path_type_annotation(const std::string &name) {
   auto type_node = std::make_unique<hir::TypeNode>();
   auto def_type = hir::DefType();
   def_type.def = ast::Identifier{name};
-  def_type.ast_node = nullptr;
+  
   type_node->value = std::make_unique<hir::DefType>(std::move(def_type));
   return hir::TypeAnnotation(std::move(type_node));
 }
@@ -37,16 +37,16 @@ make_type_static_expr(const std::string &type_name,
   auto type_static = hir::TypeStatic();
   type_static.type = ast::Identifier{type_name};
   type_static.name = ast::Identifier{member_name};
-  type_static.ast_node = nullptr;
+  
   return std::make_unique<hir::Expr>(hir::TypeStatic(std::move(type_static)));
 }
 
 std::unique_ptr<hir::Pattern> make_binding_pattern(const std::string &name) {
   auto unresolved =
       hir::BindingDef::Unresolved{false, false, ast::Identifier{name}};
-  auto binding_def = hir::BindingDef(std::move(unresolved), nullptr);
-  return std::make_unique<hir::Pattern>(
-      hir::PatternVariant{std::move(binding_def)});
+    auto binding_def = hir::BindingDef(std::move(unresolved));
+    return std::make_unique<hir::Pattern>(
+            hir::PatternVariant{std::move(binding_def)});
 }
 
 hir::LetStmt make_let_stmt(std::unique_ptr<hir::Pattern> pattern,
@@ -56,14 +56,14 @@ hir::LetStmt make_let_stmt(std::unique_ptr<hir::Pattern> pattern,
   let_stmt.pattern = std::move(pattern);
   let_stmt.type_annotation = std::move(type_annotation);
   let_stmt.initializer = std::move(initializer);
-  let_stmt.ast_node = nullptr;
+  
   return let_stmt;
 }
 
 hir::ExprStmt make_expr_stmt(std::unique_ptr<hir::Expr> expr) {
   auto expr_stmt = hir::ExprStmt();
   expr_stmt.expr = std::move(expr);
-  expr_stmt.ast_node = nullptr;
+  
   return expr_stmt;
 }
 
@@ -71,19 +71,17 @@ std::unique_ptr<hir::Expr> make_integer_literal(uint64_t value) {
   auto integer_val = hir::Literal::Integer();
   integer_val.value = value;
   integer_val.suffix_type = ast::IntegerLiteralExpr::NOT_SPECIFIED;
-  hir::Literal::Value literal_value = std::move(integer_val);
-  hir::Literal::AstNode ast_node =
-      static_cast<const ast::IntegerLiteralExpr *>(nullptr);
-  auto literal = hir::Literal{.value = std::move(literal_value),
-                              .ast_node = std::move(ast_node)};
-  return std::make_unique<hir::Expr>(hir::Literal(std::move(literal)));
+    hir::Literal literal{
+            hir::Literal::Value{std::move(integer_val)},
+            span::Span::invalid()};
+    return std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
 }
 
 std::unique_ptr<hir::Expr> make_boolean_literal(bool value) {
-    hir::Literal literal{.value = value,
-                                             .ast_node = static_cast<const ast::BoolLiteralExpr *>(
-                                                     nullptr)};
-    return std::make_unique<hir::Expr>(hir::Literal(std::move(literal)));
+    hir::Literal literal{
+            hir::Literal::Value{value},
+            span::Span::invalid()};
+    return std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
 }
 
 TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
@@ -96,7 +94,10 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   auto *struct_ast_ptr = struct_ast.get();
   arena.struct_items.push_back(std::move(struct_ast));
   program->items.push_back(std::make_unique<hir::Item>(hir::StructDef{
-      .fields = {}, .field_type_annotations = {}, .ast_node = struct_ast_ptr}));
+      .name = *struct_ast_ptr->name,
+      .fields = {},
+      .field_type_annotations = {},
+      .span = span::Span::invalid()}));
   auto *struct_def_ptr =
       &std::get<hir::StructDef>(program->items.back()->value);
 
@@ -107,9 +108,10 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   auto *enum_ast_ptr = enum_ast.get();
   arena.enum_items.push_back(std::move(enum_ast));
   program->items.push_back(std::make_unique<hir::Item>(hir::EnumDef{
+      .name = *enum_ast_ptr->name,
       .variants = std::vector<semantic::EnumVariant>{semantic::EnumVariant{
           .name = *enum_ast_ptr->variants.front()}},
-      .ast_node = enum_ast_ptr}));
+      .span = span::Span::invalid()}));
   auto *enum_def_ptr = &std::get<hir::EnumDef>(program->items.back()->value);
 
   // fn main() { ... }
@@ -128,7 +130,7 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   auto foo_call = hir::Call();
   foo_call.callee = std::move(foo_callee);
     foo_call.args.clear();
-  foo_call.ast_node = nullptr;
+  
   auto foo_call_expr =
       std::make_unique<hir::Expr>(hir::Call(std::move(foo_call)));
   main_block->stmts.push_back(std::make_unique<hir::Stmt>(
@@ -144,21 +146,20 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   // foo;
   auto foo_unresolved = hir::UnresolvedIdentifier();
   foo_unresolved.name = ast::Identifier{"foo"};
-  foo_unresolved.ast_node = nullptr;
+  
   auto foo_expr = std::make_unique<hir::Expr>(
       hir::UnresolvedIdentifier(std::move(foo_unresolved)));
   main_block->stmts.push_back(
       std::make_unique<hir::Stmt>(make_expr_stmt(std::move(foo_expr))));
 
-  auto main_fn = hir::Function({}, {}, std::nullopt, std::move(main_block), {},
-                               main_fn_ast_ptr);
+    auto main_fn = hir::Function({}, {}, std::nullopt, std::move(main_block), {},
+                                                             *main_fn_ast_ptr->name);
   program->items.push_back(
       std::make_unique<hir::Item>(hir::Function(std::move(main_fn))));
   auto *main_fn_ptr = &std::get<hir::Function>(program->items.back()->value);
 
   // impl Foo { fn new() {} }
   auto impl_ast = std::make_unique<ast::InherentImplItem>();
-  auto *impl_ast_ptr = impl_ast.get();
   arena.impl_items.push_back(std::move(impl_ast));
 
   auto assoc_fn_ast = std::make_unique<ast::FunctionItem>();
@@ -167,7 +168,7 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   arena.function_items.push_back(std::move(assoc_fn_ast));
 
   auto assoc_fn =
-      hir::Function({}, {}, std::nullopt, nullptr, {}, assoc_fn_ast_ptr);
+      hir::Function({}, {}, std::nullopt, nullptr, {}, *assoc_fn_ast_ptr->name);
   auto assoc_item =
       std::make_unique<hir::AssociatedItem>(hir::Function(std::move(assoc_fn)));
   auto *assoc_fn_ptr = &std::get<hir::Function>(assoc_item->value);
@@ -175,12 +176,12 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   auto impl_type_node = std::make_unique<hir::TypeNode>();
   auto impl_def_type = hir::DefType();
   impl_def_type.def = ast::Identifier{"Foo"};
-  impl_def_type.ast_node = nullptr;
+  
   impl_type_node->value =
       std::make_unique<hir::DefType>(std::move(impl_def_type));
 
   auto impl =
-      hir::Impl(std::nullopt, std::move(impl_type_node), {}, impl_ast_ptr);
+      hir::Impl(std::nullopt, std::move(impl_type_node), {});
   program->items.push_back(
       std::make_unique<hir::Item>(hir::Impl(std::move(impl))));
   auto *impl_ptr = &std::get<hir::Impl>(program->items.back()->value);
@@ -268,14 +269,14 @@ TEST(NameResolutionTest, ReportsUseBeforeBindingInLet) {
   auto pattern = make_binding_pattern("x");
   auto x_unresolved = hir::UnresolvedIdentifier();
   x_unresolved.name = ast::Identifier{"x"};
-  x_unresolved.ast_node = nullptr;
+  
   auto initializer = std::make_unique<hir::Expr>(
       hir::UnresolvedIdentifier(std::move(x_unresolved)));
   block->stmts.push_back(std::make_unique<hir::Stmt>(
       make_let_stmt(std::move(pattern), std::nullopt, std::move(initializer))));
 
   auto fn =
-      hir::Function({}, {}, std::nullopt, std::move(block), {}, fn_ast_ptr);
+      hir::Function({}, {}, std::nullopt, std::move(block), {}, *fn_ast_ptr->name);
   program->items.push_back(
       std::make_unique<hir::Item>(hir::Function(std::move(fn))));
 
@@ -304,21 +305,21 @@ TEST(NameResolutionTest, RejectsUseOfLoopScopedLetOutsideLoop) {
   auto while_expr = hir::While();
   while_expr.condition = make_boolean_literal(true);
   while_expr.body = std::move(while_body);
-  while_expr.ast_node = nullptr;
+  
   fn_block->stmts.push_back(std::make_unique<hir::Stmt>(make_expr_stmt(
       std::make_unique<hir::Expr>(hir::While(std::move(while_expr))))));
 
   auto result_pattern = make_binding_pattern("result");
   auto tmp_unresolved = hir::UnresolvedIdentifier();
   tmp_unresolved.name = ast::Identifier{"tmp"};
-  tmp_unresolved.ast_node = nullptr;
+  
   auto tmp_expr = std::make_unique<hir::Expr>(
       hir::UnresolvedIdentifier(std::move(tmp_unresolved)));
   fn_block->stmts.push_back(std::make_unique<hir::Stmt>(make_let_stmt(
       std::move(result_pattern), std::nullopt, std::move(tmp_expr))));
 
   auto fn =
-      hir::Function({}, {}, std::nullopt, std::move(fn_block), {}, fn_ast_ptr);
+      hir::Function({}, {}, std::nullopt, std::move(fn_block), {}, *fn_ast_ptr->name);
   program->items.push_back(
       std::make_unique<hir::Item>(hir::Function(std::move(fn))));
 
@@ -337,11 +338,13 @@ TEST(NameResolutionTest, ResolvesMethodLocals) {
   auto *struct_ast_ptr = struct_ast.get();
   arena.struct_items.push_back(std::move(struct_ast));
   program->items.push_back(std::make_unique<hir::Item>(hir::StructDef{
-      .fields = {}, .field_type_annotations = {}, .ast_node = struct_ast_ptr}));
+      .name = *struct_ast_ptr->name,
+      .fields = {},
+      .field_type_annotations = {},
+      .span = span::Span::invalid()}));
 
   // impl Foo { fn update(&self) { let tmp = 42; tmp; } }
   auto impl_ast = std::make_unique<ast::InherentImplItem>();
-  auto *impl_ast_ptr = impl_ast.get();
   arena.impl_items.push_back(std::move(impl_ast));
 
   auto method_block = std::make_unique<hir::Block>();
@@ -351,7 +354,7 @@ TEST(NameResolutionTest, ResolvesMethodLocals) {
       std::move(tmp_pattern), std::nullopt, std::move(tmp_initializer))));
   auto tmp_unresolved = hir::UnresolvedIdentifier();
   tmp_unresolved.name = ast::Identifier{"tmp"};
-  tmp_unresolved.ast_node = nullptr;
+  
   auto tmp_expr = std::make_unique<hir::Expr>(
       hir::UnresolvedIdentifier(std::move(tmp_unresolved)));
   method_block->stmts.push_back(
@@ -366,17 +369,20 @@ TEST(NameResolutionTest, ResolvesMethodLocals) {
     auto self_param = hir::Method::SelfParam();
     self_param.is_reference = true;
     self_param.is_mutable = false;
-    self_param.ast_node = nullptr;
+    
     std::vector<std::unique_ptr<hir::Pattern>> method_params;
     std::vector<std::optional<hir::TypeAnnotation>> method_param_annotations;
-    auto method_item = std::make_unique<hir::AssociatedItem>(
-            hir::Method(std::move(self_param), std::move(method_params),
-                                    std::move(method_param_annotations), std::nullopt,
-                                    std::move(method_block), method_ast_ptr));
+        auto method_item = std::make_unique<hir::AssociatedItem>(
+            hir::Method(*method_ast_ptr->name,
+                std::move(self_param),
+                std::move(method_params),
+                std::move(method_param_annotations),
+                std::nullopt,
+                std::move(method_block)));
 
   auto impl = std::make_unique<hir::Item>(hir::Impl{
       std::nullopt, make_path_type_annotation("Foo"),
-      std::vector<std::unique_ptr<hir::AssociatedItem>>{}, impl_ast_ptr});
+      std::vector<std::unique_ptr<hir::AssociatedItem>>{}});
   auto *impl_ptr = &std::get<hir::Impl>(impl->value);
   impl_ptr->items.push_back(std::move(method_item));
   auto *method_ptr = &std::get<hir::Method>(impl_ptr->items.back()->value);

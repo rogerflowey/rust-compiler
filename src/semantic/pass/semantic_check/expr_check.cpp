@@ -32,17 +32,11 @@ T& mut_ptr(const T* ptr, const char* description) {
 }
 
 std::string get_function_display_name(const hir::Function &fn) {
-  if (fn.ast_node && fn.ast_node->name) {
-    return fn.ast_node->name->name;
-  }
-  return std::string{"<function>"};
+  return fn.name.name.empty() ? std::string{"<function>"} : fn.name.name;
 }
 
 std::string get_const_display_name(const hir::ConstDef &def) {
-  if (def.ast_node && def.ast_node->name) {
-    return def.ast_node->name->name;
-  }
-  return std::string{"<const>"};
+  return def.name.name.empty() ? std::string{"<const>"} : def.name.name;
 }
 
 } // namespace
@@ -109,7 +103,9 @@ ExprInfo ExprChecker::check(hir::Literal &expr, TypeExpectation exp) {
                      break;
                    }
 
-                     overflow_int_literal_check(integer);
+                     if (auto overflow_err = overflow_int_literal_check(integer)) {
+                       throw_in_context(std::string(overflow_err->message), expr.span);
+                     }
 
                      auto literal_const = const_eval::literal_value(expr, type);
                      return ExprInfo{.type = type,
@@ -287,9 +283,17 @@ ExprInfo ExprChecker::check(hir::Index &expr, TypeExpectation) {
     base_info = check(*expr.base, TypeExpectation::none());
   }
 
+  if (!base_info.has_type || base_info.type == invalid_type_id) {
+    throw_in_context(
+        "Base type cannot be determined.",
+        expr.span);
+  }
+
   auto array_type = std::get_if<ArrayType>(&base_info.type->value);
   if (!array_type) {
-    throw_in_context("Index base must be an array", expr.span);
+    throw_in_context("Index base must be an array (found " +
+                         describe_type(base_info.type) + ")",
+                     expr.span);
   }
 
   TypeId usize_type = get_typeID(Type{PrimitiveKind::USIZE});
@@ -939,7 +943,8 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
     // Transform HIR to insert explicit reference operation
     expr.receiver = transform_helper::apply_reference(
         std::move(expr.receiver), method_def->self_param.is_mutable);
-    final_receiver_info = check(*expr.receiver, TypeExpectation::none());
+    final_receiver_info =
+        check(*expr.receiver, TypeExpectation::exact(expected_receiver_type));
   }
 
   // Verify receiver type compatibility with method's self parameter
@@ -1269,7 +1274,7 @@ ExprInfo ExprChecker::check(hir::Block &expr, TypeExpectation exp) {
 
   for (const auto &stmt : expr.stmts) {
     std::visit(
-        Overloaded{[this, &stmt_infos](hir::LetStmt &let) {
+      Overloaded{[this, &stmt_infos, &expr](hir::LetStmt &let) {
                      if (!let.initializer) {
                        throw_in_context("Let statement must have initializer", expr.span);
                      }
@@ -1287,11 +1292,11 @@ ExprInfo ExprChecker::check(hir::Block &expr, TypeExpectation exp) {
                        if (!init_info.has_type ||
                            !is_assignable_to(init_info.type, resolved_type)) {
                          throw_in_context("Let initializer type doesn't match "
-                                          "annotation", expr.span);
+                                          "annotation", let.span);
                        }
                      } else {
                        if (!init_info.has_type) {
-                         throw_in_context("Cannot infer type for let initializer", expr.span);
+                         throw_in_context("Cannot infer type for let initializer", let.span);
                        }
                        resolved_type = init_info.type;
                        let.type_annotation = hir::TypeAnnotation(resolved_type);

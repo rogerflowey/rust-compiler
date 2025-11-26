@@ -29,6 +29,14 @@ struct Span {
     }
 };
 
+constexpr bool operator==(const Span &lhs, const Span &rhs) {
+    return lhs.file == rhs.file && lhs.start == rhs.start && lhs.end == rhs.end;
+}
+
+constexpr bool operator!=(const Span &lhs, const Span &rhs) {
+    return !(lhs == rhs);
+}
+
 struct LineCol {
     size_t line = 0;   // 1-based
     size_t column = 0; // 1-based

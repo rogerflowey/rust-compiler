@@ -9,6 +9,7 @@
 #include "semantic/utils.hpp"
 #include "src/utils/error.hpp"
 #include <stdexcept>
+#include <type_traits>
 
 namespace semantic {
 
@@ -28,34 +29,25 @@ SemanticContext::SemanticContext(ImplTable& impl_table)
     : impl_table(impl_table), expr_checker(*this, impl_table) {}
 
 TypeId SemanticContext::type_query(hir::TypeAnnotation& annotation) {
-    auto* key = &annotation;
-    if (auto it = type_cache.find(key); it != type_cache.end()) {
-        return it->second;
+    if (auto* resolved = std::get_if<TypeId>(&annotation)) {
+        return *resolved;
     }
-
-    TypeId resolved = resolve_type_annotation(annotation);
-    type_cache.emplace(key, resolved);
-    return resolved;
+    return resolve_type_annotation(annotation);
 }
 
 ExprInfo SemanticContext::expr_query(hir::Expr& expr, TypeExpectation exp) {
-    ExprKey key{&expr, exp.kind, exp.expected};
-    if (auto it = expr_cache.find(key); it != expr_cache.end()) {
-        return it->second;
-    }
-
-    if (exp.kind != ExpectationKind::None) {
-        ExprKey none_key{&expr, ExpectationKind::None, invalid_type_id};
-        if (auto it = expr_cache.find(none_key); it != expr_cache.end()) {
-            if (can_reuse_cached(it->second, exp)) {
-                expr_cache.emplace(key, it->second);
-                return it->second;
-            }
+    auto can_use_cached = [&](const ExprInfo& info) {
+        if (exp.kind == ExpectationKind::None) {
+            return true; // reuse even if unresolved for expectation-less queries
         }
+        return can_reuse_cached(info, exp);
+    };
+
+    if (expr.expr_info && can_use_cached(*expr.expr_info)) {
+        return *expr.expr_info;
     }
 
     ExprInfo info = compute_expr(expr, exp);
-    expr_cache.emplace(key, info);
     expr.expr_info = info;
     return info;
 }
@@ -82,8 +74,8 @@ std::optional<ConstVariant> SemanticContext::const_query(hir::Expr& expr, TypeId
 }
 
 std::optional<ConstVariant> SemanticContext::const_query(hir::ConstDef& def) {
-    if (auto it = const_cache.find(&def); it != const_cache.end()) {
-        return it->second;
+    if (def.const_value) {
+        return def.const_value;
     }
 
     TypeId expected_type = invalid_type_id;
@@ -95,10 +87,8 @@ std::optional<ConstVariant> SemanticContext::const_query(hir::ConstDef& def) {
         throw std::logic_error("Const definition missing expression");
     }
 
-    auto value = const_query(*def.expr, expected_type);
-    def.const_value = value;
-    const_cache.emplace(&def, value);
-    return value;
+    def.const_value = const_query(*def.expr, expected_type);
+    return def.const_value;
 }
 
 void SemanticContext::bind_pattern_type(hir::Pattern& pattern, TypeId expected_type) {

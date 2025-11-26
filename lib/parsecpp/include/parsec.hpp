@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "src/span/span.hpp"
+#include "src/utils/error.hpp"
 
 // since type_trait doesn't have is_tuple_v
 template <typename> struct is_tuple : std::false_type {};
@@ -83,7 +84,11 @@ template <typename Token> struct ParseContext {
   bool isEOF() const { return position >= tokens.size(); }
   const Token &next() {
     if (isEOF()) {
-      throw std::runtime_error("No more tokens");
+      span::Span error_span = span::Span::invalid();
+      if (position > 0) {
+        error_span = span_at(position - 1);
+      }
+      throw ParserError("No more tokens", error_span);
     }
     return tokens[position++];
   }

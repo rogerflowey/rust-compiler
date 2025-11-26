@@ -1,7 +1,6 @@
 #include "exit_check.hpp"
 
 #include <algorithm>
-#include <stdexcept>
 #include <utility>
 
 #include "src/utils/error.hpp"
@@ -85,13 +84,7 @@ bool ExitCheckVisitor::is_main_function(const hir::Function& function, bool is_t
     if (!is_top_level) {
         return false;
     }
-    if (!function.ast_node) {
-        return false;
-    }
-    if (!function.ast_node->name) {
-        return false;
-    }
-    return function.ast_node->name->name == "main";
+    return function.name.name == "main";
 }
 
 bool ExitCheckVisitor::is_exit_call(const hir::Call& call) const {
@@ -100,29 +93,11 @@ bool ExitCheckVisitor::is_exit_call(const hir::Call& call) const {
     }
 
     auto* func_use = std::get_if<hir::FuncUse>(&call.callee->value);
-    if (!func_use) {
+    if (!func_use || !func_use->def) {
         return false;
     }
 
-    const auto* path_expr = func_use->ast_node;
-    if (!path_expr || !path_expr->path) {
-        return false;
-    }
-
-    const auto& segments = path_expr->path->segments;
-    if (segments.empty()) {
-        return false;
-    }
-
-    const auto& last_segment = segments.back();
-    if (last_segment.type != ast::PathSegType::IDENTIFIER) {
-        return false;
-    }
-    if (!last_segment.id || !last_segment.id.value()) {
-        return false;
-    }
-
-    return last_segment.id.value()->name == "exit";
+    return func_use->def->name.name == "exit";
 }
 
 void ExitCheckVisitor::validate_main_context(Context& ctx) {

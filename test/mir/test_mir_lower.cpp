@@ -32,7 +32,7 @@ semantic::ExprInfo make_value_info(semantic::TypeId type, bool is_place = false)
 std::unique_ptr<hir::Expr> make_bool_literal_expr(bool value, semantic::TypeId type) {
     hir::Literal literal{
         .value = hir::Literal::Value{value},
-        .ast_node = hir::Literal::AstNode{static_cast<const ast::BoolLiteralExpr*>(nullptr)}
+        
     };
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
     expr->expr_info = make_value_info(type, false);
@@ -42,7 +42,7 @@ std::unique_ptr<hir::Expr> make_bool_literal_expr(bool value, semantic::TypeId t
 std::unique_ptr<hir::Expr> make_int_literal_expr(uint64_t value, semantic::TypeId type) {
     hir::Literal literal{
         .value = hir::Literal::Value{hir::Literal::Integer{.value = value, .suffix_type = ast::IntegerLiteralExpr::I32, .is_negative = false}},
-        .ast_node = hir::Literal::AstNode{static_cast<const ast::IntegerLiteralExpr*>(nullptr)}
+        
     };
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
     expr->expr_info = make_value_info(type, false);
@@ -57,7 +57,7 @@ std::unique_ptr<hir::Expr> make_binary_expr(hir::BinaryOp::Op op,
     binary.op = op;
     binary.lhs = std::move(lhs);
     binary.rhs = std::move(rhs);
-    binary.ast_node = hir::BinaryOp::AstNode{static_cast<const ast::BinaryExpr*>(nullptr)};
+    
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(binary)});
     expr->expr_info = make_value_info(type, false);
     return expr;
@@ -72,7 +72,7 @@ std::unique_ptr<hir::Block> make_block_with_expr(std::unique_ptr<hir::Expr> expr
 std::unique_ptr<hir::Expr> make_func_use_expr(hir::Function* function) {
     hir::FuncUse func_use;
     func_use.def = function;
-    func_use.ast_node = nullptr;
+    
     return std::make_unique<hir::Expr>(hir::ExprVariant{std::move(func_use)});
 }
 
@@ -133,7 +133,7 @@ TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
 
     hir::Variable variable;
     variable.local_id = local_ptr;
-    variable.ast_node = nullptr;
+    
     auto final_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(variable)});
     final_expr->expr_info = make_value_info(int_type, true);
     body->final_expr = std::move(final_expr);
@@ -551,7 +551,7 @@ TEST(MirLowerTest, LowersDirectFunctionCall) {
 
     hir::Call call_expr;
     call_expr.callee = make_func_use_expr(&callee);
-    call_expr.ast_node = nullptr;
+    
     auto call_expr_node = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(call_expr)});
     call_expr_node->expr_info = make_value_info(int_type, false);
 
@@ -594,7 +594,7 @@ TEST(MirLowerTest, LowerFunctionUsesProvidedIdMapForCalls) {
 
     hir::Call call_expr;
     call_expr.callee = make_func_use_expr(&callee);
-    call_expr.ast_node = nullptr;
+    
     auto call_expr_node = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(call_expr)});
     call_expr_node->expr_info = make_value_info(int_type, false);
 
@@ -1084,7 +1084,7 @@ TEST(MirLowerTest, LowersReferenceToRValueByMaterializingLocal) {
 
     hir::Literal literal{
         .value = hir::Literal::Integer{.value = 5, .suffix_type = ast::IntegerLiteralExpr::I32, .is_negative = false},
-        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+        
     };
     auto literal_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
     literal_expr->expr_info = make_value_info(int_type, false);
@@ -1128,7 +1128,7 @@ TEST(MirLowerTest, LowersMutableReferenceToRValueByMaterializingLocal) {
 
     hir::Literal literal{
         .value = hir::Literal::Integer{.value = 9, .suffix_type = ast::IntegerLiteralExpr::I32, .is_negative = false},
-        .ast_node = static_cast<const ast::IntegerLiteralExpr*>(nullptr)
+        
     };
     auto literal_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
     literal_expr->expr_info = make_value_info(int_type, false);

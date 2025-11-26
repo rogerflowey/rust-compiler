@@ -73,32 +73,27 @@ using TypeAnnotation = std::variant<std::unique_ptr<TypeNode>, semantic::TypeId>
 
 struct DefType {
     std::variant<ast::Identifier, TypeDef> def;
-    const ast::PathType* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct PrimitiveType {
     ast::PrimitiveType::Kind kind;
-    const ast::PrimitiveType* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct ArrayType {
     TypeAnnotation element_type;
     std::unique_ptr<Expr> size;
-    const ast::ArrayType* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct ReferenceType {
     TypeAnnotation referenced_type;
     bool is_mutable;
-    const ast::ReferenceType* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct UnitType {
-    const ast::UnitType* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -107,7 +102,6 @@ struct Local {
     ast::Identifier name; // not really neccesary
     bool is_mutable;
     std::optional<TypeAnnotation> type_annotation;
-    const ast::IdentifierPattern* def_site = nullptr;// not too
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
@@ -116,8 +110,8 @@ struct Local {
     Local(Local&&) noexcept = default;
     Local& operator=(Local&&) noexcept = default;
     Local() = default;
-    Local(ast::Identifier name_, bool is_mutable_, std::optional<TypeAnnotation> type_annotation_, const ast::IdentifierPattern* def_site_)
-        : name(std::move(name_)), is_mutable(is_mutable_), type_annotation(std::move(type_annotation_)), def_site(def_site_) {}
+    Local(ast::Identifier name_, bool is_mutable_, std::optional<TypeAnnotation> type_annotation_)
+        : name(std::move(name_)), is_mutable(is_mutable_), type_annotation(std::move(type_annotation_)) {}
 };
 
 
@@ -129,7 +123,6 @@ struct BindingDef {
         ast::Identifier name;
     };
     std::variant<Unresolved,Local*> local;
-    const ast::IdentifierPattern* ast_node = nullptr;
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
@@ -138,14 +131,13 @@ struct BindingDef {
     BindingDef(BindingDef&&) noexcept = default;
     BindingDef& operator=(BindingDef&&) noexcept = default;
     BindingDef() = default;
-    BindingDef(BindingDef::Unresolved&& unresolved, const ast::IdentifierPattern* ast_node_)
-        : local(std::move(unresolved)), ast_node(ast_node_) {}
+    BindingDef(BindingDef::Unresolved&& unresolved)
+        : local(std::move(unresolved)) {}
 };
 
 struct ReferencePattern {
     std::unique_ptr<Pattern> subpattern;
     bool is_mutable;
-    const ast::ReferencePattern* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -183,27 +175,18 @@ struct Literal {
     >;
 
     Value value;
-    using AstNode = std::variant<
-        const ast::IntegerLiteralExpr*,
-        const ast::BoolLiteralExpr*,
-        const ast::CharLiteralExpr*,
-        const ast::StringLiteralExpr*
-    >;
-    AstNode ast_node;
     span::Span span = span::Span::invalid();
 };
 
 // NEW: Temporary node for an unresolved identifier in an expression.
 struct UnresolvedIdentifier {
     ast::Identifier name;
-    const ast::PathExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 // REDEFINED: A resolved reference to a local variable.
 struct Variable {
     Local* local_id;
-    const ast::PathExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
@@ -212,14 +195,13 @@ struct Variable {
     Variable(Variable&&) noexcept = default;
     Variable& operator=(Variable&&) noexcept = default;
     Variable() = default;
-    Variable(Local* local_id_, const ast::PathExpr* ast_node_)
-        : local_id(local_id_), ast_node(ast_node_) {}
+    Variable(Local* local_id_)
+        : local_id(local_id_) {}
 };
 
 // NEW: A resolved reference to a constant.
 struct ConstUse {
     const hir::ConstDef* def = nullptr;
-    const ast::PathExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
@@ -228,14 +210,13 @@ struct ConstUse {
     ConstUse(ConstUse&&) noexcept = default;
     ConstUse& operator=(ConstUse&&) noexcept = default;
     ConstUse() = default;
-    ConstUse(const hir::ConstDef* def_, const ast::PathExpr* ast_node_)
-        : def(def_), ast_node(ast_node_) {}
+    ConstUse(const hir::ConstDef* def_)
+        : def(def_) {}
 };
 
 // NEW: A resolved reference to a function.
 struct FuncUse {
     const hir::Function* def = nullptr;
-    const ast::PathExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
@@ -244,27 +225,24 @@ struct FuncUse {
     FuncUse(FuncUse&&) noexcept = default;
     FuncUse& operator=(FuncUse&&) noexcept = default;
     FuncUse() = default;
-    FuncUse(const hir::Function* def_, const ast::PathExpr* ast_node_)
-        : def(def_), ast_node(ast_node_) {}
+    FuncUse(const hir::Function* def_)
+        : def(def_) {}
 };
 
 // Represents a path with two segments, like `MyType::something`.
 struct TypeStatic {
     std::variant<ast::Identifier, TypeDef> type; // The first segment of the path, e.g., `MyType`
     ast::Identifier name;
-    const ast::PathExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Underscore {
-    const ast::UnderscoreExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct FieldAccess {
     std::unique_ptr<Expr> base;
     std::variant<ast::Identifier, size_t> field;
-    const ast::FieldAccessExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -280,7 +258,6 @@ struct StructLiteral {
 
     std::variant<SyntacticFields, CanonicalFields> fields;
 
-    const ast::StructExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -316,28 +293,24 @@ struct EnumVariant {
 
 struct ArrayLiteral {
     std::vector<std::unique_ptr<Expr>> elements;
-    const ast::ArrayInitExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct ArrayRepeat {
     std::unique_ptr<Expr> value;
     std::variant<std::unique_ptr<Expr>, size_t> count;
-    const ast::ArrayRepeatExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Index {
     std::unique_ptr<Expr> base;
     std::unique_ptr<Expr> index;
-    const ast::IndexExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Assignment {
     std::unique_ptr<Expr> lhs;
     std::unique_ptr<Expr> rhs;
-    const ast::AssignExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -345,7 +318,6 @@ struct UnaryOp {
     enum Op { NOT, NEGATE, DEREFERENCE, REFERENCE, MUTABLE_REFERENCE };
     Op op;
     std::unique_ptr<Expr> rhs;
-    const ast::UnaryExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -354,22 +326,18 @@ struct BinaryOp {
     Op op;
     std::unique_ptr<Expr> lhs;
     std::unique_ptr<Expr> rhs;
-    using AstNode = std::variant<const ast::BinaryExpr*, const ast::AssignExpr*>;
-    AstNode ast_node;
     span::Span span = span::Span::invalid();
 };
 
 struct Cast {
     std::unique_ptr<Expr> expr;
     TypeAnnotation target_type;
-    const ast::CastExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Call {
     std::unique_ptr<Expr> callee;
     std::vector<std::unique_ptr<Expr>> args;
-    const ast::CallExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -377,7 +345,6 @@ struct MethodCall {
     std::unique_ptr<Expr> receiver;
     std::variant<ast::Identifier, const Method*> method;
     std::vector<std::unique_ptr<Expr>> args;
-    const ast::MethodCallExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -385,14 +352,12 @@ struct If {
     std::unique_ptr<Expr> condition;
     std::unique_ptr<Block> then_block;
     std::optional<std::unique_ptr<Expr>> else_expr;
-    const ast::IfExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Loop {
     std::unique_ptr<Block> body;
     std::optional<semantic::TypeId> break_type = std::nullopt;
-    const ast::LoopExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -400,32 +365,27 @@ struct While {
     std::unique_ptr<Expr> condition;
     std::unique_ptr<Block> body;
     std::optional<semantic::TypeId> break_type = std::nullopt;
-    const ast::WhileExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Break {
     std::optional<std::unique_ptr<Expr>> value;
     std::optional<std::variant<Loop*, While*>> target = std::nullopt;
-    const ast::BreakExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Continue {
     std::optional<std::variant<Loop*, While*>> target = std::nullopt;
-    const ast::ContinueExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Return {
     std::optional<std::unique_ptr<Expr>> value;
     std::optional<std::variant<Function*, Method*>> target = std::nullopt;
-    const ast::ReturnExpr* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Block {
-    const ast::BlockExpr* ast_node = nullptr;
     std::vector<std::unique_ptr<Item>> items;
     std::vector<std::unique_ptr<Stmt>> stmts;
     std::optional<std::unique_ptr<Expr>> final_expr;
@@ -453,7 +413,6 @@ using ExprVariant = std::variant<
 struct Expr {
     std::optional<semantic::ExprInfo> expr_info;
     ExprVariant value;
-    span::Span span = span::Span::invalid();
 
     Expr(ExprVariant&& val)
         : expr_info(std::nullopt), value(std::move(val)) {}
@@ -471,13 +430,11 @@ struct LetStmt {
     std::unique_ptr<Pattern> pattern;
     std::optional<TypeAnnotation> type_annotation;
     std::unique_ptr<Expr> initializer;
-    const ast::LetStmt* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct ExprStmt {
     std::unique_ptr<Expr> expr;
-    const ast::ExprStmt* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -496,12 +453,12 @@ struct Stmt {
 
 
 struct Function {
+    ast::Identifier name;
     std::vector<std::unique_ptr<Pattern>> params;// Changed
     std::vector<std::optional<TypeAnnotation>> param_type_annotations; // NEW: Parameter type annotations
     std::optional<TypeAnnotation> return_type;
     std::unique_ptr<Block> body;
     std::vector<std::unique_ptr<Local>> locals; // NEW: Owning list of all locals
-    const ast::FunctionItem* ast_node = nullptr;
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
@@ -510,25 +467,24 @@ struct Function {
     Function(Function&&) noexcept = default;
     Function& operator=(Function&&) noexcept = default;
     Function() = default;
-    Function(std::vector<std::unique_ptr<Pattern>>&& params_,
-             std::vector<std::optional<TypeAnnotation>>&& param_type_annotations_,
-             std::optional<TypeAnnotation>&& return_type_,
-             std::unique_ptr<Block>&& body_,
-             std::vector<std::unique_ptr<Local>>&& locals_,
-             const ast::FunctionItem* ast_node_)
-        : params(std::move(params_)),
+        Function(std::vector<std::unique_ptr<Pattern>>&& params_,
+                         std::vector<std::optional<TypeAnnotation>>&& param_type_annotations_,
+                         std::optional<TypeAnnotation>&& return_type_,
+                         std::unique_ptr<Block>&& body_,
+                         std::vector<std::unique_ptr<Local>>&& locals_,
+                         ast::Identifier name_)
+                : name(std::move(name_)),
+                    params(std::move(params_)),
           param_type_annotations(std::move(param_type_annotations_)),
           return_type(std::move(return_type_)),
           body(std::move(body_)),
-          locals(std::move(locals_)),
-          ast_node(ast_node_) {}
+                    locals(std::move(locals_)) {}
 };
 
 struct Method {
     struct SelfParam {
         bool is_reference;
         bool is_mutable;
-        const ast::FunctionItem::SelfParam* ast_node = nullptr;
         span::Span span = span::Span::invalid();
         
         // Disable copy to prevent dangling pointers
@@ -539,6 +495,7 @@ struct Method {
         SelfParam() = default;
     };
     
+    ast::Identifier name;
     SelfParam self_param;
     std::vector<std::unique_ptr<Pattern>> params;// changed
     std::vector<std::optional<TypeAnnotation>> param_type_annotations; // NEW: Parameter type annotations
@@ -546,7 +503,6 @@ struct Method {
     std::unique_ptr<Block> body;
     std::unique_ptr<Local> self_local;
     std::vector<std::unique_ptr<Local>> locals;
-    const ast::FunctionItem* ast_node = nullptr;
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
@@ -555,27 +511,27 @@ struct Method {
     Method(Method&&) noexcept = default;
     Method& operator=(Method&&) noexcept = default;
     Method() = default;
-    Method(SelfParam&& self_param_,
-           std::vector<std::unique_ptr<Pattern>>&& params_,
-           std::vector<std::optional<TypeAnnotation>>&& param_type_annotations_,
-           std::optional<TypeAnnotation>&& return_type_,
-           std::unique_ptr<Block>&& body_,
-           const ast::FunctionItem* ast_node_)
-        : self_param(std::move(self_param_)),
+            Method(ast::Identifier name_,
+                SelfParam&& self_param_,
+                std::vector<std::unique_ptr<Pattern>>&& params_,
+                std::vector<std::optional<TypeAnnotation>>&& param_type_annotations_,
+                std::optional<TypeAnnotation>&& return_type_,
+                std::unique_ptr<Block>&& body_)
+                : name(std::move(name_)),
+                    self_param(std::move(self_param_)),
           params(std::move(params_)),
           param_type_annotations(std::move(param_type_annotations_)),
           return_type(std::move(return_type_)),
           body(std::move(body_)),
           self_local(nullptr),
-          locals(),
-          ast_node(ast_node_) {}
+               locals() {}
 };
 
 
 struct StructDef {
+        ast::Identifier name;
     std::vector<semantic::Field> fields;
     std::vector<TypeAnnotation> field_type_annotations;
-    const ast::StructItem* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 
     std::optional<size_t> find_field(const ast::Identifier& name) const {
@@ -589,22 +545,22 @@ struct StructDef {
 };
 
 struct EnumDef {
+    ast::Identifier name;
     std::vector<semantic::EnumVariant> variants;
-    const ast::EnumItem* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct ConstDef {
+    ast::Identifier name;
     std::unique_ptr<Expr> expr;
     std::optional<semantic::ConstVariant> const_value;
     std::optional<TypeAnnotation> type;
-    const ast::ConstItem* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
 struct Trait {
+    ast::Identifier name;
     std::vector<std::unique_ptr<Item>> items;
-    const ast::TraitItem* ast_node = nullptr;
     span::Span span = span::Span::invalid();
 };
 
@@ -618,8 +574,6 @@ struct Impl {
     std::optional<std::variant<ast::Identifier, const Trait*>> trait; // nullopt for inherent impls
     TypeAnnotation for_type;
     std::vector<std::unique_ptr<AssociatedItem>> items;
-    using AstNode = std::variant<const ast::TraitImplItem*, const ast::InherentImplItem*>;
-    AstNode ast_node;
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
@@ -628,14 +582,12 @@ struct Impl {
     Impl(Impl&&) noexcept = default;
     Impl& operator=(Impl&&) noexcept = default;
     Impl() = default;
-    Impl(std::optional<std::variant<ast::Identifier, const Trait*>>&& trait_,
-         TypeAnnotation&& for_type_,
-         std::vector<std::unique_ptr<AssociatedItem>>&& items_,
-         AstNode&& ast_node_)
+        Impl(std::optional<std::variant<ast::Identifier, const Trait*>>&& trait_,
+            TypeAnnotation&& for_type_,
+            std::vector<std::unique_ptr<AssociatedItem>>&& items_)
         : trait(std::move(trait_)),
           for_type(std::move(for_type_)),
-          items(std::move(items_)),
-          ast_node(std::move(ast_node_)) {}
+            items(std::move(items_)) {}
 };
 
 using ItemVariant = std::variant<Function, StructDef, EnumDef, ConstDef, Trait, Impl>;

@@ -169,19 +169,13 @@ inline void TraitValidator::extract_trait_definition(hir::Trait& trait) {
     for (auto& item : trait.items) {
         std::visit(Overloaded{
             [&](hir::Function& fn) {
-                if (fn.ast_node && fn.ast_node->name) {
-                    info.required_items.emplace(*fn.ast_node->name, TraitItemInfo(*fn.ast_node->name, &fn));
-                }
+                info.required_items.emplace(fn.name, TraitItemInfo(fn.name, &fn));
             },
             [&](hir::Method& method) {
-                if (method.ast_node && method.ast_node->name) {
-                    info.required_items.emplace(*method.ast_node->name, TraitItemInfo(*method.ast_node->name, &method));
-                }
+                info.required_items.emplace(method.name, TraitItemInfo(method.name, &method));
             },
             [&](hir::ConstDef& constant) {
-                if (constant.ast_node && constant.ast_node->name) {
-                    info.required_items.emplace(*constant.ast_node->name, TraitItemInfo(*constant.ast_node->name, &constant));
-                }
+                info.required_items.emplace(constant.name, TraitItemInfo(constant.name, &constant));
             },
             [&](auto&) {
                 // Other item types are not trait items
@@ -218,8 +212,7 @@ inline void TraitValidator::validate_trait_impl(hir::Impl& impl, const hir::Trai
     }
     
     // Get trait name for error reporting
-    ast::Identifier trait_name = trait.ast_node && trait.ast_node->name ? 
-        *trait.ast_node->name : ast::Identifier("<unknown>");
+    ast::Identifier trait_name = trait.name;
     
     // Check each required item is implemented
     for (const auto& [item_name, trait_item] : trait_info->required_items) {
@@ -371,26 +364,23 @@ inline std::optional<TraitItemInfo> TraitValidator::find_trait_item(const hir::T
 inline std::optional<std::variant<hir::Function*, hir::Method*, hir::ConstDef*>> 
 TraitValidator::find_impl_item(hir::Impl& impl, const ast::Identifier& name) {
     for (auto& item : impl.items) {
-        std::optional<ast::Identifier> item_name;
-        
+        const ast::Identifier* item_name = nullptr;
+
         std::visit(Overloaded{
             [&](hir::Function& fn) {
-                item_name = fn.ast_node && fn.ast_node->name ? 
-                    std::optional<ast::Identifier>(*fn.ast_node->name) : std::nullopt;
+                item_name = &fn.name;
             },
             [&](hir::Method& method) {
-                item_name = method.ast_node && method.ast_node->name ? 
-                    std::optional<ast::Identifier>(*method.ast_node->name) : std::nullopt;
+                item_name = &method.name;
             },
             [&](hir::ConstDef& constant) {
-                item_name = constant.ast_node && constant.ast_node->name ? 
-                    std::optional<ast::Identifier>(*constant.ast_node->name) : std::nullopt;
+                item_name = &constant.name;
             },
             [&](auto&) {
-                item_name = std::nullopt;
+                item_name = nullptr;
             }
         }, item->value);
-        
+
         if (item_name && *item_name == name) {
             return std::visit([](auto&& arg) -> std::variant<hir::Function*, hir::Method*, hir::ConstDef*> {
                 return &arg;

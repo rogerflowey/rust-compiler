@@ -101,7 +101,7 @@ hir::BinaryOp{
     .lhs = /* HIR expression */,
     .op = hir::BinaryOp::ADD,
     .rhs = /* HIR expression */,
-    .ast_node = /* pointer to original AST node */
+    
 }
 ```
 
@@ -132,7 +132,7 @@ ast::IdentifierPattern{
 hir::IdentifierPattern{
     .name = ast::Identifier{"x"},
     .is_mutable = true,
-    .ast_node = /* pointer to original AST node */
+    
 }
 ```
 
@@ -164,9 +164,7 @@ Validates:
 ```cpp
 // Extract AST node from HIR expression
 inline const ast::Expr& get_ast_node(const hir::Expr& expr) {
-    if (expr.ast_node) {
-        return *expr.ast_node;
-    }
+    
     throw std::logic_error("HIR expression missing AST node reference - invariant violation");
 }
 

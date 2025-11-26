@@ -52,7 +52,11 @@ get_predefined_methods() {
 }
 
 // struct String {}
-static hir::StructDef struct_String = hir::StructDef();
+static hir::StructDef struct_String = [] {
+    hir::StructDef def{};
+    def.name = ast::Identifier("String");
+    return def;
+}();
 
 namespace {
 
@@ -110,15 +114,16 @@ inline std::unique_ptr<hir::Pattern> make_param_pattern(size_t index) {
             .is_mutable = false,
             .is_ref = false,
             .name = ast::Identifier(std::string("_arg") + std::to_string(index))
-        },
-        nullptr
+        }
     };
     return std::make_unique<hir::Pattern>(hir::PatternVariant{std::move(binding)});
 }
 
-inline hir::Function make_builtin_function(std::initializer_list<TypeId> param_types,
+inline hir::Function make_builtin_function(std::string_view name,
+                                           std::initializer_list<TypeId> param_types,
                                            TypeId return_type) {
     hir::Function fn{};
+    fn.name = ast::Identifier(std::string(name));
     fn.params.reserve(param_types.size());
     fn.param_type_annotations.reserve(param_types.size());
 
@@ -131,19 +136,19 @@ inline hir::Function make_builtin_function(std::initializer_list<TypeId> param_t
     fn.return_type = hir::TypeAnnotation{return_type};
     fn.body = nullptr;
     fn.locals.clear();
-    fn.ast_node = nullptr;
 
     return fn;
 }
 
-inline hir::Method make_builtin_method(bool self_is_reference,
+inline hir::Method make_builtin_method(std::string_view name,
+                                       bool self_is_reference,
                                        bool self_is_mutable,
                                        std::initializer_list<TypeId> param_types,
                                        TypeId return_type) {
     hir::Method method{};
+    method.name = ast::Identifier(std::string(name));
     method.self_param.is_reference = self_is_reference;
     method.self_param.is_mutable = self_is_mutable;
-    method.self_param.ast_node = nullptr;
 
     method.params.reserve(param_types.size());
     method.param_type_annotations.reserve(param_types.size());
@@ -158,27 +163,26 @@ inline hir::Method make_builtin_method(bool self_is_reference,
     method.body = nullptr;
     method.self_local.reset();
     method.locals.clear();
-    method.ast_node = nullptr;
 
     return method;
 }
 
-static hir::Function func_print = make_builtin_function({string_ref_type()}, unit_type());
-static hir::Function func_println = make_builtin_function({string_ref_type()}, unit_type());
-static hir::Function func_printInt = make_builtin_function({i32_type()}, unit_type());
-static hir::Function func_printlnInt = make_builtin_function({i32_type()}, unit_type());
-static hir::Function func_getString = make_builtin_function(std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Function func_getInt = make_builtin_function(std::initializer_list<TypeId>{}, i32_type());
-static hir::Function func_exit = make_builtin_function({i32_type()}, unit_type());
+static hir::Function func_print = make_builtin_function("print", {string_ref_type()}, unit_type());
+static hir::Function func_println = make_builtin_function("println", {string_ref_type()}, unit_type());
+static hir::Function func_printInt = make_builtin_function("printInt", {i32_type()}, unit_type());
+static hir::Function func_printlnInt = make_builtin_function("printlnInt", {i32_type()}, unit_type());
+static hir::Function func_getString = make_builtin_function("getString", std::initializer_list<TypeId>{}, string_struct_type());
+static hir::Function func_getInt = make_builtin_function("getInt", std::initializer_list<TypeId>{}, i32_type());
+static hir::Function func_exit = make_builtin_function("exit", {i32_type()}, unit_type());
 
-static hir::Method method_i32_to_string = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_u32_to_string = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_usize_to_string = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_string_as_str = make_builtin_method(true, false, std::initializer_list<TypeId>{}, string_ref_type());
-static hir::Method method_string_as_mut_str = make_builtin_method(true, true, std::initializer_list<TypeId>{}, string_mut_ref_type());
-static hir::Method method_string_len = make_builtin_method(true, false, std::initializer_list<TypeId>{}, usize_type());
-static hir::Method method_string_append = make_builtin_method(true, true, {string_ref_type()}, unit_type());
-static hir::Method method_str_len = make_builtin_method(true, false, std::initializer_list<TypeId>{}, usize_type());
+static hir::Method method_i32_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
+static hir::Method method_u32_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
+static hir::Method method_usize_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
+static hir::Method method_string_as_str = make_builtin_method("as_str", true, false, std::initializer_list<TypeId>{}, string_ref_type());
+static hir::Method method_string_as_mut_str = make_builtin_method("as_mut_str", true, true, std::initializer_list<TypeId>{}, string_mut_ref_type());
+static hir::Method method_string_len = make_builtin_method("len", true, false, std::initializer_list<TypeId>{}, usize_type());
+static hir::Method method_string_append = make_builtin_method("append", true, true, {string_ref_type()}, unit_type());
+static hir::Method method_str_len = make_builtin_method("len", true, false, std::initializer_list<TypeId>{}, usize_type());
 
 struct PredefinedMethodRegistrar {
     PredefinedMethodRegistrar() {

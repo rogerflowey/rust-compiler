@@ -14,45 +14,45 @@ namespace helper {
 
 
 inline ast::Identifier get_name(const Function& fn) {
-    if (!fn.ast_node || !fn.ast_node->name) {
-        throw std::logic_error("Function Ast Node corrupted");
+    return fn.name;
+}
+
+inline span::Span get_span(const Expr &expr) {
+    return std::visit([](const auto &node) { return node.span; }, expr.value);
+}
+
+inline span::Span get_span(const Expr *expr) {
+    return expr ? get_span(*expr) : span::Span::invalid();
+}
+
+inline void set_span(Expr &expr, span::Span new_span) {
+    std::visit([&](auto &node) { node.span = new_span; }, expr.value);
+}
+
+inline void set_span(std::unique_ptr<Expr> &expr, span::Span new_span) {
+    if (expr) {
+        set_span(*expr, new_span);
     }
-    return *fn.ast_node->name;
 }
 
 inline ast::Identifier get_name(const Method& method) {
-    if (!method.ast_node || !method.ast_node->name) {
-        throw std::logic_error("Method Ast Node corrupted");
-    }
-    return *method.ast_node->name;
+    return method.name;
 }
 
 inline ast::Identifier get_name(const ConstDef& constant) {
-    if (!constant.ast_node || !constant.ast_node->name) {
-        throw std::logic_error("Constant Ast Node corrupted");
-    }
-    return *constant.ast_node->name;
+    return constant.name;
 }
 
 inline ast::Identifier get_name(const StructDef& struct_def) {
-    if (!struct_def.ast_node || !struct_def.ast_node->name) {
-        throw std::logic_error("Struct Ast Node corrupted");
-    }
-    return *struct_def.ast_node->name;
+    return struct_def.name;
 }
 
 inline ast::Identifier get_name(const EnumDef& enum_def) {
-    if (!enum_def.ast_node || !enum_def.ast_node->name) {
-        throw std::logic_error("Enum Ast Node corrupted");
-    }
-    return *enum_def.ast_node->name;
+    return enum_def.name;
 }
 
 inline ast::Identifier get_name(const Trait& trait) {
-    if (!trait.ast_node || !trait.ast_node->name) {
-        throw std::logic_error("Trait Ast Node corrupted");
-    }
-    return *trait.ast_node->name;
+    return trait.name;
 }
 
 inline ast::Identifier get_name(ItemVariant& item){
@@ -200,13 +200,11 @@ inline std::unique_ptr<Expr> apply_dereference(std::unique_ptr<Expr> expr) {
     auto deref_expr = std::make_unique<UnaryOp>();
     deref_expr->op = UnaryOp::DEREFERENCE;
     deref_expr->rhs = std::move(expr);
-    deref_expr->ast_node = nullptr; // No AST node for generated expression
-    deref_expr->span = deref_expr->rhs ? deref_expr->rhs->span : span::Span::invalid();
+    deref_expr->span = get_span(deref_expr->rhs.get());
 
     // Move the UnaryOp value into ExprVariant and then into Expr
     ExprVariant expr_variant = std::move(*deref_expr);
     auto result = std::make_unique<Expr>(std::move(expr_variant));
-    result->span = deref_expr->span;
     return result;
 }
 
@@ -221,13 +219,11 @@ inline std::unique_ptr<Expr> apply_reference(std::unique_ptr<Expr> expr, bool is
     auto ref_expr = std::make_unique<UnaryOp>();
     ref_expr->op = is_mutable ? UnaryOp::MUTABLE_REFERENCE : UnaryOp::REFERENCE;
     ref_expr->rhs = std::move(expr);
-    ref_expr->ast_node = nullptr; // No AST node for generated expression
-    ref_expr->span = ref_expr->rhs ? ref_expr->rhs->span : span::Span::invalid();
+    ref_expr->span = get_span(ref_expr->rhs.get());
 
     // Move the UnaryOp value into ExprVariant and then into Expr
     ExprVariant expr_variant = std::move(*ref_expr);
     auto result = std::make_unique<Expr>(std::move(expr_variant));
-    result->span = ref_expr->span;
     return result;
 }
 
