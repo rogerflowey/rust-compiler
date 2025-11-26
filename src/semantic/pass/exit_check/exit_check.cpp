@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "src/utils/error.hpp"
+
 namespace semantic {
 
 void ExitCheckVisitor::check_program(hir::Program& program) {
@@ -22,7 +24,7 @@ void ExitCheckVisitor::visit(hir::Function& function) {
     if (ctx.is_main) {
         validate_main_context(ctx);
     } else if (!ctx.exit_calls.empty()) {
-        throw std::runtime_error("exit() cannot be used in non-main functions");
+        throw SemanticError("exit() cannot be used in non-main functions", function.span);
     }
 }
 
@@ -33,7 +35,7 @@ void ExitCheckVisitor::visit(hir::Method& method) {
     context_stack_.pop_back();
 
     if (!ctx.exit_calls.empty()) {
-        throw std::runtime_error("exit() cannot be used in methods");
+        throw SemanticError("exit() cannot be used in methods", method.span);
     }
 }
 
@@ -62,15 +64,15 @@ void ExitCheckVisitor::visit(hir::Trait& trait) {
 void ExitCheckVisitor::visit(hir::Call& call) {
     if (is_exit_call(call)) {
         if (context_stack_.empty()) {
-            throw std::runtime_error("exit() cannot be used in non-main functions");
+            throw SemanticError("exit() cannot be used in non-main functions", call.span);
         }
 
         auto& ctx = context_stack_.back();
         if (ctx.kind == ContextKind::Method) {
-            throw std::runtime_error("exit() cannot be used in methods");
+            throw SemanticError("exit() cannot be used in methods", call.span);
         }
         if (!ctx.is_main) {
-            throw std::runtime_error("exit() cannot be used in non-main functions");
+            throw SemanticError("exit() cannot be used in non-main functions", call.span);
         }
 
         ctx.exit_calls.push_back(&call);
@@ -124,8 +126,9 @@ bool ExitCheckVisitor::is_exit_call(const hir::Call& call) const {
 }
 
 void ExitCheckVisitor::validate_main_context(Context& ctx) {
+    span::Span span = ctx.function ? ctx.function->span : span::Span::invalid();
     if (!ctx.function || !ctx.function->body) {
-        throw std::runtime_error("main function must have an exit() call as the final statement");
+        throw SemanticError("main function must have an exit() call as the final statement", span);
     }
 
     auto& block = *ctx.function->body;
@@ -150,7 +153,7 @@ void ExitCheckVisitor::validate_main_context(Context& ctx) {
     }
 
     if (!has_exit) {
-        throw std::runtime_error("main function must have an exit() call as the final statement");
+        throw SemanticError("main function must have an exit() call as the final statement", span);
     }
 
     bool has_non_final_exit = false;
@@ -164,7 +167,8 @@ void ExitCheckVisitor::validate_main_context(Context& ctx) {
     }
 
     if (has_final_expr || has_non_final_exit) {
-        throw std::runtime_error("exit() must be the final statement in main function");
+        auto diagnostic_span = final_exit_call ? final_exit_call->span : span;
+        throw SemanticError("exit() must be the final statement in main function", diagnostic_span);
     }
 }
 

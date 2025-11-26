@@ -4,6 +4,7 @@
 #include "semantic/hir/hir.hpp"
 #include "semantic/const/evaluator.hpp"
 #include "type/type.hpp"
+#include "src/utils/error.hpp"
 #include <optional>
 #include <stdexcept>
 #include <variant>
@@ -18,7 +19,7 @@ public:
         }
         auto* type_node_ptr = std::get_if<std::unique_ptr<hir::TypeNode>>(&type_annotation);
         if(!type_node_ptr || !*type_node_ptr){
-            throw std::runtime_error("Type annotation is null");
+            throw SemanticError("Type annotation is null", span::Span::invalid());
         }
         auto type_id = resolve_type_node(**type_node_ptr);
         type_annotation = type_id; // update the variant to TypeId
@@ -59,7 +60,7 @@ private:
             auto size = const_eval::evaluate_const_expression(
                 *array_type->size, get_typeID(Type{PrimitiveKind::USIZE}));
             if (!size) {
-                throw std::logic_error("Const value type mismatch for array type");
+                throw SemanticError("Const value type mismatch for array type", array_type->span);
             }
             if (auto size_uint = std::get_if<UintConst>(&*size)) {
                 return get_typeID(Type{ArrayType{
@@ -67,7 +68,7 @@ private:
                     .size = size_uint->value,
                 }});
             }
-            throw std::logic_error("Const value type mismatch for array type");
+            throw SemanticError("Const value type mismatch for array type", array_type->span);
         }
         std::optional<TypeId> operator()(const std::unique_ptr<hir::ReferenceType>& ref_type){
             auto referenced_type_id = resolver.resolve(ref_type->referenced_type);
@@ -83,7 +84,7 @@ private:
     TypeId resolve_type_node(const hir::TypeNode& type_node){
         auto type_id_opt = std::visit(Visitor{*this}, type_node.value);
         if(!type_id_opt){
-            throw std::runtime_error("Failed to resolve type node");
+            throw SemanticError("Failed to resolve type node", type_node.span);
         }
         return *type_id_opt;
     }

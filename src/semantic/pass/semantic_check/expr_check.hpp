@@ -10,6 +10,7 @@
 #include <string>
 
 #include "utils/debug_context.hpp"
+#include "span/span.hpp"
 
 namespace semantic {
 
@@ -38,7 +39,8 @@ public:
 
     [[nodiscard]] ContextGuard enter_context(std::string kind, std::string name);
     [[nodiscard]] std::string format_error(const std::string& message) const;
-    [[noreturn]] void throw_in_context(const std::string& message) const;
+    [[noreturn]] void throw_in_context(const std::string& message,
+                                      span::Span span = span::Span::invalid()) const;
 
     // Main entry point for checking an expression
     ExprInfo check(hir::Expr& expr);
