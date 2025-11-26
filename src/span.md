@@ -1,44 +1,54 @@
-# Debug feature: span
+# Span Infrastructure
 
-This feature enables tracking and reporting of source code spans (locations) during semantic analysis and error reporting in the compiler. It allows the compiler to provide more informative error messages by pinpointing the exact location in the source code where an issue occurs.
+The span subsystem provides a single source of truth for file IDs, byte offsets, and line/column reporting. It enables end-to-end location tracking—from lexing to semantic diagnostics—so that errors always include precise source context.
 
-## Implementation Details
+## Core Types (`src/span/span.hpp`)
 
-first, a span structure is defined to represent source code locations. This structure typically includes information such as the starting and ending line and column numbers, allowing precise identification of code segments.
+- `span::Span` stores `{ FileId file, uint32_t start, uint32_t end }` and helper methods such as `is_valid`, `length`, and `merge`. `Span::invalid()` is used whenever a node has no source representation (e.g., synthesized temporaries).
+- `span::FileId` is an interned index returned by the source manager.
+- `span::LineCol` holds 1-based line and column numbers for display.
 
-these systems will be involved to implement and utilize the span feature:
+All AST nodes (`src/ast/*.hpp`), HIR nodes (`src/semantic/hir/hir.hpp`), and tokens (`src/lexer/lexer.hpp`) now embed a `span::Span` field so they can preserve provenance automatically.
 
-- lexer: The lexer is responsible for tokenizing the source code. It will be modified to attach span information to each token it generates.
-- parser: The parser constructs the abstract syntax tree (AST) from the tokens provided by the lexer. It will be updated to propagate span information from tokens to AST nodes.
-- HIR: keeps the span information as it transforms the AST into a high-level intermediate representation.
-- semantic analysis: During semantic analysis, the compiler will use the span information to report errors and warnings with precise locations in the source code.
-- error reporting: The error reporting system will be enhanced to include span information in its messages, allowing developers to quickly locate and fix issues in their code.
+## Source Manager (`src/span/source_manager.{hpp,cpp}`)
 
-Helpers needed
+`span::SourceManager` owns the loaded source text and exposes:
 
-- Printing utilities: A global object that have access to the source code text and can print spans in a human-readable format.
-- Span propagation: Functions or methods to propagate span information through various stages of compilation, ensuring that span will be correctly merged or updated as needed.
+- `FileId add_file(std::string path, std::string contents)` – interns files and precomputes line offsets.
+- `LineCol to_line_col(FileId, uint32_t offset)` – converts byte offsets to human-friendly positions.
+- `std::string_view line_view(FileId, size_t line)` – grabs the full source line for diagnostics.
+- `std::string format_span(const Span&)` – renders the "file:line:column" header plus a highlighted caret line.
 
-## Additional Requirements
+Internally every file maintains its contents and a monotonic list of line-start offsets so `to_line_col` is just a linear scan without requiring the original stream.
 
-- **Span definition & storage**: Introduce a canonical `Span`/`FileId` pair (e.g., `src/span/span.hpp`) plus a `SourceManager` that interns files, tracks offsets, and provides line/column lookup. synthetic spans (auto-generated nodes) will inherit the span of their origin.
-- **Diagnostics plumbing**: Extend `utils/error.hpp` (or add a `diagnostic.hpp`) so every pass can emit span-aware errors. Make sure `debug::format_with_context` or a new reporter can print filename, line/column, and code snippets.
-- **Testing expectations**: Plan lexer/parser/HIR regression tests that assert spans propagate (golden dumps or targeted assertions) so regressions are caught early.
+## Error Reporting Integration
 
-## Concrete Implementation Plan
+`src/utils/error.hpp` now defines `CompilerError` (and `LexerError`, `ParserError`, `SemanticError`) with an optional `span::Span`. Helper functions throw these errors so call sites can attach spans without changing exception plumbing. When the span is `invalid()`, the CLI falls back to text-only messages.
 
-1. **Core infrastructure**
-   - Create `src/span/span.hpp/.cpp` with `struct Span { FileId file; uint32_t start; uint32_t end; }`, helper constructors, and `merge` utilities.
-   - Add `src/span/source_manager.{hpp,cpp}` that loads files (hooked into `cmd/semantic_pipeline`), hands out `FileId`s, and can convert byte offsets to line/column for diagnostics.
-2. **Lexer integration (`src/lexer/`)**
-   - Update token structs to carry a `Span`. When advancing characters, record start offset before consuming and end offset afterward.
-3. **Parser integration (`src/parser/`, `src/ast/`)**
-   - Add `Span` fields to every AST node. When constructing nodes, merge child spans (e.g., `Span::merge(first_token.span, last_token.span)`). Ensure builders in expression/statement parsers propagate spans, an automatic span generated from the tokens been consumed can be implemented.
-4. **HIR conversion (`src/semantic/hir/`)**
-   - Extend HIR structs in `hir.hpp` with span members mirroring their AST origins. During conversion (`hir/converter.cpp`), copy spans directly; when synthesizing nodes, derive spans from the originating AST node.
-5. **Semantic passes (`src/semantic/pass/*`)**
-   - Ensure every HIR expression/statement retains spans through transformations (e.g., auto-deref in `semantic/pass/semantic_check/expr_check.cpp` copies the source span). Update error sites to pass spans into the diagnostic system.
-6. **Error reporting (`utils/error.hpp`, CLI)**
-   - Introduce a `Diagnostic` struct (message + span + notes). Update passes to emit diagnostics instead of plain strings. Teach `cmd/semantic_pipeline` to catch diagnostics, look up source text via `SourceManager`, and print highlighted snippets.
-7. **Documentation & maintenance**
-   - Update this document plus relevant READMEs (`docs/development.md`, `src/span/README.md`) with span conventions, synthetic span policy, and troubleshooting tips.
+`cmd/semantic_pipeline.cpp` wires everything together:
+
+1. `SourceManager sources;` is created up front and each input file is registered via `add_file`.
+2. The lexer receives the `FileId` so each `Token` stores a span.
+3. Parser errors (`parsec::ParseError`) reuse the token span, and the helper `print_error_context` uses `SourceManager::line_view` to underline the error range.
+4. `print_lexer_error` and `print_semantic_error` format `CompilerError` spans with the exact filename/line/column plus a caret banner produced by the source manager.
+
+## Propagation Through the Pipeline
+
+- **Lexer**: `Lexer::tokenize` populates both `Token` instances and a parallel `token_spans` vector. Each token holds a span built from the `PositionedStream` offsets.
+- **Parser & AST**: AST nodes (expressions, statements, items, patterns, and types) all store spans. The parser merges child spans (for example, a binary expression spans from the left operand to the right operand) so higher-level nodes automatically inherit accurate ranges.
+- **HIR Conversion**: `AstToHirConverter` copies spans from AST nodes into HIR structures. Even structural helpers (`semantic::Field`, `hir::Local`, etc.) now carry spans so later passes can blame precise locations.
+- **Semantic Passes**: The passes still throw `std::runtime_error` in a few legacy locations, but all infrastructure for span-aware diagnostics is present. New errors should prefer `SemanticError` (or richer diagnostics once available) and pass through the offending node's span.
+
+## Usage Guidelines
+
+- Always propagate spans when synthesizing nodes. Prefer `span::Span::merge(lhs, rhs)` when combining tokens or child nodes.
+- When creating synthetic expressions/statements without a direct source range, copy a meaningful ancestor span so diagnostics remain anchored near the source construct that triggered the rewrite.
+- When reporting errors, either throw a `CompilerError` subclass with the relevant span or return a diagnostic object that carries it. The CLI already knows how to display the resulting information.
+
+## Future Work
+
+- Convert remaining `std::runtime_error` throws (e.g., in `exit_check.cpp`) to `SemanticError` so every semantic failure carries a location.
+- Teach tests to assert on spans (e.g., parser golden dumps) to prevent inadvertent regressions.
+- Extract a reusable `Diagnostic` struct for multi-span errors once the query-based passes start emitting richer messages.
+
+With the infrastructure above in place, span data now flows from the first byte read to the final diagnostic emitted, making it easier to reason about where invariants fail in the query-based pipeline.

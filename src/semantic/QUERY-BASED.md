@@ -17,6 +17,14 @@ Everything else (MIR, optimizations, diagnostics) consumes these queries instead
 
 ---
 
+### Current Branch Status (query-based)
+
+- `semantic::SemanticContext` already exposes `type_query`, `expr_query`, and `const_query` (`const_query` returns `std::optional<ConstVariant>` so callers can decide how to diagnose failures).
+- All expression checking is executed through the query entry points; `ExprChecker` lives inside `SemanticContext` and memoizes results on `hir::Expr::expr_info`.
+- The legacy **TypeConstResolver** pass has been deleted. Type annotations, pattern bindings, and const definitions now rely on the query layer instead of a standalone visitor.
+- Const evaluation happens in the expression query (via `semantic::const_eval` helpers), so `ConstEvaluator` is only used as a helper and never as a pass.
+- Downstream passes (trait checking, control-flow linking, MIR lowering) still rely on the invariants established by the queries but have not yet been rewritten to call them lazily; they read the resolved state recorded on HIR.
+
 ## 2. Layers and responsibilities
 
 ### 2.1 Structural layer (unchanged passes)
@@ -126,7 +134,7 @@ You explicitly want expectation included, so:
 * An expression node that is required to be constant.
 * An expected type (often a specific primitive like `usize`).
 
-**Output:** a `ConstVariant` (your existing representation of const values).
+**Output:** `std::optional<ConstVariant>` (mirrors `SemanticContext::const_query`). When const evaluation fails or would recurse (cycle detection), callers receive `std::nullopt` and may emit diagnostics themselves.
 
 **Behavior:**
 
@@ -146,34 +154,13 @@ You explicitly want expectation included, so:
 
 ## 4. Caching and reuse with expectations
 
-### 4.1 Distinct queries for with/without expectation
+The implementation maintains a **single** memo slot per HIR expression (`hir::Expr::expr_info`). The rules are:
 
-You treat:
+1. A query with `ExpectationKind::None` always writes its result into `expr_info`. Subsequent expectationless queries simply return the cached info.
+2. A query with an expectation first inspects the cached info (if any). If the cached info satisfies the expectation (assignable type and, for const expectations, a populated `const_value`), it is reused verbatim.
+3. If the expectation is stricter than the cached info, `ExprChecker` re-runs with that expectation and overwrites `expr_info` with the new result. There is no per-expectation cache yet, so callers that mix incompatible expectations (e.g., `exact<i32>` and `exact<u32>`) will trigger recomputation.
 
-* “Expression X with no expectation”
-* “Expression X with expected type T”
-* “Expression X with expected const type T”
-
-as **different queries**. That means:
-
-* They’re independently cached.
-* Results for one context don’t overwrite results for another.
-
-### 4.2 Reusing the no-expectation result
-
-To avoid recomputing:
-
-* When answering “with expectation” for a given expression, the query system **first tries** to reuse the “no expectation” result.
-
-Reuse is safe when:
-
-1. The no-expectation result has a type.
-2. That type is assignable to the expected type (for exact type or exact const).
-3. For const expectations, a const value is present.
-
-If those conditions hold, there’s no need to re-analyze: the expression is already fully typed in a way that satisfies the expectation.
-
-Otherwise, the system **falls back to the expectation-guided analysis**, which runs your proper inference/checking logic using that expectation. That result is stored **only** under the (expr, expectation) key.
+This matches the current code in `SemanticContext::expr_query`/`can_reuse_cached`; future work may introduce multi-entry caches if expression re-analysis turns out to be hot.
 
 ---
 
@@ -195,30 +182,15 @@ The semantic queries assume these invariants hold.
 
 ---
 
-### 5.2 TypeConstResolver
+### 5.2 TypeConstResolver (legacy)
 
-This pass currently:
+`TypeConstResolver` used to walk the entire HIR to resolve `TypeAnnotation` nodes and eager-evaluate const expressions. On `query-based` it has been deleted; its responsibilities moved into the query layer:
 
-* Resolves type annotations to `TypeId`.
-* Evaluates const expressions for const defs and array repeat counts.
-* Does unary-minus merging for negative integer literals.
-* Propagates resolved types into patterns.
+* `SemanticContext::type_query` replaces the old `TypeResolver` invocations and updates the annotation variant in place.
+* `SemanticContext::const_query` (backed by the expression query + `const_eval` helpers) fills `hir::ConstDef::const_value`, array repeat counts, and pattern annotations.
+* Unary-minus folding and other literal tweaks now live directly inside `ExprChecker`, so no hydration pass is required.
 
-Refactor plan:
-
-* Split it into two responsibilities:
-
-  1. **Type resolution**: move the logic into the type query.
-  2. **Const evaluation**: move into the const query via the expression query.
-
-What’s left of TypeConstResolver after refactor:
-
-* At most a thin driver that:
-
-  * Iterates over const definitions and calls the const query to ensure all consts are valid and to store their values in the const-def nodes.
-  * Optionally normalizes things like unary-minus if you want to keep that as a hydration step.
-
-But the *core logic* for “what is the type of this annotation?” and “what is the const value of this expression?” lives in the query system.
+The remaining driver logic (forcing consts to evaluate eagerly when desired) can be done by explicitly iterating over `hir::ConstDef` nodes and calling `const_query`, but there is no standalone visitor anymore.
 
 ---
 
@@ -349,38 +321,38 @@ If a const expression references itself, directly or indirectly, the const query
 
 To actually get from “current big pass” to this query system without chaos, break it into phases:
 
-### Phase 1: Introduce the query façade
+### Phase 1: Introduce the query façade *(Status: ✅ completed)*
 
 * Add `SemanticContext` with empty or trivial implementations, but no actual refactor yet.
 * Keep all existing passes exactly as they are.
 * Verify that adding the new struct doesn’t disturb anything.
 
-### Phase 2: Move type resolution into the type query
+### Phase 2: Move type resolution into the type query *(Status: ✅ completed)*
 
 * Port the type-resolving logic from `TypeConstResolver` into the type query implementation.
 * Adjust `TypeConstResolver` to call that query instead of doing its own thing.
 * Confirm that results are the same by running tests.
 
-### Phase 3: Move ExprChecker into the expr query
+### Phase 3: Move ExprChecker into the expr query *(Status: ✅ completed)*
 
 * Port ExprChecker into the expression query implementation, preserving expectation-handling.
 * Make the old ExprChecker pass call into the expression query instead of running directly.
 * Confirm diagnostics and behavior match existing results.
 
-### Phase 4: Integrate const-eval into expr query and add const query
+### Phase 4: Integrate const-eval into expr query and add const query *(Status: ✅ completed)*
 
 * For literal/unary/binary/const-use expressions, augment `ExprInfo` with const values.
 * Implement the const query as a wrapper over the expression query.
 * Convert uses of `ConstEvaluator` (e.g., const defs, array repeats, array sizes) to use the const query.
 * Once all uses are updated, remove or deprecate the standalone `ConstEvaluator`.
 
-### Phase 5: Retire TypeConstResolver logic
+### Phase 5: Retire TypeConstResolver logic *(Status: ✅ completed — pass removed from repo)*
 
 * Once type query and const query are fully in place and used everywhere, delete or shrink `TypeConstResolver`:
 
   * If needed, keep it as a debugging “validate everything” pass that simply forces queries to run.
 
-### Phase 6: Point MIR builder at queries
+### Phase 6: Point MIR builder at queries *(Status: ⏳ pending — MIR still reads resolved data from HIR)*
 
 * Replace any direct dependence on old semantic passes with calls into:
 
