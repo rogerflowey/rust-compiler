@@ -65,6 +65,34 @@ inline bool is_numeric_type(TypeId type) {
     }
 }
 
+inline bool is_signed_integer_type(TypeId type) {
+    auto prim = std::get_if<PrimitiveKind>(&type->value);
+    if (!prim) {
+        return false;
+    }
+    switch (*prim) {
+        case PrimitiveKind::I32:
+        case PrimitiveKind::ISIZE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline bool is_unsigned_integer_type(TypeId type) {
+    auto prim = std::get_if<PrimitiveKind>(&type->value);
+    if (!prim) {
+        return false;
+    }
+    switch (*prim) {
+        case PrimitiveKind::U32:
+        case PrimitiveKind::USIZE:
+            return true;
+        default:
+            return false;
+    }
+}
+
 inline bool is_integer_type(TypeId type) {
     auto prim = std::get_if<PrimitiveKind>(&type->value);
     if (!prim) {

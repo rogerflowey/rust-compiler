@@ -233,30 +233,119 @@ inline const char* to_string(ast::IntegerLiteralExpr::Type suffix_type) {
     return "???";
 }
 
-inline const char* to_string(UnaryOp::Op op) {
-    switch (op) {
-        case UnaryOp::NOT: return "NOT";
-        case UnaryOp::NEGATE: return "NEGATE";
-        case UnaryOp::DEREFERENCE: return "DEREFERENCE";
-        case UnaryOp::REFERENCE: return "REFERENCE";
-        case UnaryOp::MUTABLE_REFERENCE: return "MUTABLE_REFERENCE";
+inline const char* to_string(UnaryNot::Kind kind) {
+    switch (kind) {
+        case UnaryNot::Kind::Unspecified: return "Unspecified";
+        case UnaryNot::Kind::Bool: return "Bool";
+        case UnaryNot::Kind::Int: return "Int";
     }
     return "???";
 }
 
-inline const char* to_string(BinaryOp::Op op) {
-    switch (op) {
-        case BinaryOp::ADD: return "ADD"; case BinaryOp::SUB: return "SUB";
-        case BinaryOp::MUL: return "MUL"; case BinaryOp::DIV: return "DIV";
-        case BinaryOp::REM: return "REM"; case BinaryOp::AND: return "AND";
-        case BinaryOp::OR: return "OR"; case BinaryOp::BIT_AND: return "BIT_AND";
-        case BinaryOp::BIT_XOR: return "BIT_XOR"; case BinaryOp::BIT_OR: return "BIT_OR";
-        case BinaryOp::SHL: return "SHL"; case BinaryOp::SHR: return "SHR";
-        case BinaryOp::EQ: return "EQ"; case BinaryOp::NE: return "NE";
-        case BinaryOp::LT: return "LT"; case BinaryOp::GT: return "GT";
-        case BinaryOp::LE: return "LE"; case BinaryOp::GE: return "GE";
+inline const char* to_string(UnaryNegate::Kind kind) {
+    switch (kind) {
+        case UnaryNegate::Kind::Unspecified: return "Unspecified";
+        case UnaryNegate::Kind::SignedInt: return "SignedInt";
+        case UnaryNegate::Kind::UnsignedInt: return "UnsignedInt";
     }
     return "???";
+}
+
+inline std::string to_string(const UnaryOperator& op) {
+    return std::visit(Overloaded{
+        [](const UnaryNot& not_op) {
+            return std::string("NOT(") + to_string(not_op.kind) + ")";
+        },
+        [](const UnaryNegate& neg_op) {
+            return std::string("NEGATE(") + to_string(neg_op.kind) + ")";
+        },
+        [](const Dereference&) { return std::string("DEREFERENCE"); },
+        [](const Reference& reference) {
+            return reference.is_mutable ? std::string("MUTABLE_REFERENCE")
+                                         : std::string("REFERENCE");
+        }
+    }, op);
+}
+
+template <typename T>
+inline const char* to_arithmetic_kind(T kind) {
+    switch (kind) {
+        case T::Unspecified: return "Unspecified";
+        case T::SignedInt: return "SignedInt";
+        case T::UnsignedInt: return "UnsignedInt";
+    }
+    return "???";
+}
+
+template <typename T>
+inline const char* to_comparison_kind(T kind) {
+    switch (kind) {
+        case T::Unspecified: return "Unspecified";
+        case T::SignedInt: return "SignedInt";
+        case T::UnsignedInt: return "UnsignedInt";
+        case T::Bool: return "Bool";
+        case T::Char: return "Char";
+    }
+    return "???";
+}
+
+inline std::string to_string(const BinaryOperator& op) {
+    return std::visit(Overloaded{
+        [](const Add& add) {
+            return std::string("ADD(") + to_arithmetic_kind(add.kind) + ")";
+        },
+        [](const Subtract& sub) {
+            return std::string("SUB(") + to_arithmetic_kind(sub.kind) + ")";
+        },
+        [](const Multiply& mul) {
+            return std::string("MUL(") + to_arithmetic_kind(mul.kind) + ")";
+        },
+        [](const Divide& div) {
+            return std::string("DIV(") + to_arithmetic_kind(div.kind) + ")";
+        },
+        [](const Remainder& rem) {
+            return std::string("REM(") + to_arithmetic_kind(rem.kind) + ")";
+        },
+        [](const LogicalAnd& logical_and) {
+            return std::string("AND(") + (logical_and.kind == LogicalAnd::Kind::Bool ? "Bool" : "Unspecified") + ")";
+        },
+        [](const LogicalOr& logical_or) {
+            return std::string("OR(") + (logical_or.kind == LogicalOr::Kind::Bool ? "Bool" : "Unspecified") + ")";
+        },
+        [](const BitAnd& bit_and) {
+            return std::string("BIT_AND(") + to_arithmetic_kind(bit_and.kind) + ")";
+        },
+        [](const BitXor& bit_xor) {
+            return std::string("BIT_XOR(") + to_arithmetic_kind(bit_xor.kind) + ")";
+        },
+        [](const BitOr& bit_or) {
+            return std::string("BIT_OR(") + to_arithmetic_kind(bit_or.kind) + ")";
+        },
+        [](const ShiftLeft& shift_left) {
+            return std::string("SHL(") + to_arithmetic_kind(shift_left.kind) + ")";
+        },
+        [](const ShiftRight& shift_right) {
+            return std::string("SHR(") + to_arithmetic_kind(shift_right.kind) + ")";
+        },
+        [](const Equal& eq) {
+            return std::string("EQ(") + to_comparison_kind(eq.kind) + ")";
+        },
+        [](const NotEqual& ne) {
+            return std::string("NE(") + to_comparison_kind(ne.kind) + ")";
+        },
+        [](const LessThan& lt) {
+            return std::string("LT(") + to_comparison_kind(lt.kind) + ")";
+        },
+        [](const GreaterThan& gt) {
+            return std::string("GT(") + to_comparison_kind(gt.kind) + ")";
+        },
+        [](const LessEqual& le) {
+            return std::string("LE(") + to_comparison_kind(le.kind) + ")";
+        },
+        [](const GreaterEqual& ge) {
+            return std::string("GE(") + to_comparison_kind(ge.kind) + ")";
+        }
+    }, op);
 }
 
 inline const char* to_string(ast::PrimitiveType::Kind kind) {
@@ -864,7 +953,7 @@ inline void HirExprVisitor::operator()(const UnaryOp& e) const {
     p.out_ << "UnaryOp {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
-        p.print_field("op", std::string_view(to_string(e.op)));
+        p.print_field("op", to_string(e.op));
         p.print_ptr_field("rhs", e.rhs);
     }
     p.prefix();
@@ -876,7 +965,7 @@ inline void HirExprVisitor::operator()(const BinaryOp& e) const {
     p.out_ << "BinaryOp {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
-        p.print_field("op", std::string_view(to_string(e.op)));
+        p.print_field("op", to_string(e.op));
         p.print_ptr_field("lhs", e.lhs);
         p.print_ptr_field("rhs", e.rhs);
     }

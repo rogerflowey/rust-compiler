@@ -17,7 +17,7 @@ endif()
 
 
 # Include source and header directories.
-# The "." allows includes like "src/parser/..." and "test/parser/..."
+# The "." allows includes like "src/parser/..." and "src/parser/tests/..."
 # NOTE: While this works, using target_include_directories is the modern approach.
 # We will rely on that for our new library.
 include_directories(. src)
@@ -26,15 +26,17 @@ include_directories(. src)
 # Enable testing for the entire project.
 enable_testing()
 
-# Fetch GoogleTest at the top level so all subprojects and tests can use it.
+# Fetch Catch2 so subprojects can reuse the same testing infrastructure.
 if(BUILD_TESTING)
     include(FetchContent)
     FetchContent_Declare(
-      googletest
-        URL https://github.com/google/googletest/archive/5376968f6948923e2411081fd9372e71a59d8e77.zip
+        catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG v3.11.0
     )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
+    FetchContent_MakeAvailable(catch2)
+    list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+    include(Catch)
 endif()
 
 
@@ -42,6 +44,7 @@ endif()
 add_subdirectory(lib/llvmbuilder)
 add_subdirectory(lib/parsecpp)
 add_subdirectory(src/span)
+add_subdirectory(src/lexer)
 
 # --- Project Modules ---
 # Add our new parser library. This will execute src/parser/CMakeLists.txt
@@ -61,45 +64,8 @@ target_include_directories(compiler PRIVATE src)
 # need to link parsecpp directly here.
 target_link_libraries(compiler PRIVATE parser semantic mir)
 
-
-if(BUILD_TESTING)
-    add_library(compiler_tests_properties INTERFACE)
-
-    target_precompile_headers(compiler_tests_properties INTERFACE
-        <gtest/gtest.h>
-    )
-
-    # 3. Find all your test source files
-    file(GLOB_RECURSE COMPILER_TEST_SOURCES "test/*.cpp")
-
-    # 4. Loop over each test source file
-    foreach(test_source_file ${COMPILER_TEST_SOURCES})
-        get_filename_component(test_name ${test_source_file} NAME_WE)
-
-        # Special handling for HIR converter test - add the converter source
-        add_executable(${test_name} ${test_source_file})
-        
-        target_include_directories(${test_name} PRIVATE src)
-
-        # Link tests against the parser library.
-        target_link_libraries(${test_name} PRIVATE
-            parser
-            semantic
-            mir
-            llvmbuilder
-            gtest_main
-            compiler_tests_properties
-        )
-
-        add_test(NAME ${test_name} COMMAND ${test_name})
-    endforeach()
-endif()
-
-
 # --- User-friendly Output ---
 message(STATUS "Compiler executable will be built as:  ${CMAKE_BINARY_DIR}/compiler")
 if(BUILD_TESTING)
-    message(STATUS "Parsec lib tests will be built as:   ${CMAKE_BINARY_DIR}/lib/parsecpp/parsecpp_tests")
-    message(STATUS "Compiler tests will be built as:     ${CMAKE_BINARY_DIR}/compiler_tests")
     message(STATUS "To run all tests, use 'ctest' in the build directory.")
 endif()

@@ -2,22 +2,28 @@
 
 ## Overview
 
-The RCompiler test suite provides comprehensive testing coverage for all compiler components. It uses Google Test framework for unit testing and includes integration tests, usability tests, and regression tests.
+The RCompiler test suite provides comprehensive testing coverage for all compiler components. It now runs on [Catch2 v3](https://github.com/catchorg/Catch2), with a lightweight compatibility shim (`tests/catch_gtest_compat.hpp`) that keeps the familiar Google Test-style macros available for existing suites.
 
 ## Architecture
 
 ### Test Organization
 
 ```
-test/
-├── lexer/           # Lexer component tests
-├── parser/          # Parser component tests
-├── semantic/        # Semantic analysis tests
+src/
+├── lexer/tests/      # Lexer component tests
+├── parser/tests/     # Parser component tests
+├── semantic/tests/   # Semantic analysis tests
+├── mir/tests/        # MIR lowering tests
+lib/
+├── llvmbuilder/tests/ # Backend helpers
+├── parsecpp/tests/    # Parsec combinator library
 ```
+
+Tests live next to the code they exercise. This keeps fixtures close to their helpers/documentation and makes it obvious which target a test belongs to.
 
 ### Testing Framework
 
-- **Google Test (gtest)**: Primary testing framework
+- **Catch2 (via `tests/catch_gtest_compat.hpp`)**: Primary testing framework with Google Test style macros for continuity
 - **Test Fixtures**: Reusable test setup and teardown
 - **Parameterized Tests**: Data-driven testing
 - **Mock Objects**: Isolated component testing
@@ -26,7 +32,7 @@ test/
 
 ### Unit Tests
 
-#### Lexer Tests (`test/lexer/`)
+#### Lexer Tests (`src/lexer/tests/`)
 
 **Purpose**: Test lexical analysis functionality including tokenization, error handling, and edge cases.
 
@@ -44,7 +50,7 @@ test/
 - Error condition testing
 - Usability and API clarity testing
 
-#### Parser Tests (`test/parser/`)
+#### Parser Tests (`src/parser/tests/`)
 
 **Purpose**: Test syntactic analysis including expression parsing, statement parsing, and error recovery.
 
@@ -62,7 +68,7 @@ test/
 - Error condition testing
 - Parser maintainability validation
 
-#### Semantic Tests (`test/semantic/`)
+#### Semantic Tests (`src/semantic/tests/`)
 
 **Purpose**: Test semantic analysis including type checking, name resolution, and constant evaluation.
 
@@ -82,7 +88,7 @@ test/
 
 ### Integration Tests
 
-#### End-to-End Tests (`test/integration/`)
+#### End-to-End Tests (component-level integration)
 
 **Purpose**: Test complete compilation pipeline from source to output.
 
@@ -105,7 +111,7 @@ test/
 
 ### Performance Tests
 
-#### Usability Suite (`test/usability/`)
+#### Usability Suite (component-focused usability checks)
 
 **Purpose**: Validate developer experience and API clarity of compiler components.
 
@@ -128,7 +134,7 @@ test/
 
 ### Regression Tests
 
-#### Bug Regression Suite (`test/regression/`)
+#### Bug Regression Suite (embedded alongside component tests)
 
 **Purpose**: Ensure fixed bugs remain fixed and prevent regressions.
 
@@ -170,29 +176,7 @@ TEST_F(ComponentNameTestFixture, SpecificFeature) {
 
 ### Test Data Management
 
-```cpp
-// Test data organization
-struct TestData {
-    std::string input;
-    std::vector<Token> expected;
-    bool should_succeed;
-};
-
-// Parameterized tests
-class LexerTest : public ::testing::TestWithParam<TestData> {
-protected:
-    Lexer lexer;
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    LexerTests,
-    LexerTest,
-    ::testing::Values(
-        TestData{"let x = 42;", {/* expected tokens */}, true},
-        TestData{"invalid # char", {}, false}
-    )
-);
-```
+Parameterized helpers are currently implemented manually (see `src/lexer/tests/test_lexer.cpp` for examples). Prefer small loops or helper functions over advanced gtest parameter macros.
 
 ## Test Utilities
 
@@ -248,21 +232,17 @@ public:
 
 ```bash
 # Run all tests
-./build/ninja-debug/test_rcompiler
+ctest --test-dir build/ninja-debug --output-on-failure
 
-# Run specific test suite
-./build/ninja-debug/test_lexer
-./build/ninja-debug/test_parser
-./build/ninja-debug/test_semantic
+# Run a specific component suite
+./build/ninja-debug/test_expr_parser
+./build/ninja-debug/test_mir_lower
 
-# Run with specific filter
-./build/ninja-debug/test_rcompiler --gtest_filter="LexerTest.*"
+# Filter individual Catch2 test cases
+./build/ninja-debug/test_expr_parser "ExprParserTest/ParsesIntAndUintLiterals"
 
-# Run with verbose output
-./build/ninja-debug/test_rcompiler --gtest_output=xml
-
-# Run usability tests
-./build/ninja-debug/test_usability
+# Emit JUnit XML for CI
+./build/ninja-debug/test_expr_parser --reporter junit --out expr_parser-tests.xml
 ```
 
 ### Continuous Integration
@@ -295,7 +275,7 @@ test:
 # Generate coverage report
 cmake --preset ninja-debug -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON
 cmake --build build/ninja-debug
-./build/ninja-debug/test_rcompiler
+ctest --test-dir build/ninja-debug
 gcovr --xml --output coverage.xml src/
 ```
 
@@ -320,8 +300,8 @@ Regular coverage analysis identifies:
 ### Benchmark Tools
 
 ```cpp
-// Google Test integration for usability testing
-#include <gtest/gtest.h>
+// Catch2 integration for usability testing
+#include "tests/catch_gtest_compat.hpp"
 
 TEST(LexerUsabilityTest, ErrorMessagesAreHelpful) {
     // Test that lexer provides clear, helpful error messages
@@ -351,7 +331,7 @@ TEST(ErrorTest, InvalidCharacter) {
 TEST(ErrorTest, ErrorMessageContent) {
     try {
         // Code that should throw error
-        FAIL() << "Expected exception not thrown";
+        FAIL("Expected exception not thrown");
     } catch (const LexerError& e) {
         EXPECT_TRUE(std::string(e.what()).find("expected") != std::string::npos);
     }
@@ -363,17 +343,11 @@ TEST(ErrorTest, ErrorMessageContent) {
 ### Test Data Organization
 
 ```
-test/
-├── data/
-│   ├── lexer/
-│   │   ├── valid/
-│   │   └── invalid/
-│   ├── parser/
-│   │   ├── expressions/
-│   │   └── statements/
-│   └── semantic/
-│       ├── type_checking/
-│       └── name_resolution/
+src/
+├── lexer/tests/data/
+├── parser/tests/data/
+├── semantic/tests/data/
+└── mir/tests/data/
 ```
 
 ### Test Data Format
@@ -459,13 +433,13 @@ protected:
 ## Navigation
 
 - **[Testing Overview](../../docs/component-overviews/testing-overview.md)** - High-level testing architecture and design
-- **[Lexer Tests](lexer/test_lexer.cpp.md)** - Detailed lexer test implementation
-- **[Parser Tests](parser/test_expr_parser.cpp.md)** - Detailed parser test implementation
-- **[Semantic Tests](semantic/)** - Semantic analysis test documentation
+- **[Lexer Tests](../src/lexer/tests/test_lexer.cpp.md)** - Detailed lexer test implementation
+- **[Parser Tests](../src/parser/tests/test_expr_parser.cpp.md)** - Detailed parser test implementation
+- **[Semantic Tests](../src/semantic/tests/)** - Semantic analysis test documentation
 
 ## See Also
 
-- [Google Test Documentation](https://google.github.io/googletest/)
+- [Catch2 Documentation](https://github.com/catchorg/Catch2)
 - [CMake Testing Documentation](../../docs/development/cmake-testing.md)
 - [Continuous Integration Documentation](../../docs/development/ci-cd.md)
 - [Usability Testing Documentation](usability/README.md)

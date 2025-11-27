@@ -8,3 +8,7 @@ target_include_directories(parser
 )
 
 target_link_libraries(parser PUBLIC parsecpp span)
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

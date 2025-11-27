@@ -198,7 +198,7 @@ namespace transform_helper {
 inline std::unique_ptr<Expr> apply_dereference(std::unique_ptr<Expr> expr) {
     // Create a dereference operation
     auto deref_expr = std::make_unique<UnaryOp>();
-    deref_expr->op = UnaryOp::DEREFERENCE;
+    deref_expr->op = Dereference{};
     deref_expr->rhs = std::move(expr);
     deref_expr->span = get_span(deref_expr->rhs.get());
 
@@ -217,7 +217,7 @@ inline std::unique_ptr<Expr> apply_dereference(std::unique_ptr<Expr> expr) {
 inline std::unique_ptr<Expr> apply_reference(std::unique_ptr<Expr> expr, bool is_mutable = false) {
     // Create a reference operation
     auto ref_expr = std::make_unique<UnaryOp>();
-    ref_expr->op = is_mutable ? UnaryOp::MUTABLE_REFERENCE : UnaryOp::REFERENCE;
+    ref_expr->op = Reference{.is_mutable = is_mutable};
     ref_expr->rhs = std::move(expr);
     ref_expr->span = get_span(ref_expr->rhs.get());
 

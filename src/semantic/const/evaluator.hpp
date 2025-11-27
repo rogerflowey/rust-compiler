@@ -6,6 +6,8 @@
 #include <optional>
 #include <type_traits>
 
+#include "semantic/utils.hpp"
+
 namespace semantic::const_eval {
 
 namespace detail {
@@ -151,48 +153,65 @@ inline std::optional<ConstVariant> literal_value(const hir::Literal &literal, Ty
         literal.value);
 }
 
-inline std::optional<ConstVariant> eval_unary(hir::UnaryOp::Op op, TypeId operand_type,
+inline std::optional<ConstVariant> eval_unary(const hir::UnaryOperator &op,
+                                             TypeId operand_type,
                                              const ConstVariant &operand) {
     auto kind = detail::primitive_kind(operand_type);
-    if (!kind) {
-        return std::nullopt;
-    }
-
-    switch (op) {
-    case hir::UnaryOp::NEGATE:
-        if (detail::is_signed_kind(*kind)) {
-            if (auto value = detail::to_signed_value(operand)) {
-                return detail::from_signed_value(-*value, *kind);
+    return std::visit(Overloaded{
+        [&](const hir::UnaryNegate &neg) -> std::optional<ConstVariant> {
+            if (!kind) {
+                return std::nullopt;
             }
-        } else if (detail::is_unsigned_kind(*kind)) {
-            if (auto value = detail::to_unsigned_value(operand)) {
-                return ConstVariant{IntConst{static_cast<int32_t>(-static_cast<int32_t>(*value))}};
-            }
-        }
-        return std::nullopt;
-    case hir::UnaryOp::NOT:
-        if (detail::is_bool_type(operand_type)) {
-            if (auto bool_val = std::get_if<BoolConst>(&operand)) {
-                return ConstVariant{BoolConst{!bool_val->value}};
+            switch (neg.kind) {
+            case hir::UnaryNegate::Kind::SignedInt:
+                if (detail::is_signed_kind(*kind)) {
+                    if (auto value = detail::to_signed_value(operand)) {
+                        return detail::from_signed_value(-*value, *kind);
+                    }
+                }
+                return std::nullopt;
+            case hir::UnaryNegate::Kind::UnsignedInt:
+                if (detail::is_unsigned_kind(*kind)) {
+                    if (auto value = detail::to_unsigned_value(operand)) {
+                        return ConstVariant{IntConst{static_cast<int32_t>(-static_cast<int32_t>(*value))}};
+                    }
+                }
+                return std::nullopt;
+            case hir::UnaryNegate::Kind::Unspecified:
+                return std::nullopt;
             }
             return std::nullopt;
-        }
-        if (detail::is_signed_kind(*kind)) {
-            if (auto value = detail::to_signed_value(operand)) {
-                return detail::from_signed_value(~*value, *kind);
+        },
+        [&](const hir::UnaryNot &not_op) -> std::optional<ConstVariant> {
+            if (not_op.kind == hir::UnaryNot::Kind::Bool) {
+                if (detail::is_bool_type(operand_type)) {
+                    if (auto bool_val = std::get_if<BoolConst>(&operand)) {
+                        return ConstVariant{BoolConst{!bool_val->value}};
+                    }
+                }
+                return std::nullopt;
             }
-        } else if (detail::is_unsigned_kind(*kind)) {
-            if (auto value = detail::to_unsigned_value(operand)) {
-                return detail::from_unsigned_value(~*value, *kind);
+            if (not_op.kind != hir::UnaryNot::Kind::Int || !kind) {
+                return std::nullopt;
             }
+            if (detail::is_signed_kind(*kind)) {
+                if (auto value = detail::to_signed_value(operand)) {
+                    return detail::from_signed_value(~*value, *kind);
+                }
+            } else if (detail::is_unsigned_kind(*kind)) {
+                if (auto value = detail::to_unsigned_value(operand)) {
+                    return detail::from_unsigned_value(~*value, *kind);
+                }
+            }
+            return std::nullopt;
+        },
+        [](const auto &) -> std::optional<ConstVariant> {
+            return std::nullopt;
         }
-        return std::nullopt;
-    default:
-        return std::nullopt;
-    }
+    }, op);
 }
 
-inline std::optional<ConstVariant> eval_binary(hir::BinaryOp::Op op,
+inline std::optional<ConstVariant> eval_binary(const hir::BinaryOperator &op,
                                                TypeId lhs_type,
                                                const ConstVariant &lhs,
                                                TypeId rhs_type,
@@ -206,169 +225,283 @@ inline std::optional<ConstVariant> eval_binary(hir::BinaryOp::Op op,
         return detail::bool_result(value, result_type);
     };
 
-    auto numeric_binary = [&](auto signed_op, auto unsigned_op) -> std::optional<ConstVariant> {
+    auto numeric_binary = [&](auto op_kind, auto signed_op, auto unsigned_op) -> std::optional<ConstVariant> {
         if (!lhs_kind || !rhs_kind || !result_kind || !detail::is_integer_kind(*result_kind)) {
             return std::nullopt;
         }
+        switch (op_kind) {
+        case decltype(op_kind)::SignedInt:
+            if (detail::is_signed_kind(*lhs_kind) && detail::is_signed_kind(*rhs_kind)) {
+                auto lhs_val = detail::to_signed_value(lhs);
+                auto rhs_val = detail::to_signed_value(rhs);
+                if (!lhs_val || !rhs_val) {
+                    return std::nullopt;
+                }
+                auto result = signed_op(*lhs_val, *rhs_val);
+                if (!result) {
+                    return std::nullopt;
+                }
+                return detail::from_signed_value(*result, *result_kind);
+            }
+            return std::nullopt;
+        case decltype(op_kind)::UnsignedInt:
+            if (detail::is_unsigned_kind(*lhs_kind) && detail::is_unsigned_kind(*rhs_kind)) {
+                auto lhs_val = detail::to_unsigned_value(lhs);
+                auto rhs_val = detail::to_unsigned_value(rhs);
+                if (!lhs_val || !rhs_val) {
+                    return std::nullopt;
+                }
+                auto result = unsigned_op(*lhs_val, *rhs_val);
+                if (!result) {
+                    return std::nullopt;
+                }
+                return detail::from_unsigned_value(*result, *result_kind);
+            }
+            return std::nullopt;
+        default:
+            return std::nullopt;
+        }
+    };
 
-        if (detail::is_signed_kind(*result_kind)) {
+    auto comparison_numeric = [&](auto op_kind, auto comparator_signed, auto comparator_unsigned)
+        -> std::optional<ConstVariant> {
+        if (!lhs_kind || !rhs_kind) {
+            return std::nullopt;
+        }
+        switch (op_kind) {
+        case decltype(op_kind)::SignedInt: {
             auto lhs_val = detail::to_signed_value(lhs);
             auto rhs_val = detail::to_signed_value(rhs);
             if (!lhs_val || !rhs_val) {
                 return std::nullopt;
             }
-            auto result = signed_op(*lhs_val, *rhs_val);
-            if (!result) {
+            return bool_result(comparator_signed(*lhs_val, *rhs_val));
+        }
+        case decltype(op_kind)::UnsignedInt: {
+            auto lhs_val = detail::to_unsigned_value(lhs);
+            auto rhs_val = detail::to_unsigned_value(rhs);
+            if (!lhs_val || !rhs_val) {
                 return std::nullopt;
             }
-            return detail::from_signed_value(*result, *result_kind);
+            return bool_result(comparator_unsigned(*lhs_val, *rhs_val));
         }
-
-        auto lhs_val = detail::to_unsigned_value(lhs);
-        auto rhs_val = detail::to_unsigned_value(rhs);
-        if (!lhs_val || !rhs_val) {
+        default:
             return std::nullopt;
         }
-        auto result = unsigned_op(*lhs_val, *rhs_val);
-        if (!result) {
-            return std::nullopt;
-        }
-        return detail::from_unsigned_value(*result, *result_kind);
     };
 
-    switch (op) {
-    case hir::BinaryOp::ADD:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> { return l + r; },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l + r; });
-    case hir::BinaryOp::SUB:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> { return l - r; },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l - r; });
-    case hir::BinaryOp::MUL:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> { return l * r; },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l * r; });
-    case hir::BinaryOp::DIV:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> {
-                if (r == 0) {
-                    return std::nullopt;
-                }
-                return l / r;
-            },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> {
-                if (r == 0) {
-                    return std::nullopt;
-                }
-                return l / r;
-            });
-    case hir::BinaryOp::REM:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> {
-                if (r == 0) {
-                    return std::nullopt;
-                }
-                return l % r;
-            },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> {
-                if (r == 0) {
-                    return std::nullopt;
-                }
-                return l % r;
-            });
-    case hir::BinaryOp::BIT_AND:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> { return l & r; },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l & r; });
-    case hir::BinaryOp::BIT_OR:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> { return l | r; },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l | r; });
-    case hir::BinaryOp::BIT_XOR:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> { return l ^ r; },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l ^ r; });
-    case hir::BinaryOp::SHL:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> { return l << r; },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l << r; });
-    case hir::BinaryOp::SHR:
-        return numeric_binary(
-            [](int64_t l, int64_t r) -> std::optional<int64_t> { return l >> r; },
-            [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l >> r; });
-    case hir::BinaryOp::AND:
-    case hir::BinaryOp::OR: {
-        if (!detail::is_bool_type(lhs_type) || !detail::is_bool_type(rhs_type)) {
-            return std::nullopt;
-        }
-        auto lhs_val = std::get_if<BoolConst>(&lhs);
-        auto rhs_val = std::get_if<BoolConst>(&rhs);
-        if (!lhs_val || !rhs_val) {
-            return std::nullopt;
-        }
-        if (op == hir::BinaryOp::AND) {
-            return bool_result(lhs_val->value && rhs_val->value);
-        }
-        return bool_result(lhs_val->value || rhs_val->value);
-    }
-    case hir::BinaryOp::EQ:
-    case hir::BinaryOp::NE:
-    case hir::BinaryOp::LT:
-    case hir::BinaryOp::LE:
-    case hir::BinaryOp::GT:
-    case hir::BinaryOp::GE: {
-        if (detail::is_bool_type(lhs_type) && detail::is_bool_type(rhs_type)) {
+    return std::visit(Overloaded{
+        [&](const hir::Add &add) -> std::optional<ConstVariant> {
+            return numeric_binary(add.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> { return l + r; },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l + r; });
+        },
+        [&](const hir::Subtract &sub) -> std::optional<ConstVariant> {
+            return numeric_binary(sub.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> { return l - r; },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l - r; });
+        },
+        [&](const hir::Multiply &mul) -> std::optional<ConstVariant> {
+            return numeric_binary(mul.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> { return l * r; },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l * r; });
+        },
+        [&](const hir::Divide &div) -> std::optional<ConstVariant> {
+            return numeric_binary(div.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> {
+                    if (r == 0) { return std::nullopt; }
+                    return l / r;
+                },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> {
+                    if (r == 0) { return std::nullopt; }
+                    return l / r;
+                });
+        },
+        [&](const hir::Remainder &rem) -> std::optional<ConstVariant> {
+            return numeric_binary(rem.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> {
+                    if (r == 0) { return std::nullopt; }
+                    return l % r;
+                },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> {
+                    if (r == 0) { return std::nullopt; }
+                    return l % r;
+                });
+        },
+        [&](const hir::BitAnd &bit_and) -> std::optional<ConstVariant> {
+            return numeric_binary(bit_and.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> { return l & r; },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l & r; });
+        },
+        [&](const hir::BitOr &bit_or) -> std::optional<ConstVariant> {
+            return numeric_binary(bit_or.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> { return l | r; },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l | r; });
+        },
+        [&](const hir::BitXor &bit_xor) -> std::optional<ConstVariant> {
+            return numeric_binary(bit_xor.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> { return l ^ r; },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l ^ r; });
+        },
+        [&](const hir::ShiftLeft &shl) -> std::optional<ConstVariant> {
+            return numeric_binary(shl.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> { return l << r; },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l << r; });
+        },
+        [&](const hir::ShiftRight &shr) -> std::optional<ConstVariant> {
+            return numeric_binary(shr.kind,
+                [](int64_t l, int64_t r) -> std::optional<int64_t> { return l >> r; },
+                [](uint64_t l, uint64_t r) -> std::optional<uint64_t> { return l >> r; });
+        },
+        [&](const hir::LogicalAnd &) -> std::optional<ConstVariant> {
+            if (!detail::is_bool_type(lhs_type) || !detail::is_bool_type(rhs_type)) {
+                return std::nullopt;
+            }
             auto lhs_val = std::get_if<BoolConst>(&lhs);
             auto rhs_val = std::get_if<BoolConst>(&rhs);
             if (!lhs_val || !rhs_val) {
                 return std::nullopt;
             }
-            switch (op) {
-            case hir::BinaryOp::EQ: return bool_result(lhs_val->value == rhs_val->value);
-            case hir::BinaryOp::NE: return bool_result(lhs_val->value != rhs_val->value);
-            case hir::BinaryOp::LT: return bool_result(lhs_val->value < rhs_val->value);
-            case hir::BinaryOp::LE: return bool_result(lhs_val->value <= rhs_val->value);
-            case hir::BinaryOp::GT: return bool_result(lhs_val->value > rhs_val->value);
-            case hir::BinaryOp::GE: return bool_result(lhs_val->value >= rhs_val->value);
-            default: break;
+            return bool_result(lhs_val->value && rhs_val->value);
+        },
+        [&](const hir::LogicalOr &) -> std::optional<ConstVariant> {
+            if (!detail::is_bool_type(lhs_type) || !detail::is_bool_type(rhs_type)) {
+                return std::nullopt;
             }
-        }
-
-        if (detail::is_char_type(lhs_type) && detail::is_char_type(rhs_type)) {
-            auto lhs_val = std::get_if<CharConst>(&lhs);
-            auto rhs_val = std::get_if<CharConst>(&rhs);
+            auto lhs_val = std::get_if<BoolConst>(&lhs);
+            auto rhs_val = std::get_if<BoolConst>(&rhs);
             if (!lhs_val || !rhs_val) {
                 return std::nullopt;
             }
-            switch (op) {
-            case hir::BinaryOp::EQ: return bool_result(lhs_val->value == rhs_val->value);
-            case hir::BinaryOp::NE: return bool_result(lhs_val->value != rhs_val->value);
-            default: return std::nullopt;
+            return bool_result(lhs_val->value || rhs_val->value);
+        },
+        [&](const hir::Equal &eq) -> std::optional<ConstVariant> {
+            switch (eq.kind) {
+            case hir::Equal::Kind::Bool: {
+                if (detail::is_bool_type(lhs_type) && detail::is_bool_type(rhs_type)) {
+                    auto lhs_val = std::get_if<BoolConst>(&lhs);
+                    auto rhs_val = std::get_if<BoolConst>(&rhs);
+                    if (!lhs_val || !rhs_val) { return std::nullopt; }
+                    return bool_result(lhs_val->value == rhs_val->value);
+                }
+                return std::nullopt;
             }
-        }
-
-        auto lhs_val = detail::to_signed_value(lhs);
-        auto rhs_val = detail::to_signed_value(rhs);
-        if (!lhs_val || !rhs_val) {
+            case hir::Equal::Kind::Char: {
+                if (detail::is_char_type(lhs_type) && detail::is_char_type(rhs_type)) {
+                    auto lhs_val = std::get_if<CharConst>(&lhs);
+                    auto rhs_val = std::get_if<CharConst>(&rhs);
+                    if (!lhs_val || !rhs_val) { return std::nullopt; }
+                    return bool_result(lhs_val->value == rhs_val->value);
+                }
+                return std::nullopt;
+            }
+            case hir::Equal::Kind::SignedInt:
+                return comparison_numeric(eq.kind,
+                    [](int64_t l, int64_t r) { return l == r; },
+                    [](uint64_t, uint64_t) { return false; });
+            case hir::Equal::Kind::UnsignedInt:
+                return comparison_numeric(eq.kind,
+                    [](int64_t, int64_t) { return false; },
+                    [](uint64_t l, uint64_t r) { return l == r; });
+            case hir::Equal::Kind::Unspecified:
+                return std::nullopt;
+            }
+            return std::nullopt;
+        },
+        [&](const hir::NotEqual &ne) -> std::optional<ConstVariant> {
+            switch (ne.kind) {
+            case decltype(ne.kind)::Bool: {
+                if (detail::is_bool_type(lhs_type) && detail::is_bool_type(rhs_type)) {
+                    auto lhs_val = std::get_if<BoolConst>(&lhs);
+                    auto rhs_val = std::get_if<BoolConst>(&rhs);
+                    if (!lhs_val || !rhs_val) { return std::nullopt; }
+                    return bool_result(lhs_val->value != rhs_val->value);
+                }
+                return std::nullopt;
+            }
+            case decltype(ne.kind)::Char: {
+                if (detail::is_char_type(lhs_type) && detail::is_char_type(rhs_type)) {
+                    auto lhs_val = std::get_if<CharConst>(&lhs);
+                    auto rhs_val = std::get_if<CharConst>(&rhs);
+                    if (!lhs_val || !rhs_val) { return std::nullopt; }
+                    return bool_result(lhs_val->value != rhs_val->value);
+                }
+                return std::nullopt;
+            }
+            case decltype(ne.kind)::SignedInt:
+                return comparison_numeric(ne.kind,
+                    [](int64_t l, int64_t r) { return l != r; },
+                    [](uint64_t, uint64_t) { return false; });
+            case decltype(ne.kind)::UnsignedInt:
+                return comparison_numeric(ne.kind,
+                    [](int64_t, int64_t) { return false; },
+                    [](uint64_t l, uint64_t r) { return l != r; });
+            case decltype(ne.kind)::Unspecified:
+                return std::nullopt;
+            }
+            return std::nullopt;
+        },
+        [&](const hir::LessThan &lt) -> std::optional<ConstVariant> {
+            if (lt.kind == decltype(lt.kind)::Bool) {
+                if (detail::is_bool_type(lhs_type) && detail::is_bool_type(rhs_type)) {
+                    auto lhs_val = std::get_if<BoolConst>(&lhs);
+                    auto rhs_val = std::get_if<BoolConst>(&rhs);
+                    if (!lhs_val || !rhs_val) { return std::nullopt; }
+                    return bool_result(lhs_val->value < rhs_val->value);
+                }
+                return std::nullopt;
+            }
+            return comparison_numeric(lt.kind,
+                [](int64_t l, int64_t r) { return l < r; },
+                [](uint64_t l, uint64_t r) { return l < r; });
+        },
+        [&](const hir::LessEqual &le) -> std::optional<ConstVariant> {
+            if (le.kind == decltype(le.kind)::Bool) {
+                if (detail::is_bool_type(lhs_type) && detail::is_bool_type(rhs_type)) {
+                    auto lhs_val = std::get_if<BoolConst>(&lhs);
+                    auto rhs_val = std::get_if<BoolConst>(&rhs);
+                    if (!lhs_val || !rhs_val) { return std::nullopt; }
+                    return bool_result(lhs_val->value <= rhs_val->value);
+                }
+                return std::nullopt;
+            }
+            return comparison_numeric(le.kind,
+                [](int64_t l, int64_t r) { return l <= r; },
+                [](uint64_t l, uint64_t r) { return l <= r; });
+        },
+        [&](const hir::GreaterThan &gt) -> std::optional<ConstVariant> {
+            if (gt.kind == decltype(gt.kind)::Bool) {
+                if (detail::is_bool_type(lhs_type) && detail::is_bool_type(rhs_type)) {
+                    auto lhs_val = std::get_if<BoolConst>(&lhs);
+                    auto rhs_val = std::get_if<BoolConst>(&rhs);
+                    if (!lhs_val || !rhs_val) { return std::nullopt; }
+                    return bool_result(lhs_val->value > rhs_val->value);
+                }
+                return std::nullopt;
+            }
+            return comparison_numeric(gt.kind,
+                [](int64_t l, int64_t r) { return l > r; },
+                [](uint64_t l, uint64_t r) { return l > r; });
+        },
+        [&](const hir::GreaterEqual &ge) -> std::optional<ConstVariant> {
+            if (ge.kind == decltype(ge.kind)::Bool) {
+                if (detail::is_bool_type(lhs_type) && detail::is_bool_type(rhs_type)) {
+                    auto lhs_val = std::get_if<BoolConst>(&lhs);
+                    auto rhs_val = std::get_if<BoolConst>(&rhs);
+                    if (!lhs_val || !rhs_val) { return std::nullopt; }
+                    return bool_result(lhs_val->value >= rhs_val->value);
+                }
+                return std::nullopt;
+            }
+            return comparison_numeric(ge.kind,
+                [](int64_t l, int64_t r) { return l >= r; },
+                [](uint64_t l, uint64_t r) { return l >= r; });
+        },
+        [](const auto &) -> std::optional<ConstVariant> {
             return std::nullopt;
         }
-        switch (op) {
-        case hir::BinaryOp::EQ: return bool_result(*lhs_val == *rhs_val);
-        case hir::BinaryOp::NE: return bool_result(*lhs_val != *rhs_val);
-        case hir::BinaryOp::LT: return bool_result(*lhs_val < *rhs_val);
-        case hir::BinaryOp::LE: return bool_result(*lhs_val <= *rhs_val);
-        case hir::BinaryOp::GT: return bool_result(*lhs_val > *rhs_val);
-        case hir::BinaryOp::GE: return bool_result(*lhs_val >= *rhs_val);
-        default: break;
-        }
-        return std::nullopt;
-    }
-    default:
-        return std::nullopt;
-    }
+    }, op);
 }
-
 namespace detail {
 
 std::optional<ConstVariant> evaluate_const_expression_impl(const hir::Expr &expr,

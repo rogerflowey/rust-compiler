@@ -15,29 +15,17 @@ target_precompile_headers(parsecpp INTERFACE
 
 # --- 2. Define Tests for the Library ---
 if(BUILD_TESTING)
-    # GTest is now fetched by the parent project. We just use it.
-    
-    add_executable(parsecpp_tests test/test_parsec_basic.cpp)
-    add_executable(parsecpp_pratt_tests test/test_pratt.cpp)
-    add_executable(parsecpp_pratt_move_only_tests test/test_pratt_move_only.cpp)
+    set(PARSECPP_TEST_SOURCES
+        test_parsec_basic.cpp
+        test_pratt.cpp
+        test_pratt_move_only.cpp
+    )
 
-    # Link against the library it's testing and GTest.
-    target_link_libraries(parsecpp_tests PRIVATE
-        parsecpp
-        gtest_main
-    )
-    target_link_libraries(parsecpp_pratt_tests PRIVATE
-        parsecpp
-        gtest_main
-    )
-    target_link_libraries(parsecpp_pratt_move_only_tests PRIVATE
-        parsecpp
-        gtest_main
-    )
-    
-        # Register with CTest.
-    include(CTest)
-    add_test(NAME parsecpp-basic COMMAND parsecpp_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-    add_test(NAME parsecpp-pratt COMMAND parsecpp_pratt_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-    add_test(NAME parsecpp-pratt-move-only COMMAND parsecpp_pratt_move_only_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    foreach(test_source ${PARSECPP_TEST_SOURCES})
+        get_filename_component(test_name ${test_source} NAME_WE)
+        set(target_name parsecpp_${test_name})
+        add_executable(${target_name} tests/${test_source})
+        target_link_libraries(${target_name} PRIVATE parsecpp Catch2::Catch2WithMain)
+        catch_discover_tests(${target_name})
+    endforeach()
 endif()

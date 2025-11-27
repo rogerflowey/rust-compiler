@@ -1,21 +1,20 @@
 # Testing Overview
 
-The RCompiler test harness mirrors the production build: every compiler library is linked into focused GoogleTest binaries that exercise lexer, parser, semantic, MIR, and LLVM builder stages. This document describes the structure that currently exists in `query-based` so new contributors can locate high-signal regression suites quickly.
+The RCompiler test harness mirrors the production build: every compiler library is linked into focused Catch2 binaries (via the `tests/catch_gtest_compat.hpp` shim) that exercise lexer, parser, semantic, MIR, and LLVM builder stages. This document describes the structure that currently exists in `operator-disambig` so new contributors can locate high-signal regression suites quickly.
 
 ## Directory Layout
 
 ```text
-test/
-├── README.md
-├── lexer/
+src/
+├── lexer/tests/
 │   └── test_lexer.cpp
-├── parser/
+├── parser/tests/
 │   ├── test_expr_parser.cpp
 │   ├── test_item_parser.cpp
 │   ├── test_pattern_parser.cpp
 │   ├── test_stmt_parser.cpp
 │   └── test_type_parser.cpp
-├── semantic/
+├── semantic/tests/
 │   ├── test_const_type_check.cpp
 │   ├── test_control_flow_linking.cpp
 │   ├── test_exit_check.cpp
@@ -28,52 +27,55 @@ test/
 │   ├── test_trait_check.cpp
 │   ├── test_type_compatibility.cpp
 │   ├── test_type_const.cpp
-│   └── test_helpers/
-│       └── common.hpp
-├── mir/
+│   └── helpers/common.hpp
+├── mir/tests/
 │   └── test_mir_lower.cpp
-└── llvmbuilder/
-    └── test_builder.cpp
+lib/
+├── llvmbuilder/tests/
+│   └── test_builder.cpp
+└── parsecpp/tests/
+  ├── test_parsec_basic.cpp
+  ├── test_pratt.cpp
+  └── test_pratt_move_only.cpp
 ```
 
-Every `.cpp` under `test/` becomes a standalone executable named after the file (`test_expr_check`, `test_mir_lower`, …). The globbing approach removes the need to register targets manually and ensures new suites are picked up automatically.
+Each test translation unit sits next to the code it verifies. Module `CMakeLists.txt` files add their `tests/` subdirectories only when `BUILD_TESTING` is enabled.
 
-## GoogleTest Integration
+## Catch2 Integration
 
-`CMakeLists.txt` configures testing once and exposes a shared interface library for common properties:
+Top-level `CMakeLists.txt` fetches Catch2 v3 and exposes the `Catch2::Catch2WithMain` target. Each module opts into testing with a small `tests/CMakeLists.txt`. Example from `src/parser/tests/CMakeLists.txt`:
 
 ```cmake
-if(BUILD_TESTING)
-  include(FetchContent)
-  FetchContent_Declare(
-    googletest
-    URL https://github.com/google/googletest/archive/5376968f6948923e2411081fd9372e71a59d8e77.zip
-  )
-  FetchContent_MakeAvailable(googletest)
+if(NOT BUILD_TESTING)
+    return()
+endif()
 
-  add_library(compiler_tests_properties INTERFACE)
-  target_precompile_headers(compiler_tests_properties INTERFACE <gtest/gtest.h>)
+set(PARSER_TEST_SOURCES
+    test_expr_parser.cpp
+    test_item_parser.cpp
+    test_pattern_parser.cpp
+    test_stmt_parser.cpp
+    test_type_parser.cpp
+)
 
-  file(GLOB_RECURSE COMPILER_TEST_SOURCES "test/*.cpp")
-  foreach(test_source ${COMPILER_TEST_SOURCES})
+foreach(test_source ${PARSER_TEST_SOURCES})
     get_filename_component(test_name ${test_source} NAME_WE)
     add_executable(${test_name} ${test_source})
-    target_include_directories(${test_name} PRIVATE src)
-    target_link_libraries(${test_name} PRIVATE parser semantic mir llvmbuilder gtest_main compiler_tests_properties)
-    add_test(NAME ${test_name} COMMAND ${test_name})
-  endforeach()
-endif()
+    target_link_libraries(${test_name} PRIVATE parser Catch2::Catch2WithMain)
+    catch_discover_tests(${test_name})
+endforeach()
 ```
 
 Key properties:
 
-- Tests are always compiled with the same warnings, standard, and include paths as production code.
-- Pinned GoogleTest commit (`5376968…`) guarantees reproducible builds across CI and developer machines.
-- Precompiled headers hide GoogleTest overhead and keep compile times manageable even though every `.cpp` is its own binary.
+- Tests link directly against the library they exercise, so linker dependencies stay precise.
+- CMake only visits `tests/` when `BUILD_TESTING=ON`, avoiding noise in production builds.
+- `catch_discover_tests` registers suites with CTest automatically, so `ctest` can run everything without extra wiring.
+- The `tests/catch_gtest_compat.hpp` shim keeps existing suites working while still compiling against Catch2.
 
 ## Test Utilities
 
-Semantic suites share a large helper surface in [`test/semantic/test_helpers/common.hpp`](../../test/semantic/test_helpers/common.hpp). The header defines:
+Semantic suites share a large helper surface in [`src/semantic/tests/helpers/common.hpp`](../../src/semantic/tests/helpers/common.hpp). The header defines:
 
 - `SemanticTestBase` and `ControlFlowTestBase`, which bootstrap `semantic::SemanticContext`, impl tables, canonical primitive types, and reusable HIR fixtures.
 - Helper factories such as `createIntegerLiteral`, `createFunctionCall`, `createLoop`, and `createLetStmt` to construct HIR snippets without repeating boilerplate.
@@ -118,7 +120,7 @@ GitHub Actions workflow [`/.github/workflows/ci.yml`](../../.github/workflows/ci
 ## Related References
 
 - Implementation: [`test/`](../../test/)
-- Helper infrastructure: [`test/semantic/test_helpers/common.hpp`](../../test/semantic/test_helpers/common.hpp)
+- Helper infrastructure: [`src/semantic/tests/helpers/common.hpp`](../../src/semantic/tests/helpers/common.hpp)
 - Build wiring: [`CMakeLists.txt`](../../CMakeLists.txt)
 - CI pipeline: [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
 

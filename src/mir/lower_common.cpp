@@ -1,6 +1,7 @@
 #include "mir/lower_common.hpp"
 
 #include "semantic/hir/helper.hpp"
+#include "semantic/utils.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -64,76 +65,6 @@ bool is_unsigned_integer_kind(semantic::PrimitiveKind kind) {
 
 bool is_bool_kind(semantic::PrimitiveKind kind) {
     return kind == semantic::PrimitiveKind::BOOL;
-}
-
-BinaryOpRValue::Kind select_arithmetic_kind(hir::BinaryOp::Op op, semantic::TypeId type) {
-    if (is_signed_integer_type(type)) {
-        switch (op) {
-            case hir::BinaryOp::ADD: return BinaryOpRValue::Kind::IAdd;
-            case hir::BinaryOp::SUB: return BinaryOpRValue::Kind::ISub;
-            case hir::BinaryOp::MUL: return BinaryOpRValue::Kind::IMul;
-            case hir::BinaryOp::DIV: return BinaryOpRValue::Kind::IDiv;
-            case hir::BinaryOp::REM: return BinaryOpRValue::Kind::IRem;
-            default: break;
-        }
-    }
-
-    if (is_unsigned_integer_type(type)) {
-        switch (op) {
-            case hir::BinaryOp::ADD: return BinaryOpRValue::Kind::UAdd;
-            case hir::BinaryOp::SUB: return BinaryOpRValue::Kind::USub;
-            case hir::BinaryOp::MUL: return BinaryOpRValue::Kind::UMul;
-            case hir::BinaryOp::DIV: return BinaryOpRValue::Kind::UDiv;
-            case hir::BinaryOp::REM: return BinaryOpRValue::Kind::URem;
-            default: break;
-        }
-    }
-
-    throw std::logic_error("Arithmetic operation on unsupported type");
-}
-
-BinaryOpRValue::Kind select_bitwise_kind(hir::BinaryOp::Op op, semantic::TypeId type) {
-    if (!is_signed_integer_type(type) && !is_unsigned_integer_type(type)) {
-        throw std::logic_error("Bitwise operation on non-integer type");
-    }
-    switch (op) {
-        case hir::BinaryOp::BIT_AND: return BinaryOpRValue::Kind::BitAnd;
-        case hir::BinaryOp::BIT_XOR: return BinaryOpRValue::Kind::BitXor;
-        case hir::BinaryOp::BIT_OR: return BinaryOpRValue::Kind::BitOr;
-        case hir::BinaryOp::SHL: return BinaryOpRValue::Kind::Shl;
-        case hir::BinaryOp::SHR: return is_signed_integer_type(type) ? BinaryOpRValue::Kind::ShrArithmetic : BinaryOpRValue::Kind::ShrLogical;
-        default: break;
-    }
-    throw std::logic_error("Unhandled bitwise operator kind");
-}
-
-BinaryOpRValue::Kind select_comparison_kind(hir::BinaryOp::Op op, semantic::TypeId type) {
-    bool is_signed = is_signed_integer_type(type);
-    bool is_unsigned = is_unsigned_integer_type(type);
-
-    if (!is_signed && !is_unsigned) {
-        throw std::logic_error("Comparison requires integer operands");
-    }
-
-    switch (op) {
-        case hir::BinaryOp::EQ: return is_signed ? BinaryOpRValue::Kind::ICmpEq : BinaryOpRValue::Kind::UCmpEq;
-        case hir::BinaryOp::NE: return is_signed ? BinaryOpRValue::Kind::ICmpNe : BinaryOpRValue::Kind::UCmpNe;
-        case hir::BinaryOp::LT: return is_signed ? BinaryOpRValue::Kind::ICmpLt : BinaryOpRValue::Kind::UCmpLt;
-        case hir::BinaryOp::LE: return is_signed ? BinaryOpRValue::Kind::ICmpLe : BinaryOpRValue::Kind::UCmpLe;
-        case hir::BinaryOp::GT: return is_signed ? BinaryOpRValue::Kind::ICmpGt : BinaryOpRValue::Kind::UCmpGt;
-        case hir::BinaryOp::GE: return is_signed ? BinaryOpRValue::Kind::ICmpGe : BinaryOpRValue::Kind::UCmpGe;
-        default: break;
-    }
-    throw std::logic_error("Unhandled comparison operator");
-}
-
-BinaryOpRValue::Kind select_bool_equality_kind(hir::BinaryOp::Op op) {
-    switch (op) {
-        case hir::BinaryOp::EQ: return BinaryOpRValue::Kind::BoolEq;
-        case hir::BinaryOp::NE: return BinaryOpRValue::Kind::BoolNe;
-        default: break;
-    }
-    throw std::logic_error("Unsupported boolean comparison operator");
 }
 
 } // namespace
@@ -209,53 +140,205 @@ BinaryOpRValue::Kind classify_binary_kind(const hir::BinaryOp& binary,
                                           semantic::TypeId lhs_type,
                                           semantic::TypeId rhs_type,
                                           semantic::TypeId result_type) {
-    switch (binary.op) {
-        case hir::BinaryOp::ADD:
-        case hir::BinaryOp::SUB:
-        case hir::BinaryOp::MUL:
-        case hir::BinaryOp::DIV:
-        case hir::BinaryOp::REM:
+    return std::visit(Overloaded{
+        [&](const hir::Add &add) -> BinaryOpRValue::Kind {
             if (lhs_type != rhs_type || lhs_type != result_type) {
                 throw std::logic_error("Arithmetic operands must have matching types");
             }
-            return select_arithmetic_kind(binary.op, lhs_type);
-
-        case hir::BinaryOp::BIT_AND:
-        case hir::BinaryOp::BIT_XOR:
-        case hir::BinaryOp::BIT_OR:
-        case hir::BinaryOp::SHL:
-        case hir::BinaryOp::SHR:
+            switch (add.kind) {
+                case hir::Add::Kind::SignedInt: return BinaryOpRValue::Kind::IAdd;
+                case hir::Add::Kind::UnsignedInt: return BinaryOpRValue::Kind::UAdd;
+                case hir::Add::Kind::Unspecified: break;
+            }
+            throw std::logic_error("Unspecified arithmetic operator kind");
+        },
+        [&](const hir::Subtract &sub) -> BinaryOpRValue::Kind {
+            if (lhs_type != rhs_type || lhs_type != result_type) {
+                throw std::logic_error("Arithmetic operands must have matching types");
+            }
+            switch (sub.kind) {
+                case hir::Subtract::Kind::SignedInt: return BinaryOpRValue::Kind::ISub;
+                case hir::Subtract::Kind::UnsignedInt: return BinaryOpRValue::Kind::USub;
+                case hir::Subtract::Kind::Unspecified: break;
+            }
+            throw std::logic_error("Unspecified arithmetic operator kind");
+        },
+        [&](const hir::Multiply &mul) -> BinaryOpRValue::Kind {
+            if (lhs_type != rhs_type || lhs_type != result_type) {
+                throw std::logic_error("Arithmetic operands must have matching types");
+            }
+            switch (mul.kind) {
+                case hir::Multiply::Kind::SignedInt: return BinaryOpRValue::Kind::IMul;
+                case hir::Multiply::Kind::UnsignedInt: return BinaryOpRValue::Kind::UMul;
+                case hir::Multiply::Kind::Unspecified: break;
+            }
+            throw std::logic_error("Unspecified arithmetic operator kind");
+        },
+        [&](const hir::Divide &div) -> BinaryOpRValue::Kind {
+            if (lhs_type != rhs_type || lhs_type != result_type) {
+                throw std::logic_error("Arithmetic operands must have matching types");
+            }
+            switch (div.kind) {
+                case hir::Divide::Kind::SignedInt: return BinaryOpRValue::Kind::IDiv;
+                case hir::Divide::Kind::UnsignedInt: return BinaryOpRValue::Kind::UDiv;
+                case hir::Divide::Kind::Unspecified: break;
+            }
+            throw std::logic_error("Unspecified arithmetic operator kind");
+        },
+        [&](const hir::Remainder &rem) -> BinaryOpRValue::Kind {
+            if (lhs_type != rhs_type || lhs_type != result_type) {
+                throw std::logic_error("Arithmetic operands must have matching types");
+            }
+            switch (rem.kind) {
+                case hir::Remainder::Kind::SignedInt: return BinaryOpRValue::Kind::IRem;
+                case hir::Remainder::Kind::UnsignedInt: return BinaryOpRValue::Kind::URem;
+                case hir::Remainder::Kind::Unspecified: break;
+            }
+            throw std::logic_error("Unspecified arithmetic operator kind");
+        },
+        [&](const hir::BitAnd &bit_and) -> BinaryOpRValue::Kind {
             if (lhs_type != result_type) {
                 throw std::logic_error("Bitwise result must match left operand type");
             }
-            if (!is_signed_integer_type(rhs_type) && !is_unsigned_integer_type(rhs_type)) {
-                throw std::logic_error("Bitwise RHS must be integer type");
+            switch (bit_and.kind) {
+                case hir::BitAnd::Kind::SignedInt: return BinaryOpRValue::Kind::BitAnd;
+                case hir::BitAnd::Kind::UnsignedInt: return BinaryOpRValue::Kind::BitAnd;
+                case hir::BitAnd::Kind::Unspecified: break;
             }
-            return select_bitwise_kind(binary.op, lhs_type);
-
-        case hir::BinaryOp::EQ:
-        case hir::BinaryOp::NE:
-        case hir::BinaryOp::LT:
-        case hir::BinaryOp::LE:
-        case hir::BinaryOp::GT:
-        case hir::BinaryOp::GE:
+            throw std::logic_error("Unspecified bitwise operator kind");
+        },
+        [&](const hir::BitXor &bit_xor) -> BinaryOpRValue::Kind {
+            if (lhs_type != result_type) {
+                throw std::logic_error("Bitwise result must match left operand type");
+            }
+            switch (bit_xor.kind) {
+                case hir::BitXor::Kind::SignedInt: return BinaryOpRValue::Kind::BitXor;
+                case hir::BitXor::Kind::UnsignedInt: return BinaryOpRValue::Kind::BitXor;
+                case hir::BitXor::Kind::Unspecified: break;
+            }
+            throw std::logic_error("Unspecified bitwise operator kind");
+        },
+        [&](const hir::BitOr &bit_or) -> BinaryOpRValue::Kind {
+            if (lhs_type != result_type) {
+                throw std::logic_error("Bitwise result must match left operand type");
+            }
+            switch (bit_or.kind) {
+                case hir::BitOr::Kind::SignedInt: return BinaryOpRValue::Kind::BitOr;
+                case hir::BitOr::Kind::UnsignedInt: return BinaryOpRValue::Kind::BitOr;
+                case hir::BitOr::Kind::Unspecified: break;
+            }
+            throw std::logic_error("Unspecified bitwise operator kind");
+        },
+        [&](const hir::ShiftLeft &shl) -> BinaryOpRValue::Kind {
+            if (lhs_type != result_type) {
+                throw std::logic_error("Bitwise result must match left operand type");
+            }
+            switch (shl.kind) {
+                case hir::ShiftLeft::Kind::SignedInt: return BinaryOpRValue::Kind::Shl;
+                case hir::ShiftLeft::Kind::UnsignedInt: return BinaryOpRValue::Kind::Shl;
+                case hir::ShiftLeft::Kind::Unspecified: break;
+            }
+            throw std::logic_error("Unspecified shift operator kind");
+        },
+        [&](const hir::ShiftRight &shr) -> BinaryOpRValue::Kind {
+            if (lhs_type != result_type) {
+                throw std::logic_error("Bitwise result must match left operand type");
+            }
+            switch (shr.kind) {
+                case hir::ShiftRight::Kind::SignedInt: return BinaryOpRValue::Kind::ShrArithmetic;
+                case hir::ShiftRight::Kind::UnsignedInt: return BinaryOpRValue::Kind::ShrLogical;
+                case hir::ShiftRight::Kind::Unspecified: break;
+            }
+            throw std::logic_error("Unspecified shift operator kind");
+        },
+        [&](const hir::Equal &eq) -> BinaryOpRValue::Kind {
             if (!is_bool_type(result_type)) {
                 throw std::logic_error("Comparison result must be boolean");
             }
-            if (is_bool_type(lhs_type) && is_bool_type(rhs_type)) {
-                return select_bool_equality_kind(binary.op);
+            switch (eq.kind) {
+                case hir::Equal::Kind::Bool: return BinaryOpRValue::Kind::BoolEq;
+                case hir::Equal::Kind::SignedInt: return BinaryOpRValue::Kind::ICmpEq;
+                case hir::Equal::Kind::UnsignedInt: return BinaryOpRValue::Kind::UCmpEq;
+                case hir::Equal::Kind::Char: return BinaryOpRValue::Kind::UCmpEq;
+                case hir::Equal::Kind::Unspecified: break;
             }
-            if (lhs_type != rhs_type) {
-                throw std::logic_error("Comparison operands must share type");
+            throw std::logic_error("Unhandled equality operator kind");
+        },
+        [&](const hir::NotEqual &ne) -> BinaryOpRValue::Kind {
+            if (!is_bool_type(result_type)) {
+                throw std::logic_error("Comparison result must be boolean");
             }
-            return select_comparison_kind(binary.op, lhs_type);
-
-        case hir::BinaryOp::AND:
-        case hir::BinaryOp::OR:
+            switch (ne.kind) {
+                case decltype(ne.kind)::Bool: return BinaryOpRValue::Kind::BoolNe;
+                case decltype(ne.kind)::SignedInt: return BinaryOpRValue::Kind::ICmpNe;
+                case decltype(ne.kind)::UnsignedInt: return BinaryOpRValue::Kind::UCmpNe;
+                case decltype(ne.kind)::Char: return BinaryOpRValue::Kind::UCmpNe;
+                case decltype(ne.kind)::Unspecified: break;
+            }
+            throw std::logic_error("Unhandled inequality operator kind");
+        },
+        [&](const hir::LessThan &lt) -> BinaryOpRValue::Kind {
+            if (!is_bool_type(result_type)) {
+                throw std::logic_error("Comparison result must be boolean");
+            }
+            switch (lt.kind) {
+                case decltype(lt.kind)::SignedInt: return BinaryOpRValue::Kind::ICmpLt;
+                case decltype(lt.kind)::UnsignedInt: return BinaryOpRValue::Kind::UCmpLt;
+                case decltype(lt.kind)::Bool:
+                case decltype(lt.kind)::Char:
+                case decltype(lt.kind)::Unspecified: break;
+            }
+            throw std::logic_error("Unhandled comparison operator kind");
+        },
+        [&](const hir::LessEqual &le) -> BinaryOpRValue::Kind {
+            if (!is_bool_type(result_type)) {
+                throw std::logic_error("Comparison result must be boolean");
+            }
+            switch (le.kind) {
+                case decltype(le.kind)::SignedInt: return BinaryOpRValue::Kind::ICmpLe;
+                case decltype(le.kind)::UnsignedInt: return BinaryOpRValue::Kind::UCmpLe;
+                case decltype(le.kind)::Bool:
+                case decltype(le.kind)::Char:
+                case decltype(le.kind)::Unspecified: break;
+            }
+            throw std::logic_error("Unhandled comparison operator kind");
+        },
+        [&](const hir::GreaterThan &gt) -> BinaryOpRValue::Kind {
+            if (!is_bool_type(result_type)) {
+                throw std::logic_error("Comparison result must be boolean");
+            }
+            switch (gt.kind) {
+                case decltype(gt.kind)::SignedInt: return BinaryOpRValue::Kind::ICmpGt;
+                case decltype(gt.kind)::UnsignedInt: return BinaryOpRValue::Kind::UCmpGt;
+                case decltype(gt.kind)::Bool:
+                case decltype(gt.kind)::Char:
+                case decltype(gt.kind)::Unspecified: break;
+            }
+            throw std::logic_error("Unhandled comparison operator kind");
+        },
+        [&](const hir::GreaterEqual &ge) -> BinaryOpRValue::Kind {
+            if (!is_bool_type(result_type)) {
+                throw std::logic_error("Comparison result must be boolean");
+            }
+            switch (ge.kind) {
+                case decltype(ge.kind)::SignedInt: return BinaryOpRValue::Kind::ICmpGe;
+                case decltype(ge.kind)::UnsignedInt: return BinaryOpRValue::Kind::UCmpGe;
+                case decltype(ge.kind)::Bool:
+                case decltype(ge.kind)::Char:
+                case decltype(ge.kind)::Unspecified: break;
+            }
+            throw std::logic_error("Unhandled comparison operator kind");
+        },
+        [&](const hir::LogicalAnd &) -> BinaryOpRValue::Kind {
             throw std::logic_error("Short-circuit boolean operators handled separately");
-    }
-
-    throw std::logic_error("Unknown binary operator");
+        },
+        [&](const hir::LogicalOr &) -> BinaryOpRValue::Kind {
+            throw std::logic_error("Short-circuit boolean operators handled separately");
+        },
+        [](const auto &) -> BinaryOpRValue::Kind {
+            throw std::logic_error("Unknown binary operator");
+        }
+    }, binary.op);
 }
 
 std::string type_name(semantic::TypeId type) {
