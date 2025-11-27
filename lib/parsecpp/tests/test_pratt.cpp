@@ -123,5 +123,4 @@ TEST(PrattTest, RunConsumesAllOnSuccess) {
     // Fails because not all input consumed (unknown op '?')
     auto res2 = run(parser, "1?2");
     ASSERT_TRUE(std::holds_alternative<ParseError>(res2));
-    auto err = std::get<ParseError>(res2);
 }

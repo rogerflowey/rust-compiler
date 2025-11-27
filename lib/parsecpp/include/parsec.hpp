@@ -52,8 +52,6 @@ span::Span extract_span(const Token &token) {
 
 struct ParseError {
   size_t position;
-  std::vector<std::string> expected = {};
-  std::vector<std::string> context_stack = {};
   bool is_labeled_error = false;
   span::Span span = span::Span::invalid();
 };
@@ -113,13 +111,6 @@ template <typename Token> struct ParseContext {
     if (!furthest_error->span.is_valid() && new_error.span.is_valid()) {
       furthest_error->span = new_error.span;
     }
-    furthest_error->expected.insert(furthest_error->expected.end(),
-                                    new_error.expected.begin(),
-                                    new_error.expected.end());
-    std::sort(furthest_error->expected.begin(), furthest_error->expected.end());
-    furthest_error->expected.erase(std::unique(furthest_error->expected.begin(),
-                                               furthest_error->expected.end()),
-                                   furthest_error->expected.end());
   }
 
   span::Span span_at(size_t pos) const {
@@ -267,12 +258,11 @@ template <typename R, typename Token> Parser<R, Token> succeed(R value) {
 
 template <typename Token>
 Parser<Token, Token> satisfy(std::function<bool(const Token &)> predicate,
-                             std::string expected) {
+                             std::string /*expected*/) {
   return Parser<Token, Token>(
-      [predicate,
-       expected](ParseContext<Token> &context) -> ParseResult<Token> {
+      [predicate](ParseContext<Token> &context) -> ParseResult<Token> {
         if (context.isEOF()) {
-          auto err = ParseError{context.position, {expected}, {expected}};
+          ParseError err{context.position};
           err.span = context.span_at(context.position);
           return err;
         }
@@ -281,7 +271,7 @@ Parser<Token, Token> satisfy(std::function<bool(const Token &)> predicate,
           context.position++;
           return t;
         }
-        auto err = ParseError{context.position, {expected}, {expected}};
+        ParseError err{context.position};
         err.span = context.span_at(context.position);
         return err;
       });
@@ -350,8 +340,6 @@ auto Parser<ReturnType, Token>::orElse(
           return err2;
         }
 
-        err1.expected.insert(err1.expected.end(), err2.expected.begin(),
-                             err2.expected.end());
         if (!err1.span.is_valid() && err2.span.is_valid()) {
           err1.span = err2.span;
         }
@@ -422,9 +410,9 @@ auto Parser<ReturnType, Token>::filter(
     } else {
       context.position = originalPos;
 
-      std::string final_message = msg.value_or("value did not satisfy predicate");
-      ParseError new_error{originalPos, {final_message}, {}, false,
-                           context.span_at(originalPos)};
+      (void)msg; // retained for compatibility with existing call sites
+      ParseError new_error{originalPos};
+      new_error.span = context.span_at(originalPos);
 
       context.updateError(new_error);
 
@@ -542,15 +530,15 @@ auto Parser<ReturnType, Token>::tuple(
 }
 
 template <typename ReturnType, typename Token>
-auto Parser<ReturnType, Token>::label(std::string message) const {
+auto Parser<ReturnType, Token>::label(std::string /*message*/) const {
   return Parser<ReturnType, Token>(
-      [p = *this,
-       message](ParseContext<Token> &context) -> ParseResult<ReturnType> {
+      [p = *this](ParseContext<Token> &context) -> ParseResult<ReturnType> {
         auto res = p.parse(context);
         if (std::holds_alternative<ParseError>(res)) {
           auto err = std::get<ParseError>(res);
           err = attach_span(err, context, err.position);
-          return ParseError{err.position, {message}, {}, true, err.span};
+          err.is_labeled_error = true;
+          return err;
         }
         return res;
       });
@@ -609,7 +597,7 @@ ParseResult<ReturnType> run(const Parser<ReturnType, Token> &parser,
 
   // Case 1: Parse succeeded but did not consume all input. This is an error.
   if (std::holds_alternative<ReturnType>(result) && !context.isEOF()) {
-    ParseError eof_error{context.position, {"Expected end of input"}, {}};
+    ParseError eof_error{context.position};
     eof_error.span = context.span_at(context.position);
     context.updateError(eof_error);
     return *context.furthest_error;
@@ -623,7 +611,7 @@ ParseResult<ReturnType> run(const Parser<ReturnType, Token> &parser,
       return *context.furthest_error;
     }
     return attach_span(std::get<ParseError>(result), context,
-                       std::get<ParseError>(result).position);
+               std::get<ParseError>(result).position);
   }
 
   // Case 3: Success and EOF. The ideal case.

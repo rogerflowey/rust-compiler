@@ -2,6 +2,7 @@
 
 #include "../ast/expr.hpp"
 #include "common.hpp"
+#include "../../lib/parsecpp/include/pratt.hpp"
 #include <functional>
 #include <memory>
 #include <vector>

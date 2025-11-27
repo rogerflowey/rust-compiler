@@ -54,7 +54,9 @@ PatternParser PatternParserBuilder::buildIdentifierPattern() const {
                 const auto &tok = ctx.tokens[ctx.position];
                 if (tok.type == TOKEN_SEPARATOR && tok.value == "::") {
                     ctx.position = start;
-                    return parsec::ParseError{start, {"not a path segment"},{}};
+                    ParseError err{start};
+                    err.span = ctx.span_at(start);
+                    return err;
                 }
             }
             return res;

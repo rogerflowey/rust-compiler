@@ -41,11 +41,6 @@ static ItemPtr parse_item(const std::string &src) {
   auto result = run(full, tokens);
   if (std::holds_alternative<ParseError>(result)) {
     auto err = std::get<ParseError>(result);
-    std::string expected_str;
-    for (const auto &exp : err.expected) {
-      expected_str += " " + exp;
-    }
-
     std::string found_tok_str = "EOF";
     if (err.position < tokens.size()) {
       found_tok_str = tokens[err.position].value;
@@ -53,8 +48,7 @@ static ItemPtr parse_item(const std::string &src) {
 
     std::string error_msg =
         "Parse error at position " + std::to_string(err.position) +
-        ". Expected one of:" + expected_str + ", but found '" +
-        found_tok_str + "'.\nSource: " + src;
+        ". Found '" + found_tok_str + "'.\nSource: " + src;
     throw std::runtime_error(error_msg);
   }
   return std::move(std::get<ItemPtr>(result));

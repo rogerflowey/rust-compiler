@@ -34,23 +34,13 @@ static ExprPtr parse_expr(const std::string &src) {
   auto result = run(full, tokens);
   if (std::holds_alternative<parsec::ParseError>(result)) {
     auto err = std::get<parsec::ParseError>(result);
-    std::string expected_str;
-    for(const auto& exp : err.expected) {
-        expected_str += " " + exp;
-    }
-
     std::string found_tok_str = "EOF";
     if(err.position < tokens.size()){
         found_tok_str = tokens[err.position].value;
     }
 
     std::string error_msg = "Parse error at position " + std::to_string(err.position) +
-                            ". Expected one of:" + expected_str +
-                            ", but found '" + found_tok_str + "'.\nSource: " + src;
-
-    for(const auto& ctx : err.context_stack) {
-        error_msg += "\n... while parsing " + ctx;
-    }
+                ". Found '" + found_tok_str + "'.\nSource: " + src;
 
     throw std::runtime_error(error_msg);
   }

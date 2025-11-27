@@ -398,7 +398,7 @@ TEST(ParsecTest, FailableMap) {
         }
         // Failure with a custom error. The position (0) is a placeholder;
         // map() is responsible for setting the correct one.
-        return ParseError{0, {"digit must be less than 5"}};
+        return ParseError{0};
     });
 
     // Case 1: Success. Underlying parser and map function both succeed.
@@ -417,7 +417,6 @@ TEST(ParsecTest, FailableMap) {
     ASSERT_TRUE(std::holds_alternative<ParseError>(run_res2));
     auto err2 = std::get<ParseError>(run_res2);
     EXPECT_EQ(err2.position, 0);
-    EXPECT_EQ(err2.expected[0], "digit must be less than 5");
 
 
     // Case 3: Failure in the underlying parser. The map function is never called.
@@ -427,7 +426,7 @@ TEST(ParsecTest, FailableMap) {
     auto run_res3 = run(small_number_parser, "not a number");
     ASSERT_TRUE(std::holds_alternative<ParseError>(run_res3));
     auto err3 = std::get<ParseError>(run_res3);
-    EXPECT_EQ(err3.expected[0], "a digit"); // Error comes from the original parser
+    EXPECT_EQ(err3.position, 0);
 }
 
 TEST(ParsecTest, Filter) {
@@ -449,7 +448,7 @@ TEST(ParsecTest, Filter) {
     EXPECT_EQ(pos2, 0); // Position is reset
     auto run_res2 = run(even_number_parser, "357");
     ASSERT_TRUE(std::holds_alternative<ParseError>(run_res2));
-    EXPECT_EQ(std::get<ParseError>(run_res2).expected[0], "value did not satisfy predicate");
+    EXPECT_EQ(std::get<ParseError>(run_res2).position, 0);
 
 
     // Case 2: Filter with a custom error message
@@ -470,7 +469,7 @@ TEST(ParsecTest, Filter) {
     EXPECT_EQ(pos4, 0);
     auto run_res4 = run(odd_number_parser, "246");
     ASSERT_TRUE(std::holds_alternative<ParseError>(run_res4));
-    EXPECT_EQ(std::get<ParseError>(run_res4).expected[0], "number must be odd");
+    EXPECT_EQ(std::get<ParseError>(run_res4).position, 0);
 
 
     // Case 3: Chaining filters
@@ -486,10 +485,10 @@ TEST(ParsecTest, Filter) {
     // Fails first filter
     auto run_res6 = run(middle_number_parser, "1");
     ASSERT_TRUE(std::holds_alternative<ParseError>(run_res6));
-    EXPECT_EQ(std::get<ParseError>(run_res6).expected[0], "must be > 2");
+    EXPECT_EQ(std::get<ParseError>(run_res6).position, 0);
 
     // Fails second filter
     auto run_res7 = run(middle_number_parser, "9");
     ASSERT_TRUE(std::holds_alternative<ParseError>(run_res7));
-    EXPECT_EQ(std::get<ParseError>(run_res7).expected[0], "must be < 8");
+    EXPECT_EQ(std::get<ParseError>(run_res7).position, 0);
 }

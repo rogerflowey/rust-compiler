@@ -38,11 +38,6 @@ void print_error_context(const parsec::ParseError& error,
         }
     }
 
-    std::cerr << std::endl << "Expected one of: ";
-    for(size_t i = 0; i < error.expected.size(); ++i) {
-        std::cerr << "'" << error.expected[i] << "'" << (i == error.expected.size() - 1 ? "" : ", ");
-    }
-    std::cerr << std::endl;
 }
 
 
