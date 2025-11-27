@@ -3,6 +3,7 @@
 #include "hir/hir.hpp"
 #include "semantic/const/evaluator.hpp"
 #include "pass/semantic_check/expr_info.hpp"
+#include <type_traits>
 #include "pass/semantic_check/other_check.hpp"
 #include "semantic/query/semantic_context.hpp"
 #include "semantic/type/helper.hpp"
@@ -493,40 +494,41 @@ ExprInfo ExprChecker::check(hir::ArrayRepeat &expr, TypeExpectation exp) {
 
 // Operations
 ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
-  const TypeId bool_type = get_typeID(Type{PrimitiveKind::BOOL});
+  auto bool_type = get_typeID(Type{PrimitiveKind::BOOL});
   TypeExpectation operand_expectation = TypeExpectation::none();
 
-  auto is_numeric_expectation = [&](const TypeExpectation &expectation) {
-    return expectation.has_expected &&
-           helper::type_helper::is_numeric_type(expectation.expected);
-  };
-
-  switch (expr.op) {
-  case hir::UnaryOp::NEGATE:
-    if (is_numeric_expectation(exp)) {
-      operand_expectation = exp;
-    } 
-    break;
-  case hir::UnaryOp::NOT:
-    if (exp.has_expected && is_bool_type(exp.expected)) {
-      operand_expectation = TypeExpectation::exact(bool_type);
-    } else if (is_numeric_expectation(exp)) {
-      operand_expectation = exp;
-    }
-    break;
-  case hir::UnaryOp::REFERENCE:
-  case hir::UnaryOp::MUTABLE_REFERENCE:
-    if (exp.has_expected) {
-      if (const auto *ref_type =
-              std::get_if<ReferenceType>(&exp.expected->value)) {
-        operand_expectation =
-            TypeExpectation::exact(ref_type->referenced_type);
-      }
-    }
-    break;
-  default:
-    break;
-  }
+  std::visit(Overloaded{
+                 [&](const hir::UnaryNot &) {
+                   if (exp.has_expected &&
+                       (is_numeric_type(exp.expected) ||
+                        is_bool_type(exp.expected))) {
+                     operand_expectation = TypeExpectation::exact(exp.expected);
+                   }
+                 },
+                 [&](const hir::UnaryNegate &) {
+                   if (exp.has_expected && is_numeric_type(exp.expected)) {
+                     operand_expectation = TypeExpectation::exact(exp.expected);
+                   }
+                 },
+                 [&](const hir::Dereference &) {
+                   if (exp.has_expected && is_reference_type(exp.expected)) {
+                     if (const auto *ref_type =
+                             std::get_if<ReferenceType>(&exp.expected->value)) {
+                       operand_expectation =
+                           TypeExpectation::exact(ref_type->referenced_type);
+                     }
+                   }
+                 },
+                 [&](const hir::Reference &) {
+                   if (exp.has_expected) {
+                     if (const auto *ref_type =
+                             std::get_if<ReferenceType>(&exp.expected->value)) {
+                       operand_expectation =
+                           TypeExpectation::exact(ref_type->referenced_type);
+                     }
+                   }
+                 }},
+             expr.op);
 
   ExprInfo operand_info = check(*expr.rhs, operand_expectation);
   auto unresolved = [&](bool as_place = false) {
@@ -554,79 +556,83 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
                                   *operand_info.const_value);
   };
 
-  switch (expr.op) {
-  case hir::UnaryOp::NOT: {
-    if (!operand_info.has_type) {
-      return unresolved();
-    }
-    if (is_bool_type(operand_info.type)) {
-      auto folded = fold_unary();
-      return ExprInfo{.type = bool_type,
-                      .has_type = true,
-                      .is_mut = false,
-                      .is_place = false,
-                      .endpoints = operand_info.endpoints,
-                      .const_value = folded};
-    }
-    if (is_numeric_type(operand_info.type)) {
-      auto folded = fold_unary();
-      return ExprInfo{.type = operand_info.type,
-                      .has_type = true,
-                      .is_mut = false,
-                      .is_place = false,
-                      .endpoints = operand_info.endpoints,
-                      .const_value = folded};
-    }
-    throw_in_context("NOT operand must be boolean or integer", expr.span);
-  }
-  case hir::UnaryOp::NEGATE: {
-    if (!operand_info.has_type) {
-      return unresolved();
-    }
-    if (!is_numeric_type(operand_info.type)) {
-      throw_in_context("NEGATE operand must be numeric", expr.span);
-    }
-    auto folded = fold_unary();
-    return ExprInfo{.type = operand_info.type,
-                    .has_type = true,
-                    .is_mut = false,
-                    .is_place = false,
-                    .endpoints = operand_info.endpoints,
-                    .const_value = folded};
-  }
-  case hir::UnaryOp::DEREFERENCE: {
-    ensure_operand_type("Cannot infer referenced type for dereference");
-    if (!is_reference_type(operand_info.type)) {
-      throw_in_context("DEREFERENCE operand must be reference", expr.span);
-    }
-    TypeId referenced_type = get_referenced_type(operand_info.type);
-    return ExprInfo{.type = referenced_type,
-                    .has_type = true,
-                    .is_mut = get_reference_mutability(operand_info.type),
-                    .is_place = true,
-                    .endpoints = operand_info.endpoints};
-  }
-  case hir::UnaryOp::REFERENCE:
-  case hir::UnaryOp::MUTABLE_REFERENCE: {
-    ensure_operand_type("Cannot infer type for referenced value");
-    bool is_mut = (expr.op == hir::UnaryOp::MUTABLE_REFERENCE);
-    if (operand_info.is_place && is_mut && !operand_info.is_mut) {
-      throw_in_context("Cannot borrow immutable value as mutable", expr.span);
-    }
+  return std::visit(
+      Overloaded{
+          [&](hir::UnaryNot &op) -> ExprInfo {
+            if (!operand_info.has_type) {
+              return unresolved();
+            }
+            if (is_bool_type(operand_info.type)) {
+              op.kind = hir::UnaryNot::Kind::Bool;
+              auto folded = fold_unary();
+              return ExprInfo{.type = bool_type,
+                              .has_type = true,
+                              .is_mut = false,
+                              .is_place = false,
+                              .endpoints = operand_info.endpoints,
+                              .const_value = folded};
+            }
+            if (is_numeric_type(operand_info.type)) {
+              op.kind = hir::UnaryNot::Kind::Int;
+              auto folded = fold_unary();
+              return ExprInfo{.type = operand_info.type,
+                              .has_type = true,
+                              .is_mut = false,
+                              .is_place = false,
+                              .endpoints = operand_info.endpoints,
+                              .const_value = folded};
+            }
+            throw_in_context("NOT operand must be boolean or integer", expr.span);
+          },
+          [&](hir::UnaryNegate &op) -> ExprInfo {
+            if (!operand_info.has_type) {
+              return unresolved();
+            }
+            if (is_signed_integer_type(operand_info.type)) {
+              op.kind = hir::UnaryNegate::Kind::SignedInt;
+            } else if (is_unsigned_integer_type(operand_info.type)) {
+              op.kind = hir::UnaryNegate::Kind::UnsignedInt;
+            } else {
+              throw_in_context("NEGATE operand must be numeric", expr.span);
+            }
+            auto folded = fold_unary();
+            return ExprInfo{.type = operand_info.type,
+                            .has_type = true,
+                            .is_mut = false,
+                            .is_place = false,
+                            .endpoints = operand_info.endpoints,
+                            .const_value = folded};
+          },
+          [&](hir::Dereference &) -> ExprInfo {
+            ensure_operand_type("Cannot infer referenced type for dereference");
+            if (!is_reference_type(operand_info.type)) {
+              throw_in_context("DEREFERENCE operand must be reference", expr.span);
+            }
+            TypeId referenced_type = get_referenced_type(operand_info.type);
+            return ExprInfo{.type = referenced_type,
+                            .has_type = true,
+                            .is_mut = get_reference_mutability(operand_info.type),
+                            .is_place = true,
+                            .endpoints = operand_info.endpoints};
+          },
+          [&](hir::Reference &reference) -> ExprInfo {
+            ensure_operand_type("Cannot infer type for referenced value");
+            if (operand_info.is_place && reference.is_mutable &&
+                !operand_info.is_mut) {
+              throw_in_context("Cannot borrow immutable value as mutable",
+                                expr.span);
+            }
 
-    TypeId ref_type =
-        get_typeID(Type{ReferenceType{operand_info.type, is_mut}});
-    return ExprInfo{.type = ref_type,
-                    .has_type = true,
-                    .is_mut = false,
-                    .is_place = false,
-                    .endpoints = operand_info.endpoints};
-  }
-  default:
-    throw std::logic_error("Unknown unary operator");
-  }
+            TypeId ref_type = get_typeID(
+                Type{ReferenceType{operand_info.type, reference.is_mutable}});
+            return ExprInfo{.type = ref_type,
+                            .has_type = true,
+                            .is_mut = false,
+                            .is_place = false,
+                            .endpoints = operand_info.endpoints};
+          }},
+      expr.op);
 }
-
 ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
   auto eval_operand = [&](std::unique_ptr<hir::Expr> &node) {
     return check(*node, TypeExpectation::none());
@@ -651,63 +657,94 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
                     .endpoints = endpoints};
   };
 
-  auto is_numeric_op = [&]() {
-    using Op = hir::BinaryOp;
-    switch (expr.op) {
-    case Op::ADD:
-    case Op::SUB:
-    case Op::MUL:
-    case Op::DIV:
-    case Op::REM:
-    case Op::BIT_AND:
-    case Op::BIT_XOR:
-    case Op::BIT_OR:
-    case Op::SHL:
-    case Op::SHR:
-      return true;
-    default:
-      return false;
-    }
-  }();
-
   TypeId bool_type = get_typeID(Type{PrimitiveKind::BOOL});
+  bool is_numeric_op = std::visit(
+      Overloaded{
+          [](const hir::Add &) { return true; },
+          [](const hir::Subtract &) { return true; },
+          [](const hir::Multiply &) { return true; },
+          [](const hir::Divide &) { return true; },
+          [](const hir::Remainder &) { return true; },
+          [](const hir::BitAnd &) { return true; },
+          [](const hir::BitXor &) { return true; },
+          [](const hir::BitOr &) { return true; },
+          [](const hir::ShiftLeft &) { return true; },
+          [](const hir::ShiftRight &) { return true; },
+          [](const auto &) { return false; }},
+      expr.op);
 
-  if (lhs_info.has_type && is_numeric_type(lhs_info.type)) {
-    recheck_with(rhs_info, expr.rhs, lhs_info.type);
-  }
-  if (rhs_info.has_type && is_numeric_type(rhs_info.type)) {
-    recheck_with(lhs_info, expr.lhs, rhs_info.type);
+  bool is_logical = std::holds_alternative<hir::LogicalAnd>(expr.op) ||
+                    std::holds_alternative<hir::LogicalOr>(expr.op);
+
+  if (is_numeric_op) {
+    if (lhs_info.has_type && is_numeric_type(lhs_info.type)) {
+      recheck_with(rhs_info, expr.rhs, lhs_info.type);
+    }
+    if (rhs_info.has_type && is_numeric_type(rhs_info.type)) {
+      recheck_with(lhs_info, expr.lhs, rhs_info.type);
+    }
+    if (exp.has_expected && helper::type_helper::is_numeric_type(exp.expected)) {
+      recheck_with(lhs_info, expr.lhs, exp.expected);
+      recheck_with(rhs_info, expr.rhs, exp.expected);
+    }
   }
 
-  if (is_numeric_op && exp.has_expected &&
-      helper::type_helper::is_numeric_type(exp.expected)) {
-    recheck_with(lhs_info, expr.lhs, exp.expected);
-    recheck_with(rhs_info, expr.rhs, exp.expected);
+  if (is_logical) {
+    recheck_with(lhs_info, expr.lhs, bool_type);
+    recheck_with(rhs_info, expr.rhs, bool_type);
   }
 
-  switch (expr.op) {
-  case hir::BinaryOp::ADD:
-  case hir::BinaryOp::SUB:
-  case hir::BinaryOp::MUL:
-  case hir::BinaryOp::DIV:
-  case hir::BinaryOp::REM:
-  case hir::BinaryOp::BIT_AND:
-  case hir::BinaryOp::BIT_XOR:
-  case hir::BinaryOp::BIT_OR: {
+  auto classify_integer_kind = [&](TypeId type,
+                                   auto kind_placeholder) {
+    using Kind = decltype(kind_placeholder);
+    if (is_signed_integer_type(type)) {
+      return std::optional<Kind>{Kind::SignedInt};
+    }
+    if (is_unsigned_integer_type(type)) {
+      return std::optional<Kind>{Kind::UnsignedInt};
+    }
+    return std::optional<Kind>{};
+  };
+
+  auto classify_comparison_kind = [&](TypeId type,
+                                      auto kind_placeholder) {
+    using Kind = decltype(kind_placeholder);
+    if (auto int_kind = classify_integer_kind(type, kind_placeholder)) {
+      return int_kind;
+    }
+    if (is_bool_type(type)) {
+      return std::optional<Kind>{Kind::Bool};
+    }
+    if (auto prim = std::get_if<PrimitiveKind>(&type->value)) {
+      if (*prim == PrimitiveKind::CHAR) {
+        return std::optional<Kind>{Kind::Char};
+      }
+    }
+    return std::optional<Kind>{};
+  };
+
+  auto handle_integer_binary = [&](auto &op,
+                                   const std::string &type_error) -> ExprInfo {
     if (!lhs_info.has_type || !rhs_info.has_type) {
       return unresolved();
     }
     if (!is_numeric_type(lhs_info.type) || !is_numeric_type(rhs_info.type)) {
-      throw_in_context("Arithmetic operands must be numeric", expr.span);
+      throw_in_context(type_error, expr.span);
     }
     auto common_type = find_common_type(lhs_info.type, rhs_info.type);
     if (!common_type) {
-      throw_in_context("Arithmetic operands must have compatible types", expr.span);
+      throw_in_context(type_error, expr.span);
     }
+    auto kind = classify_integer_kind(*common_type, op.kind);
+    if (!kind) {
+      throw_in_context(type_error, expr.span);
+    }
+    op.kind = *kind;
     std::optional<ConstVariant> folded;
     if (lhs_info.const_value && rhs_info.const_value) {
       folded = const_eval::eval_binary(expr.op, lhs_info.type, *lhs_info.const_value,
-                                       rhs_info.type, *rhs_info.const_value, *common_type);
+                                       rhs_info.type, *rhs_info.const_value,
+                                       *common_type);
     }
     return ExprInfo{.type = *common_type,
                     .has_type = true,
@@ -715,19 +752,29 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
                     .is_place = false,
                     .endpoints = endpoints,
                     .const_value = folded};
-  }
-  case hir::BinaryOp::EQ:
-  case hir::BinaryOp::NE:
-  case hir::BinaryOp::LT:
-  case hir::BinaryOp::GT:
-  case hir::BinaryOp::LE:
-  case hir::BinaryOp::GE: {
+  };
+
+  auto handle_comparison = [&](auto &op) -> ExprInfo {
     if (!lhs_info.has_type || !rhs_info.has_type) {
       return unresolved();
     }
-    if (!are_comparable(lhs_info.type, rhs_info.type)) {
+    auto common_type = find_common_type(lhs_info.type, rhs_info.type);
+    if (!common_type) {
       throw_in_context("Comparison operands must be comparable", expr.span);
     }
+    auto kind = classify_comparison_kind(*common_type, op.kind);
+    if (!kind) {
+      throw_in_context("Unsupported comparison operands", expr.span);
+    }
+    using OpType = std::decay_t<decltype(op)>;
+    using Kind = std::decay_t<decltype(*kind)>;
+    bool is_equality = std::is_same_v<OpType, hir::Equal> ||
+                       std::is_same_v<OpType, hir::NotEqual>;
+    if (!is_equality && (*kind == Kind::Bool || *kind == Kind::Char)) {
+      throw_in_context("Ordering comparison not supported for this type",
+                       expr.span);
+    }
+    op.kind = *kind;
     std::optional<ConstVariant> folded;
     if (lhs_info.const_value && rhs_info.const_value) {
       folded = const_eval::eval_binary(expr.op, lhs_info.type, *lhs_info.const_value,
@@ -739,60 +786,149 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
                     .is_place = false,
                     .endpoints = endpoints,
                     .const_value = folded};
-  }
-  case hir::BinaryOp::AND:
-  case hir::BinaryOp::OR: {
-    recheck_with(lhs_info, expr.lhs, bool_type);
-    recheck_with(rhs_info, expr.rhs, bool_type);
-    if (!lhs_info.has_type || !rhs_info.has_type) {
-      return unresolved();
-    }
-    if (!is_bool_type(lhs_info.type) || !is_bool_type(rhs_info.type)) {
-      throw_in_context("Logical operands must be boolean", expr.span);
-    }
-    std::optional<ConstVariant> folded;
-    if (lhs_info.const_value && rhs_info.const_value) {
-      folded = const_eval::eval_binary(expr.op, lhs_info.type, *lhs_info.const_value,
-                                       rhs_info.type, *rhs_info.const_value, bool_type);
-    }
-    return ExprInfo{.type = bool_type,
-                    .has_type = true,
-                    .is_mut = false,
-                    .is_place = false,
-                    .endpoints = endpoints,
-                    .const_value = folded};
-  }
-  case hir::BinaryOp::SHL:
-  case hir::BinaryOp::SHR: {
-    if (!lhs_info.has_type) {
-      return unresolved();
-    }
-    if (!is_numeric_type(lhs_info.type)) {
-      throw_in_context("Shift operand must be numeric", expr.span);
-    }
-    if (!rhs_info.has_type) {
-      return unresolved();
-    }
-    if (!is_numeric_type(rhs_info.type)) {
-      throw_in_context("Shift amount must be numeric", expr.span);
-    }
-    std::optional<ConstVariant> folded;
-    if (lhs_info.const_value && rhs_info.const_value) {
-      folded = const_eval::eval_binary(expr.op, lhs_info.type, *lhs_info.const_value,
-                                       rhs_info.type, *rhs_info.const_value, lhs_info.type);
-    }
-    return ExprInfo{.type = lhs_info.type,
-                    .has_type = true,
-                    .is_mut = false,
-                    .is_place = false,
-                    .endpoints = endpoints,
-                    .const_value = folded};
-  }
-  default:
-    throw std::logic_error("Unknown binary operator");
-  }
-}
+  };
 
+  return std::visit(
+      Overloaded{
+          [&](hir::Add &op) {
+            return handle_integer_binary(op, "Arithmetic operands must be numeric");
+          },
+          [&](hir::Subtract &op) {
+            return handle_integer_binary(op, "Arithmetic operands must be numeric");
+          },
+          [&](hir::Multiply &op) {
+            return handle_integer_binary(op, "Arithmetic operands must be numeric");
+          },
+          [&](hir::Divide &op) {
+            return handle_integer_binary(op, "Arithmetic operands must be numeric");
+          },
+          [&](hir::Remainder &op) {
+            return handle_integer_binary(op, "Arithmetic operands must be numeric");
+          },
+          [&](hir::BitAnd &op) {
+            return handle_integer_binary(op, "Bitwise operands must be numeric");
+          },
+          [&](hir::BitXor &op) {
+            return handle_integer_binary(op, "Bitwise operands must be numeric");
+          },
+          [&](hir::BitOr &op) {
+            return handle_integer_binary(op, "Bitwise operands must be numeric");
+          },
+          [&](hir::ShiftLeft &op) {
+            if (!lhs_info.has_type) {
+              return unresolved();
+            }
+            if (!is_numeric_type(lhs_info.type)) {
+              throw_in_context("Shift operand must be numeric", expr.span);
+            }
+            if (!rhs_info.has_type) {
+              return unresolved();
+            }
+            if (!is_numeric_type(rhs_info.type)) {
+              throw_in_context("Shift amount must be numeric", expr.span);
+            }
+            auto kind = classify_integer_kind(lhs_info.type, op.kind);
+            if (!kind) {
+              throw_in_context("Shift operand must be integer", expr.span);
+            }
+            op.kind = *kind;
+            std::optional<ConstVariant> folded;
+            if (lhs_info.const_value && rhs_info.const_value) {
+              folded = const_eval::eval_binary(expr.op, lhs_info.type,
+                                               *lhs_info.const_value, rhs_info.type,
+                                               *rhs_info.const_value, lhs_info.type);
+            }
+            return ExprInfo{.type = lhs_info.type,
+                            .has_type = true,
+                            .is_mut = false,
+                            .is_place = false,
+                            .endpoints = endpoints,
+                            .const_value = folded};
+          },
+          [&](hir::ShiftRight &op) {
+            if (!lhs_info.has_type) {
+              return unresolved();
+            }
+            if (!is_numeric_type(lhs_info.type)) {
+              throw_in_context("Shift operand must be numeric", expr.span);
+            }
+            if (!rhs_info.has_type) {
+              return unresolved();
+            }
+            if (!is_numeric_type(rhs_info.type)) {
+              throw_in_context("Shift amount must be numeric", expr.span);
+            }
+            auto kind = classify_integer_kind(lhs_info.type, op.kind);
+            if (!kind) {
+              throw_in_context("Shift operand must be integer", expr.span);
+            }
+            op.kind = *kind;
+            std::optional<ConstVariant> folded;
+            if (lhs_info.const_value && rhs_info.const_value) {
+              folded = const_eval::eval_binary(expr.op, lhs_info.type,
+                                               *lhs_info.const_value, rhs_info.type,
+                                               *rhs_info.const_value, lhs_info.type);
+            }
+            return ExprInfo{.type = lhs_info.type,
+                            .has_type = true,
+                            .is_mut = false,
+                            .is_place = false,
+                            .endpoints = endpoints,
+                            .const_value = folded};
+          },
+          [&](hir::Equal &op) { return handle_comparison(op); },
+          [&](hir::NotEqual &op) { return handle_comparison(op); },
+          [&](hir::LessThan &op) { return handle_comparison(op); },
+          [&](hir::GreaterThan &op) { return handle_comparison(op); },
+          [&](hir::LessEqual &op) { return handle_comparison(op); },
+          [&](hir::GreaterEqual &op) { return handle_comparison(op); },
+          [&](hir::LogicalAnd &op) {
+            if (!lhs_info.has_type || !rhs_info.has_type) {
+              return unresolved();
+            }
+            if (!is_bool_type(lhs_info.type) || !is_bool_type(rhs_info.type)) {
+              throw_in_context("Logical operands must be boolean", expr.span);
+            }
+            op.kind = hir::LogicalAnd::Kind::Bool;
+            std::optional<ConstVariant> folded;
+            if (lhs_info.const_value && rhs_info.const_value) {
+              folded = const_eval::eval_binary(expr.op, lhs_info.type,
+                                               *lhs_info.const_value, rhs_info.type,
+                                               *rhs_info.const_value, bool_type);
+            }
+            return ExprInfo{.type = bool_type,
+                            .has_type = true,
+                            .is_mut = false,
+                            .is_place = false,
+                            .endpoints = endpoints,
+                            .const_value = folded};
+          },
+          [&](hir::LogicalOr &op) {
+            if (!lhs_info.has_type || !rhs_info.has_type) {
+              return unresolved();
+            }
+            if (!is_bool_type(lhs_info.type) || !is_bool_type(rhs_info.type)) {
+              throw_in_context("Logical operands must be boolean", expr.span);
+            }
+            op.kind = hir::LogicalOr::Kind::Bool;
+            std::optional<ConstVariant> folded;
+            if (lhs_info.const_value && rhs_info.const_value) {
+              folded = const_eval::eval_binary(expr.op, lhs_info.type,
+                                               *lhs_info.const_value, rhs_info.type,
+                                               *rhs_info.const_value, bool_type);
+            }
+            return ExprInfo{.type = bool_type,
+                            .has_type = true,
+                            .is_mut = false,
+                            .is_place = false,
+                            .endpoints = endpoints,
+                            .const_value = folded};
+          },
+          [&](const auto &) -> ExprInfo {
+            throw std::logic_error("Unknown binary operator");
+          }},
+      expr.op);
+}
 ExprInfo ExprChecker::check(hir::Assignment &expr, TypeExpectation) {
   ExprInfo lhs_info = check(*expr.lhs, TypeExpectation::none());
   if (!lhs_info.is_place || !lhs_info.is_mut) {
