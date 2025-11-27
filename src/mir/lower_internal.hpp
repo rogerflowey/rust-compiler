@@ -139,9 +139,9 @@ private:
 	template <typename T>
 	Operand lower_expr_impl(const T& unsupported, const semantic::ExprInfo& info);
 
-	Operand emit_unary_value(hir::UnaryOp::Op op,
-			 const hir::Expr& operand_expr,
-			 semantic::TypeId result_type);
+    Operand emit_unary_value(const hir::UnaryOperator& op,
+                             const hir::Expr& operand_expr,
+                             semantic::TypeId result_type);
 
 	Operand lower_if_expr(const hir::If& if_expr, const semantic::ExprInfo& info);
 	Operand lower_short_circuit(const hir::BinaryOp& binary,

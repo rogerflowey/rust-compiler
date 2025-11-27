@@ -314,16 +314,143 @@ struct Assignment {
     span::Span span = span::Span::invalid();
 };
 
+struct UnaryNot {
+    enum class Kind { Unspecified, Bool, Int };
+    Kind kind = Kind::Unspecified;
+};
+
+struct UnaryNegate {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct Dereference {
+};
+
+struct Reference {
+    bool is_mutable = false;
+};
+
+using UnaryOperator = std::variant<UnaryNot, UnaryNegate, Dereference, Reference>;
+
 struct UnaryOp {
-    enum Op { NOT, NEGATE, DEREFERENCE, REFERENCE, MUTABLE_REFERENCE };
-    Op op;
+    UnaryOperator op;
     std::unique_ptr<Expr> rhs;
     span::Span span = span::Span::invalid();
 };
 
+struct Add {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct Subtract {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct Multiply {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct Divide {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct Remainder {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct BitAnd {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct BitXor {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct BitOr {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct ShiftLeft {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct ShiftRight {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt };
+    Kind kind = Kind::Unspecified;
+};
+
+struct Equal {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    Kind kind = Kind::Unspecified;
+};
+
+struct NotEqual {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    Kind kind = Kind::Unspecified;
+};
+
+struct LessThan {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    Kind kind = Kind::Unspecified;
+};
+
+struct GreaterThan {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    Kind kind = Kind::Unspecified;
+};
+
+struct LessEqual {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    Kind kind = Kind::Unspecified;
+};
+
+struct GreaterEqual {
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    Kind kind = Kind::Unspecified;
+};
+
+struct LogicalAnd {
+    enum class Kind { Unspecified, Bool };
+    Kind kind = Kind::Unspecified;
+};
+
+struct LogicalOr {
+    enum class Kind { Unspecified, Bool };
+    Kind kind = Kind::Unspecified;
+};
+
+using BinaryOperator = std::variant<
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    LogicalAnd,
+    LogicalOr,
+    BitAnd,
+    BitXor,
+    BitOr,
+    ShiftLeft,
+    ShiftRight,
+    Equal,
+    NotEqual,
+    LessThan,
+    GreaterThan,
+    LessEqual,
+    GreaterEqual>;
+
 struct BinaryOp {
-    enum Op { ADD, SUB, MUL, DIV, REM, AND, OR, BIT_AND, BIT_XOR, BIT_OR, SHL, SHR, EQ, NE, LT, GT, LE, GE };
-    Op op;
+    BinaryOperator op;
     std::unique_ptr<Expr> lhs;
     std::unique_ptr<Expr> rhs;
     span::Span span = span::Span::invalid();

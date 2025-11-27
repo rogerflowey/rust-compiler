@@ -66,13 +66,13 @@ struct ExprConverter {
     }
 
     hir::ExprVariant operator()(const ast::UnaryExpr& op) const {
-        hir::UnaryOp::Op hir_op;
-        switch(op.op) {
-            case ast::UnaryExpr::NOT:           hir_op = hir::UnaryOp::NOT; break;
-            case ast::UnaryExpr::NEGATE:        hir_op = hir::UnaryOp::NEGATE; break;
-            case ast::UnaryExpr::DEREFERENCE:   hir_op = hir::UnaryOp::DEREFERENCE; break;
-            case ast::UnaryExpr::REFERENCE:     hir_op = hir::UnaryOp::REFERENCE; break;
-            case ast::UnaryExpr::MUTABLE_REFERENCE: hir_op = hir::UnaryOp::MUTABLE_REFERENCE; break;
+        hir::UnaryOperator hir_op;
+        switch (op.op) {
+            case ast::UnaryExpr::NOT: hir_op = hir::UnaryNot{}; break;
+            case ast::UnaryExpr::NEGATE: hir_op = hir::UnaryNegate{}; break;
+            case ast::UnaryExpr::DEREFERENCE: hir_op = hir::Dereference{}; break;
+            case ast::UnaryExpr::REFERENCE: hir_op = hir::Reference{.is_mutable = false}; break;
+            case ast::UnaryExpr::MUTABLE_REFERENCE: hir_op = hir::Reference{.is_mutable = true}; break;
         }
         auto rhs_expr = converter.convert_expr(*op.operand);
 
@@ -86,33 +86,33 @@ struct ExprConverter {
             }
         }
 
-        return hir::UnaryOp{ .op = hir_op, .rhs = std::move(rhs_expr), .span = op.span };
+        return hir::UnaryOp{ .op = std::move(hir_op), .rhs = std::move(rhs_expr), .span = op.span };
     }
 
     hir::ExprVariant operator()(const ast::BinaryExpr& op) const {
-        hir::BinaryOp::Op hir_op;
-        switch(op.op) {
-            case ast::BinaryExpr::ADD: hir_op = hir::BinaryOp::ADD; break;
-            case ast::BinaryExpr::SUB: hir_op = hir::BinaryOp::SUB; break;
-            case ast::BinaryExpr::MUL: hir_op = hir::BinaryOp::MUL; break;
-            case ast::BinaryExpr::DIV: hir_op = hir::BinaryOp::DIV; break;
-            case ast::BinaryExpr::REM: hir_op = hir::BinaryOp::REM; break;
-            case ast::BinaryExpr::AND: hir_op = hir::BinaryOp::AND; break;
-            case ast::BinaryExpr::OR:  hir_op = hir::BinaryOp::OR; break;
-            case ast::BinaryExpr::BIT_AND: hir_op = hir::BinaryOp::BIT_AND; break;
-            case ast::BinaryExpr::BIT_XOR: hir_op = hir::BinaryOp::BIT_XOR; break;
-            case ast::BinaryExpr::BIT_OR: hir_op = hir::BinaryOp::BIT_OR; break;
-            case ast::BinaryExpr::SHL: hir_op = hir::BinaryOp::SHL; break;
-            case ast::BinaryExpr::SHR: hir_op = hir::BinaryOp::SHR; break;
-            case ast::BinaryExpr::EQ: hir_op = hir::BinaryOp::EQ; break;
-            case ast::BinaryExpr::NE: hir_op = hir::BinaryOp::NE; break;
-            case ast::BinaryExpr::LT: hir_op = hir::BinaryOp::LT; break;
-            case ast::BinaryExpr::GT: hir_op = hir::BinaryOp::GT; break;
-            case ast::BinaryExpr::LE: hir_op = hir::BinaryOp::LE; break;
-            case ast::BinaryExpr::GE: hir_op = hir::BinaryOp::GE; break;
+        hir::BinaryOperator hir_op;
+        switch (op.op) {
+            case ast::BinaryExpr::ADD: hir_op = hir::Add{}; break;
+            case ast::BinaryExpr::SUB: hir_op = hir::Subtract{}; break;
+            case ast::BinaryExpr::MUL: hir_op = hir::Multiply{}; break;
+            case ast::BinaryExpr::DIV: hir_op = hir::Divide{}; break;
+            case ast::BinaryExpr::REM: hir_op = hir::Remainder{}; break;
+            case ast::BinaryExpr::AND: hir_op = hir::LogicalAnd{}; break;
+            case ast::BinaryExpr::OR: hir_op = hir::LogicalOr{}; break;
+            case ast::BinaryExpr::BIT_AND: hir_op = hir::BitAnd{}; break;
+            case ast::BinaryExpr::BIT_XOR: hir_op = hir::BitXor{}; break;
+            case ast::BinaryExpr::BIT_OR: hir_op = hir::BitOr{}; break;
+            case ast::BinaryExpr::SHL: hir_op = hir::ShiftLeft{}; break;
+            case ast::BinaryExpr::SHR: hir_op = hir::ShiftRight{}; break;
+            case ast::BinaryExpr::EQ: hir_op = hir::Equal{}; break;
+            case ast::BinaryExpr::NE: hir_op = hir::NotEqual{}; break;
+            case ast::BinaryExpr::LT: hir_op = hir::LessThan{}; break;
+            case ast::BinaryExpr::GT: hir_op = hir::GreaterThan{}; break;
+            case ast::BinaryExpr::LE: hir_op = hir::LessEqual{}; break;
+            case ast::BinaryExpr::GE: hir_op = hir::GreaterEqual{}; break;
         }
         return hir::BinaryOp{
-            .op = hir_op,
+            .op = std::move(hir_op),
             .lhs = converter.convert_expr(*op.left),
             .rhs = converter.convert_expr(*op.right),
             .span = op.span
@@ -128,18 +128,18 @@ struct ExprConverter {
             };
         }
 
-        hir::BinaryOp::Op hir_op;
+        hir::BinaryOperator hir_op;
         switch(assign.op) {
-            case ast::AssignExpr::ADD_ASSIGN: hir_op = hir::BinaryOp::ADD; break;
-            case ast::AssignExpr::SUB_ASSIGN: hir_op = hir::BinaryOp::SUB; break;
-            case ast::AssignExpr::MUL_ASSIGN: hir_op = hir::BinaryOp::MUL; break;
-            case ast::AssignExpr::DIV_ASSIGN: hir_op = hir::BinaryOp::DIV; break;
-            case ast::AssignExpr::REM_ASSIGN: hir_op = hir::BinaryOp::REM; break;
-            case ast::AssignExpr::XOR_ASSIGN: hir_op = hir::BinaryOp::BIT_XOR; break;
-            case ast::AssignExpr::BIT_OR_ASSIGN: hir_op = hir::BinaryOp::BIT_OR; break;
-            case ast::AssignExpr::BIT_AND_ASSIGN: hir_op = hir::BinaryOp::BIT_AND; break;
-            case ast::AssignExpr::SHL_ASSIGN: hir_op = hir::BinaryOp::SHL; break;
-            case ast::AssignExpr::SHR_ASSIGN: hir_op = hir::BinaryOp::SHR; break;
+            case ast::AssignExpr::ADD_ASSIGN: hir_op = hir::Add{}; break;
+            case ast::AssignExpr::SUB_ASSIGN: hir_op = hir::Subtract{}; break;
+            case ast::AssignExpr::MUL_ASSIGN: hir_op = hir::Multiply{}; break;
+            case ast::AssignExpr::DIV_ASSIGN: hir_op = hir::Divide{}; break;
+            case ast::AssignExpr::REM_ASSIGN: hir_op = hir::Remainder{}; break;
+            case ast::AssignExpr::XOR_ASSIGN: hir_op = hir::BitXor{}; break;
+            case ast::AssignExpr::BIT_OR_ASSIGN: hir_op = hir::BitOr{}; break;
+            case ast::AssignExpr::BIT_AND_ASSIGN: hir_op = hir::BitAnd{}; break;
+            case ast::AssignExpr::SHL_ASSIGN: hir_op = hir::ShiftLeft{}; break;
+            case ast::AssignExpr::SHR_ASSIGN: hir_op = hir::ShiftRight{}; break;
             default: throw std::logic_error("Invalid compound assignment op");
         }
 
