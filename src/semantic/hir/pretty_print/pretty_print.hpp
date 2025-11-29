@@ -8,6 +8,7 @@
 #include <string_view>
 #include <sstream>
 #include <iomanip>
+#include <type_traits>
 
 #include "semantic/hir/hir.hpp"
 #include "semantic/hir/visitor/visitor_base.hpp"
@@ -286,6 +287,14 @@ inline const char* to_comparison_kind(T kind) {
         case T::UnsignedInt: return "UnsignedInt";
         case T::Bool: return "Bool";
         case T::Char: return "Char";
+        default:
+            if constexpr (std::is_same_v<T, Equal::Kind> ||
+                          std::is_same_v<T, NotEqual::Kind>) {
+                if (kind == T::Enum) {
+                    return "Enum";
+                }
+            }
+            break;
     }
     return "???";
 }
@@ -605,7 +614,7 @@ inline std::string HirPrettyPrinter::primitive_kind_to_string(semantic::Primitiv
 
 inline std::string HirPrettyPrinter::describe_type(semantic::TypeId type_id, int depth) const {
     constexpr int kMaxDepth = 8;
-    if (!type_id) {
+    if (type_id == semantic::invalid_type_id) {
         return "null";
     }
     if (depth > kMaxDepth) {

@@ -158,10 +158,10 @@ Operand FunctionLowerer::lower_expr_impl(const hir::ConstUse& const_use, const s
 		throw std::logic_error("Const use missing definition during MIR lowering");
 	}
 	TypeId type = info.type;
-	if (!type && const_use.def->type) {
+	if (type == invalid_type_id && const_use.def->type) {
 		type = hir::helper::get_resolved_type(*const_use.def->type);
 	}
-	if (!type) {
+	if (type == invalid_type_id) {
 		throw std::logic_error("Const use missing resolved type during MIR lowering");
 	}
 	Constant constant = lower_const_definition(*const_use.def, type);
@@ -173,10 +173,10 @@ Operand FunctionLowerer::lower_expr_impl(const hir::StructConst& struct_const, c
 		throw std::logic_error("Struct const missing associated const during MIR lowering");
 	}
 	TypeId type = info.type;
-	if (!type && struct_const.assoc_const->type) {
+	if (type == invalid_type_id && struct_const.assoc_const->type) {
 		type = hir::helper::get_resolved_type(*struct_const.assoc_const->type);
 	}
-	if (!type) {
+	if (type == invalid_type_id) {
 		throw std::logic_error("Struct const missing resolved type during MIR lowering");
 	}
 	Constant constant = lower_const_definition(*struct_const.assoc_const, type);
@@ -184,8 +184,8 @@ Operand FunctionLowerer::lower_expr_impl(const hir::StructConst& struct_const, c
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info) {
-        TypeId type = info.type;
-        if (!type) {
+		TypeId type = info.type;
+		if (type == invalid_type_id) {
                 if (!enum_variant.enum_def) {
                         throw std::logic_error("Enum variant missing enum definition during MIR lowering");
                 }

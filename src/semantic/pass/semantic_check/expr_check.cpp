@@ -689,6 +689,12 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
 
   bool is_logical = std::holds_alternative<hir::LogicalAnd>(expr.op) ||
                     std::holds_alternative<hir::LogicalOr>(expr.op);
+  bool is_comparison = std::holds_alternative<hir::Equal>(expr.op) ||
+                       std::holds_alternative<hir::NotEqual>(expr.op) ||
+                       std::holds_alternative<hir::LessThan>(expr.op) ||
+                       std::holds_alternative<hir::GreaterThan>(expr.op) ||
+                       std::holds_alternative<hir::LessEqual>(expr.op) ||
+                       std::holds_alternative<hir::GreaterEqual>(expr.op);
 
   if (is_numeric_op) {
     if (lhs_info.has_type && is_numeric_type(lhs_info.type)) {
@@ -706,6 +712,15 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
   if (is_logical) {
     recheck_with(lhs_info, expr.lhs, bool_type);
     recheck_with(rhs_info, expr.rhs, bool_type);
+  }
+
+  if (is_comparison) {
+    if (lhs_info.has_type) {
+      recheck_with(rhs_info, expr.rhs, lhs_info.type);
+    }
+    if (rhs_info.has_type) {
+      recheck_with(lhs_info, expr.lhs, rhs_info.type);
+    }
   }
 
   auto classify_integer_kind = [&](TypeId type,
@@ -733,6 +748,13 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
     if (auto prim = std::get_if<PrimitiveKind>(&comparison_type.value)) {
       if (*prim == PrimitiveKind::CHAR) {
         return std::optional<Kind>{Kind::Char};
+      }
+    }
+    if constexpr (
+        std::is_same_v<Kind, hir::Equal::Kind> ||
+        std::is_same_v<Kind, hir::NotEqual::Kind>) {
+      if (std::holds_alternative<EnumType>(comparison_type.value)) {
+        return std::optional<Kind>{Kind::Enum};
       }
     }
     return std::optional<Kind>{};

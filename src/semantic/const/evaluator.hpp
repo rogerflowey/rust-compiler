@@ -405,6 +405,8 @@ inline std::optional<ConstVariant> eval_binary(const hir::BinaryOperator &op,
                 return comparison_numeric(eq.kind,
                     [](int64_t, int64_t) { return false; },
                     [](uint64_t l, uint64_t r) { return l == r; });
+            case hir::Equal::Kind::Enum:
+                return std::nullopt;
             case hir::Equal::Kind::Unspecified:
                 return std::nullopt;
             }
@@ -438,6 +440,8 @@ inline std::optional<ConstVariant> eval_binary(const hir::BinaryOperator &op,
                 return comparison_numeric(ne.kind,
                     [](int64_t, int64_t) { return false; },
                     [](uint64_t l, uint64_t r) { return l != r; });
+            case decltype(ne.kind)::Enum:
+                return std::nullopt;
             case decltype(ne.kind)::Unspecified:
                 return std::nullopt;
             }

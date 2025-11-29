@@ -390,12 +390,12 @@ struct ShiftRight {
 };
 
 struct Equal {
-    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char, Enum };
     Kind kind = Kind::Unspecified;
 };
 
 struct NotEqual {
-    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char, Enum };
     Kind kind = Kind::Unspecified;
 };
 

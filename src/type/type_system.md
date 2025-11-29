@@ -68,7 +68,3 @@ Helpers:
 - Accessing `invalid_type_id` through `get_type_from_id` triggers `std::out_of_range`.
 - Type allocation overflow triggers `std::overflow_error`.
 
-## Future Extensions
-
-- Add `TypeCtorId`/`TyParamId` for generics and improve metadata tables to carry layout information for backend lowering.
-- Extend `TypeVariant` with function/trait/tuple types when language support arrives.

@@ -22,6 +22,16 @@ TypeId make_unit_type() {
     return type::get_typeID(type::Type{type::UnitType{}});
 }
 
+TypeId make_enum_type(const hir::EnumDef* def) {
+    auto enum_id = type::TypeContext::get_instance().get_or_register_enum(def);
+    return type::get_typeID(type::Type{type::EnumType{enum_id}});
+}
+
+TypeId make_struct_type(const hir::StructDef* def) {
+    auto struct_id = type::TypeContext::get_instance().get_or_register_struct(def);
+    return type::get_typeID(type::Type{type::StructType{struct_id}});
+}
+
 semantic::ExprInfo make_value_info(TypeId type, bool is_place = false) {
     semantic::ExprInfo info;
     info.type = type;
@@ -496,7 +506,7 @@ TEST(MirLowerTest, LowersStructConstExpression) {
 TEST(MirLowerTest, LowersEnumVariantExpression) {
     auto enum_def = std::make_unique<hir::EnumDef>();
     enum_def->variants.push_back(semantic::EnumVariant{.name = ast::Identifier{"A"}});
-    TypeId enum_type = type::get_typeID(type::Type{type::EnumType{enum_def.get()}});
+    TypeId enum_type = make_enum_type(enum_def.get());
     TypeId usize_type = make_type(type::PrimitiveKind::USIZE);
 
     hir::Function function;
@@ -866,7 +876,7 @@ TEST(MirLowerTest, LowersStructLiteralAggregate) {
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
 
-    TypeId struct_type = type::get_typeID(type::Type{type::StructType{&struct_def}});
+    TypeId struct_type = make_struct_type(&struct_def);
 
     hir::StructLiteral literal;
     literal.struct_path = &struct_def;
@@ -959,7 +969,7 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
 
     auto struct_item = std::make_unique<hir::Item>(hir::StructDef{});
     auto& struct_def = std::get<hir::StructDef>(struct_item->value);
-    TypeId struct_type = type::get_typeID(type::Type{type::StructType{&struct_def}});
+    TypeId struct_type = make_struct_type(&struct_def);
 
     auto impl_item = std::make_unique<hir::Item>(hir::Impl{});
     auto& impl = std::get<hir::Impl>(impl_item->value);
@@ -1083,7 +1093,7 @@ TEST(MirLowerTest, LowersReferenceToFieldPlace) {
     struct_def.fields.push_back(semantic::Field{.name = ast::Identifier{"b"}, .type = std::nullopt});
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
-    TypeId struct_type = type::get_typeID(type::Type{type::StructType{&struct_def}});
+    TypeId struct_type = make_struct_type(&struct_def);
     TypeId ref_type = type::get_typeID(type::Type{type::ReferenceType{int_type, false}});
 
     auto local = std::make_unique<hir::Local>();
@@ -1400,7 +1410,7 @@ TEST(MirLowerTest, LowersAssignmentToFieldPlace) {
     struct_def.fields.push_back(semantic::Field{.name = ast::Identifier{"b"}, .type = std::nullopt});
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
-    TypeId struct_type = type::get_typeID(type::Type{type::StructType{&struct_def}});
+    TypeId struct_type = make_struct_type(&struct_def);
 
     auto local = std::make_unique<hir::Local>();
     local->name = ast::Identifier{"s"};

@@ -240,7 +240,7 @@ void FunctionLowerer::append_parameter(const hir::Local* local, TypeId type) {
 	if (!local) {
 		throw std::logic_error("Parameter pattern did not resolve to a Local during MIR lowering");
 	}
-	if (!type) {
+	if (type == invalid_type_id) {
 		throw std::logic_error("Parameter missing resolved type during MIR lowering");
 	}
 	TypeId normalized = canonicalize_type_for_mir(type);
@@ -344,7 +344,7 @@ BasicBlockId FunctionLowerer::current_block_id() const {
 }
 
 TempId FunctionLowerer::allocate_temp(TypeId type) {
-	if (!type) {
+	if (type == invalid_type_id) {
 		throw std::logic_error("Temporary missing resolved type during MIR lowering");
 	}
 	TypeId normalized = canonicalize_type_for_mir(type);
@@ -415,7 +415,7 @@ TempId FunctionLowerer::materialize_operand(const Operand& operand, TypeId type)
 	if (!current_block) {
 		throw std::logic_error("Cannot materialize operand without active block");
 	}
-	if (!type) {
+	if (type == invalid_type_id) {
 		throw std::logic_error("Operand missing resolved type during materialization");
 	}
 	TypeId normalized = canonicalize_type_for_mir(type);
@@ -627,7 +627,7 @@ Place FunctionLowerer::make_local_place(const hir::Local* local) const {
 
 LocalId FunctionLowerer::create_synthetic_local(TypeId type,
 					      bool is_mutable_reference) {
-	if (!type) {
+	if (type == invalid_type_id) {
 		throw std::logic_error("Synthetic local missing resolved type during MIR lowering");
 	}
 	TypeId normalized = canonicalize_type_for_mir(type);

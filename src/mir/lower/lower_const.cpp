@@ -85,7 +85,7 @@ Constant lower_literal(const hir::Literal& literal, TypeId type) {
 }
 
 Constant lower_const_definition(const hir::ConstDef& const_def, TypeId type) {
-    if (!type) {
+    if (type == invalid_type_id) {
         throw std::logic_error("Const definition missing resolved type during MIR lowering");
     }
     semantic::ConstVariant value = hir::helper::get_const_value(const_def);
@@ -101,7 +101,7 @@ Constant lower_enum_variant(const hir::EnumVariant& enum_variant, TypeId type) {
     if (!enum_variant.enum_def) {
         throw std::logic_error("Enum variant missing enum definition during MIR lowering");
     }
-    if (!type) {
+    if (type == invalid_type_id) {
         throw std::logic_error("Enum variant missing resolved type during MIR lowering");
     }
     IntConstant discriminant;

@@ -305,6 +305,7 @@ BinaryOpRValue::Kind classify_binary_kind(const hir::BinaryOp& binary,
                 case hir::Equal::Kind::SignedInt: return BinaryOpRValue::Kind::ICmpEq;
                 case hir::Equal::Kind::UnsignedInt: return BinaryOpRValue::Kind::UCmpEq;
                 case hir::Equal::Kind::Char: return BinaryOpRValue::Kind::UCmpEq;
+                case hir::Equal::Kind::Enum: return BinaryOpRValue::Kind::UCmpEq;
                 case hir::Equal::Kind::Unspecified: break;
             }
             throw std::logic_error("Unhandled equality operator kind");
@@ -318,6 +319,7 @@ BinaryOpRValue::Kind classify_binary_kind(const hir::BinaryOp& binary,
                 case decltype(ne.kind)::SignedInt: return BinaryOpRValue::Kind::ICmpNe;
                 case decltype(ne.kind)::UnsignedInt: return BinaryOpRValue::Kind::UCmpNe;
                 case decltype(ne.kind)::Char: return BinaryOpRValue::Kind::UCmpNe;
+                case decltype(ne.kind)::Enum: return BinaryOpRValue::Kind::UCmpNe;
                 case decltype(ne.kind)::Unspecified: break;
             }
             throw std::logic_error("Unhandled inequality operator kind");
