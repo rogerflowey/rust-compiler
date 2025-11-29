@@ -4,15 +4,17 @@ list(FILTER MIR_SOURCES EXCLUDE REGEX "/tests/")
 add_library(mir ${MIR_SOURCES})
 
 target_include_directories(mir
-	PUBLIC
-		.
-		..
-		../semantic
+        PUBLIC
+                .
+                ..
+                ../semantic
+                ../type
 )
 
 target_link_libraries(mir
-	PUBLIC
-		llvmbuilder
+        PUBLIC
+                llvmbuilder
+                type
 )
 
 if(BUILD_TESTING)

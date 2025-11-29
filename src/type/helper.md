@@ -1,6 +1,6 @@
 # Type Helper Functions
 
-## File: [`src/semantic/type/helper.hpp`](helper.hpp)
+## File: [`src/type/helper.hpp`](helper.hpp)
 
 ## Overview
 
@@ -76,10 +76,10 @@ Finds common type for binary operations. Currently simplified to return type if 
 inline Type to_type(const TypeDef& def){
     return std::visit(Overloaded{
         [](hir::StructDef* sd) -> Type {
-            return Type{StructType{.symbol = sd}};
+            return Type{StructType{.id = TypeContext::get_instance().get_or_register_struct(sd)}};
         },
         [](hir::EnumDef* ed) -> Type {
-            return Type{EnumType{.symbol = ed}};
+            return Type{EnumType{.id = TypeContext::get_instance().get_or_register_enum(ed)}};
         },
         [](hir::Trait*) -> Type {
             throw std::logic_error("Cannot convert Trait to Type");

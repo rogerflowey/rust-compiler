@@ -1,6 +1,6 @@
 # Implementation Table
 
-## File: [`src/semantic/type/impl_table.hpp`](impl_table.hpp)
+## File: [`src/type/impl_table.hpp`](impl_table.hpp)
 
 ## Overview
 

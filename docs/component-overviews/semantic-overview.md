@@ -6,7 +6,7 @@ Semantic analysis transforms the parsed AST into a validated High-Level IR (HIR)
 
 - Visitor-based passes run on a shared HIR data model and communicate through resolved pointers and `TypeId` handles rather than a query system.
 - Pipeline order: **HIR Conversion → Name Resolution → Type & Const Finalization → Trait Validation → Control Flow Linking → Semantic Checking → Exit Check**.
-- Shared infrastructure: HIR nodes (`src/semantic/hir/`), scope management (`src/semantic/symbol/`), implementation table (`src/semantic/type/impl_table.hpp`), the type arena (`src/semantic/type/type.hpp`), and the constant evaluator (`src/semantic/const/`).
+- Shared infrastructure: HIR nodes (`src/semantic/hir/`), scope management (`src/semantic/symbol/`), implementation table (`src/type/impl_table.hpp`), the type arena (`src/type/type.hpp`), and the constant evaluator (`src/semantic/const/`).
 
 ## Core Components
 
@@ -15,14 +15,14 @@ Semantic analysis transforms the parsed AST into a validated High-Level IR (HIR)
 - `TypeAnnotation` is a `std::variant` of `std::unique_ptr<TypeNode>` (unresolved) or `semantic::TypeId` (resolved).
 - HIR nodes carry AST back-references for diagnostics and optional `ExprInfo` slots populated later by semantic checking.
 
-### Type System (`src/semantic/type/`)
+### Type System (`src/type/`)
 - Supported kinds: primitives (`I32`, `U32`, `ISIZE`, `USIZE`, `BOOL`, `CHAR`, `STRING`), struct/enum nominal types, references (with mutability), arrays with constant length, and marker types (`UnitType`, `NeverType`, `UnderscoreType`).
-- `TypeId` is a pointer to an interned `Type` owned by `TypeContext`; equality is pointer equality.
+- `TypeId` is an integer allocated by `TypeContext`; equality is by value and types are stored in an ID-indexed vector for stable lookup.
 - No generics, subtyping, or function types are implemented. Type inference is intentionally absent; all bindings must be annotated before resolution.
-- `TypeResolver` resolves `TypeAnnotation` nodes to `TypeId` and materializes array lengths via constant evaluation.
+- `TypeResolver` resolves `TypeAnnotation` nodes to `TypeId`, registers struct/enum metadata in canonical tables, and materializes array lengths via constant evaluation.
 - `helper` utilities provide introspection helpers (e.g., reference checks, numeric checks, base type extraction).
 
-### Symbol and Implementation Tables (`src/semantic/symbol/`, `src/semantic/type/impl_table.hpp`)
+### Symbol and Implementation Tables (`src/semantic/symbol/`, `src/type/impl_table.hpp`)
 - `Scope` stores value bindings (locals, consts, functions, methods) and type bindings (structs, enums, traits) with lexical shadowing; boundary scopes prevent capturing outer bindings inside functions/methods.
 - The predefined scope injects built-ins such as `String`, `print/println/printInt/printlnInt/getString/getInt/exit` plus predefined methods (e.g., `to_string`, `len`, `append`) wired through `inject_predefined_methods`.
 - `ImplTable` records associated items per `TypeId`, registers inherent impls during name resolution, and provides lookup for functions/consts/methods (including an implicit `len` for arrays).
@@ -115,7 +115,7 @@ exit_checker.check_program(*hir);
 ## Navigation
 
 - HIR definitions and converter: `src/semantic/hir/`
-- Type system: `src/semantic/type/`
+- Type system: `src/type/`
 - Scopes and predefined symbols: `src/semantic/symbol/`
 - Pass implementations and docs: `src/semantic/pass/`
 - Tests: `test/semantic/`

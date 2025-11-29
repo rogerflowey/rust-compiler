@@ -50,6 +50,7 @@ add_subdirectory(src/lexer)
 # Add our new parser library. This will execute src/parser/CMakeLists.txt
 # and create the 'parser' target.
 add_subdirectory(src/parser)
+add_subdirectory(src/type)
 add_subdirectory(src/semantic)
 add_subdirectory(src/mir)
 add_subdirectory(cmd)

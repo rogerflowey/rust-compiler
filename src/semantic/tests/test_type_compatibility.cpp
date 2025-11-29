@@ -1,6 +1,6 @@
 #include "tests/catch_gtest_compat.hpp"
-#include "semantic/type/type.hpp"
-#include "semantic/type/helper.hpp"
+#include "type/type.hpp"
+#include "type/helper.hpp"
 #include "semantic/pass/semantic_check/type_compatibility.hpp"
 #include "semantic/tests/helpers/common.hpp"
 

@@ -12,6 +12,7 @@
 #include "semantic/hir/hir.hpp"
 #include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/hir/helper.hpp"
+#include "type/type.hpp"
 #include "semantic/utils.hpp"
 #include "semantic/pass/semantic_check/expr_info.hpp"
 
@@ -611,16 +612,18 @@ inline std::string HirPrettyPrinter::describe_type(semantic::TypeId type_id, int
         return "...";
     }
 
-    const semantic::Type& type = *type_id;
+    const semantic::Type& type = type::get_type_from_id(type_id);
     return std::visit(
         [&](const auto& value) -> std::string {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, semantic::PrimitiveKind>) {
                 return std::string("Primitive(") + primitive_kind_to_string(value) + ")";
             } else if constexpr (std::is_same_v<T, semantic::StructType>) {
-                return std::string("Struct(") + pointer_to_string(value.symbol, "StructDef") + ")";
+                const auto& info = semantic::TypeContext::get_instance().get_struct(value.id);
+                return std::string("Struct(") + info.name + "#" + std::to_string(value.id) + ")";
             } else if constexpr (std::is_same_v<T, semantic::EnumType>) {
-                return std::string("Enum(") + pointer_to_string(value.symbol, "EnumDef") + ")";
+                const auto& info = semantic::TypeContext::get_instance().get_enum(value.id);
+                return std::string("Enum(") + info.name + "#" + std::to_string(value.id) + ")";
             } else if constexpr (std::is_same_v<T, semantic::ReferenceType>) {
                 std::string inner = describe_type(value.referenced_type, depth + 1);
                 return std::string("Reference(") + (value.is_mutable ? "mut" : "const") + ", " + inner + ")";
@@ -645,11 +648,11 @@ inline std::string HirPrettyPrinter::describe_type(semantic::TypeId type_id, int
 inline std::string HirPrettyPrinter::format_type_id(semantic::TypeId type_id, int depth) const {
     std::ostringstream oss;
     oss << "TypeId{";
-    if (!type_id) {
-        oss << "null";
+    if (type_id == semantic::invalid_type_id) {
+        oss << "invalid";
     } else {
         oss << "type=" << describe_type(type_id, depth + 1);
-        oss << ", ptr=0x" << std::hex << reinterpret_cast<uintptr_t>(type_id) << std::dec;
+        oss << ", id=" << type_id;
     }
     oss << "}";
     return oss.str();

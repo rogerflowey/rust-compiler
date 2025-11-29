@@ -34,7 +34,7 @@ maintainer: @rcompiler-team
 ### Key Components
 
 - **`TypeConstResolver`** (`src/semantic/pass/type&const/visitor.hpp`): HIR visitor orchestrating the pass
-- **`TypeResolver`** (`src/semantic/type/resolver.hpp`): Converts `TypeAnnotation`/`TypeStatic` nodes into `TypeId`
+- **`TypeResolver`** (`src/type/resolver.hpp`): Converts `TypeAnnotation`/`TypeStatic` nodes into `TypeId`
 - **`ConstEvaluator`** (`src/semantic/const/evaluator.hpp`): Evaluates expressions allowed in const contexts
 - **Type Helper Utilities** (`semantic::helper::type_helper`): Work with reference types during pattern resolution
 

@@ -4,7 +4,9 @@ list(FILTER SEMANTIC_SOURCES EXCLUDE REGEX "/tests/")
 
 add_library(semantic ${SEMANTIC_SOURCES})
 
-target_include_directories(semantic PUBLIC .)
+target_include_directories(semantic PUBLIC . ../type)
+
+target_link_libraries(semantic PUBLIC type)
 
 if(BUILD_TESTING)
 	add_subdirectory(tests)

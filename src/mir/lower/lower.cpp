@@ -5,7 +5,7 @@
 #include "mir/lower/lower_const.hpp"
 
 #include "semantic/hir/helper.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 
 #include <optional>
 #include <sstream>
@@ -62,7 +62,7 @@ std::vector<FunctionDescriptor> collect_function_descriptors(const hir::Program&
 			continue;
 		}
 		if (auto* impl = std::get_if<hir::Impl>(&item_ptr->value)) {
-			semantic::TypeId impl_type = hir::helper::get_resolved_type(impl->for_type);
+			TypeId impl_type = hir::helper::get_resolved_type(impl->for_type);
 			std::string scope = type_name(impl_type);
 			for (const auto& assoc_item : impl->items) {
 				if (!assoc_item) {
@@ -122,7 +122,7 @@ MirFunction FunctionLowerer::lower() {
 void FunctionLowerer::initialize(FunctionId id, std::string name) {
 	mir_function.id = id;
 	mir_function.name = std::move(name);
-	semantic::TypeId return_type = resolve_return_type();
+	TypeId return_type = resolve_return_type();
 	mir_function.return_type = canonicalize_type_for_mir(return_type);
 	init_locals();
 	collect_parameters();
@@ -145,7 +145,7 @@ const std::vector<std::unique_ptr<hir::Local>>& FunctionLowerer::get_locals_vect
 	return hir_method->locals;
 }
 
-semantic::TypeId FunctionLowerer::resolve_return_type() const {
+TypeId FunctionLowerer::resolve_return_type() const {
 	const auto& annotation = (function_kind == FunctionKind::Function)
 		? hir_function->return_type
 		: hir_method->return_type;
@@ -163,8 +163,8 @@ void FunctionLowerer::init_locals() {
 		if (!local_ptr->type_annotation) {
 			throw std::logic_error("Local missing resolved type during MIR lowering");
 		}
-		semantic::TypeId type = hir::helper::get_resolved_type(*local_ptr->type_annotation);
-		semantic::TypeId normalized = canonicalize_type_for_mir(type);
+		TypeId type = hir::helper::get_resolved_type(*local_ptr->type_annotation);
+		TypeId normalized = canonicalize_type_for_mir(type);
 		LocalId id = static_cast<LocalId>(mir_function.locals.size());
 		local_ids.emplace(local_ptr, id);
 
@@ -206,7 +206,7 @@ void FunctionLowerer::collect_function_parameters(const hir::Function& function)
 		if (!annotation) {
 			throw std::logic_error("Function parameter missing resolved type during MIR lowering");
 		}
-		semantic::TypeId param_type = hir::helper::get_resolved_type(*annotation);
+		TypeId param_type = hir::helper::get_resolved_type(*annotation);
 		append_parameter(resolve_pattern_local(*param), param_type);
 	}
 }
@@ -216,7 +216,7 @@ void FunctionLowerer::collect_method_parameters(const hir::Method& method) {
 		if (!method.self_local->type_annotation) {
 			throw std::logic_error("Method self parameter missing resolved type during MIR lowering");
 		}
-		semantic::TypeId self_type = hir::helper::get_resolved_type(*method.self_local->type_annotation);
+		TypeId self_type = hir::helper::get_resolved_type(*method.self_local->type_annotation);
 		append_parameter(method.self_local.get(), self_type);
 	}
 	if (method.params.size() != method.param_type_annotations.size()) {
@@ -231,19 +231,19 @@ void FunctionLowerer::collect_method_parameters(const hir::Method& method) {
 		if (!annotation) {
 			throw std::logic_error("Method parameter missing resolved type during MIR lowering");
 		}
-		semantic::TypeId param_type = hir::helper::get_resolved_type(*annotation);
+		TypeId param_type = hir::helper::get_resolved_type(*annotation);
 		append_parameter(resolve_pattern_local(*param), param_type);
 	}
 }
 
-void FunctionLowerer::append_parameter(const hir::Local* local, semantic::TypeId type) {
+void FunctionLowerer::append_parameter(const hir::Local* local, TypeId type) {
 	if (!local) {
 		throw std::logic_error("Parameter pattern did not resolve to a Local during MIR lowering");
 	}
 	if (!type) {
 		throw std::logic_error("Parameter missing resolved type during MIR lowering");
 	}
-	semantic::TypeId normalized = canonicalize_type_for_mir(type);
+	TypeId normalized = canonicalize_type_for_mir(type);
 	LocalId local_id = require_local_id(local);
 	FunctionParameter param;
 	param.local = local_id;
@@ -277,7 +277,7 @@ FunctionId FunctionLowerer::lookup_function_id(const void* key) const {
 }
 
 Operand FunctionLowerer::emit_call(FunctionId target,
-			           semantic::TypeId result_type,
+			           TypeId result_type,
 			           std::vector<Operand>&& args) {
 	bool result_needed = !is_unit_type(result_type) && !is_never_type(result_type);
 	std::optional<TempId> dest;
@@ -298,7 +298,7 @@ Operand FunctionLowerer::emit_call(FunctionId target,
 	return result;
 }
 
-Operand FunctionLowerer::emit_aggregate(AggregateRValue aggregate, semantic::TypeId result_type) {
+Operand FunctionLowerer::emit_aggregate(AggregateRValue aggregate, TypeId result_type) {
 	TempId temp = allocate_temp(result_type);
 	RValue rvalue;
 	rvalue.value = std::move(aggregate);
@@ -311,7 +311,7 @@ Operand FunctionLowerer::emit_aggregate(AggregateRValue aggregate, semantic::Typ
 
 Operand FunctionLowerer::emit_array_repeat(Operand value,
 	                                   std::size_t count,
-	                                   semantic::TypeId result_type) {
+	                                   TypeId result_type) {
 	TempId temp = allocate_temp(result_type);
 	ArrayRepeatRValue repeat;
 	repeat.value = std::move(value);
@@ -343,11 +343,11 @@ BasicBlockId FunctionLowerer::current_block_id() const {
 	return *current_block;
 }
 
-TempId FunctionLowerer::allocate_temp(semantic::TypeId type) {
+TempId FunctionLowerer::allocate_temp(TypeId type) {
 	if (!type) {
 		throw std::logic_error("Temporary missing resolved type during MIR lowering");
 	}
-	semantic::TypeId normalized = canonicalize_type_for_mir(type);
+	TypeId normalized = canonicalize_type_for_mir(type);
 	TempId id = static_cast<TempId>(mir_function.temp_types.size());
 	mir_function.temp_types.push_back(normalized);
 	return id;
@@ -408,7 +408,7 @@ void FunctionLowerer::branch_on_bool(const Operand& condition,
 	terminate_current_block(Terminator{std::move(term)});
 }
 
-TempId FunctionLowerer::materialize_operand(const Operand& operand, semantic::TypeId type) {
+TempId FunctionLowerer::materialize_operand(const Operand& operand, TypeId type) {
 	if (const auto* temp = std::get_if<TempId>(&operand.value)) {
 		return *temp;
 	}
@@ -418,7 +418,7 @@ TempId FunctionLowerer::materialize_operand(const Operand& operand, semantic::Ty
 	if (!type) {
 		throw std::logic_error("Operand missing resolved type during materialization");
 	}
-	semantic::TypeId normalized = canonicalize_type_for_mir(type);
+	TypeId normalized = canonicalize_type_for_mir(type);
 	const auto& constant = std::get<Constant>(operand.value);
 	if (constant.type != normalized) {
 		throw std::logic_error("Operand type mismatch during materialization");
@@ -451,12 +451,12 @@ void FunctionLowerer::emit_return(std::optional<Operand> value) {
 FunctionLowerer::LoopContext& FunctionLowerer::push_loop_context(const void* key,
 					     BasicBlockId continue_block,
 					     BasicBlockId break_block,
-					     std::optional<semantic::TypeId> break_type) {
+					     std::optional<TypeId> break_type) {
 	LoopContext ctx;
 	ctx.continue_block = continue_block;
 	ctx.break_block = break_block;
 	if (break_type) {
-		semantic::TypeId normalized = canonicalize_type_for_mir(*break_type);
+		TypeId normalized = canonicalize_type_for_mir(*break_type);
 		ctx.break_type = normalized;
 		ctx.break_result = allocate_temp(normalized);
 	} else {
@@ -528,7 +528,7 @@ void FunctionLowerer::lower_block(const hir::Block& hir_block) {
 	}
 }
 
-Operand FunctionLowerer::lower_block_expr(const hir::Block& block, semantic::TypeId expected_type) {
+Operand FunctionLowerer::lower_block_expr(const hir::Block& block, TypeId expected_type) {
 	for (const auto& stmt : block.stmts) {
 		if (!current_block) {
 			break;
@@ -625,12 +625,12 @@ Place FunctionLowerer::make_local_place(const hir::Local* local) const {
 	return make_local_place(require_local_id(local));
 }
 
-LocalId FunctionLowerer::create_synthetic_local(semantic::TypeId type,
+LocalId FunctionLowerer::create_synthetic_local(TypeId type,
 					      bool is_mutable_reference) {
 	if (!type) {
 		throw std::logic_error("Synthetic local missing resolved type during MIR lowering");
 	}
-	semantic::TypeId normalized = canonicalize_type_for_mir(type);
+	TypeId normalized = canonicalize_type_for_mir(type);
 	LocalId id = static_cast<LocalId>(mir_function.locals.size());
 	LocalInfo info;
 	info.type = normalized;

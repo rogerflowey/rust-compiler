@@ -137,9 +137,9 @@ AST → HIR Converter → Name Resolution → Type & Const Finalization → Sema
 
 ## Core Infrastructure
 
-### Type System (`src/semantic/type/`)
+### Type System (`src/type/`)
 
-**Representation**: Variant-based with canonical interning:
+**Representation**: Variant-based types keyed by integer IDs:
 
 ```cpp
 using TypeVariant = std::variant<
@@ -149,14 +149,15 @@ using TypeVariant = std::variant<
     ReferenceType,
     ArrayType,
     UnitType,
-    NeverType
+    NeverType,
+    UnderscoreType
 >;
 ```
 
 **Key Features**:
-- Type deduplication via hash-based interning
-- Efficient equality checking (pointer comparison)
-- Support for recursive types through indirection
+- Canonical `TypeId` values allocated by `TypeContext` (backed by a vector table)
+- Struct/enum metadata stored in ID-indexed side tables with optional HIR links
+- Structural hashing for deduplication and stable integer equality checks
 
 ### Symbol Management (`src/semantic/symbol/`)
 

@@ -7,8 +7,8 @@
 #include "src/ast/ast.hpp"
 #include "src/semantic/hir/hir.hpp"
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
-#include "src/semantic/type/helper.hpp"
-#include "src/semantic/type/impl_table.hpp"
+#include "src/type/helper.hpp"
+#include "src/type/impl_table.hpp"
 
 using semantic::ImplTable;
 using semantic::NameResolver;

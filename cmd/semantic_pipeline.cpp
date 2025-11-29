@@ -20,7 +20,7 @@
 #include "src/semantic/pass/semantic_check/semantic_check.hpp"
 #include "src/semantic/pass/control_flow_linking/control_flow_linking.hpp"
 #include "src/semantic/pass/exit_check/exit_check.hpp"
-#include "src/semantic/type/impl_table.hpp"
+#include "src/type/impl_table.hpp"
 #include "src/semantic/symbol/predefined.hpp"
 #include "src/span/source_manager.hpp"
 #include "src/utils/error.hpp"

@@ -83,7 +83,7 @@ struct EndpointHash {
             hash ^= std::hash<void*>()(static_cast<void*>(target));
         }, ep.target);
         if (ep.value_type) {
-            hash ^= std::hash<const Type*>()(*ep.value_type);
+            hash ^= std::hash<TypeId>()(*ep.value_type);
         }
         return hash;
     }
@@ -102,7 +102,7 @@ struct EndpointHash {
             hash ^= std::hash<void*>()(static_cast<void*>(target));
         }, ep.target);
         if (ep.value_type) {
-            hash ^= std::hash<const Type*>()(*ep.value_type);
+            hash ^= std::hash<TypeId>()(*ep.value_type);
         }
         return hash;
     }

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 
 namespace semantic {
 

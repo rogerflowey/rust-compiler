@@ -38,7 +38,7 @@ private:
 	struct LoopContext {
 		BasicBlockId continue_block = 0;
 		BasicBlockId break_block = 0;
-		std::optional<semantic::TypeId> break_type;
+		std::optional<TypeId> break_type;
 		std::optional<TempId> break_result;
 		std::vector<PhiIncoming> break_incomings;
 		std::vector<BasicBlockId> break_predecessors;
@@ -58,41 +58,41 @@ private:
 	void initialize(FunctionId id, std::string name);
 	const hir::Block* get_body() const;
 	const std::vector<std::unique_ptr<hir::Local>>& get_locals_vector() const;
-	semantic::TypeId resolve_return_type() const;
+	TypeId resolve_return_type() const;
 	void init_locals();
 	FunctionId lookup_function_id(const void* key) const;
-	Operand emit_call(FunctionId target, semantic::TypeId result_type, std::vector<Operand>&& args);
-	Operand emit_aggregate(AggregateRValue aggregate, semantic::TypeId result_type);
-	Operand emit_array_repeat(Operand value, std::size_t count, semantic::TypeId result_type);
+	Operand emit_call(FunctionId target, TypeId result_type, std::vector<Operand>&& args);
+	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
+	Operand emit_array_repeat(Operand value, std::size_t count, TypeId result_type);
 	BasicBlockId create_block();
 	bool block_is_terminated(BasicBlockId id) const;
 	BasicBlockId current_block_id() const;
-	TempId allocate_temp(semantic::TypeId type);
+	TempId allocate_temp(TypeId type);
 	void append_statement(Statement statement);
 	void set_terminator(BasicBlockId id, Terminator terminator);
 	void terminate_current_block(Terminator terminator);
 	void add_goto_from_current(BasicBlockId target);
 	void switch_to_block(BasicBlockId id);
 	void branch_on_bool(const Operand& condition, BasicBlockId true_block, BasicBlockId false_block);
-	TempId materialize_operand(const Operand& operand, semantic::TypeId type);
+	TempId materialize_operand(const Operand& operand, TypeId type);
 	Operand make_temp_operand(TempId temp);
 	void emit_return(std::optional<Operand> value);
 	void collect_parameters();
 	void collect_function_parameters(const hir::Function& function);
 	void collect_method_parameters(const hir::Method& method);
-	void append_parameter(const hir::Local* local, semantic::TypeId type);
+	void append_parameter(const hir::Local* local, TypeId type);
 	const hir::Local* resolve_pattern_local(const hir::Pattern& pattern) const;
 
 	LoopContext& push_loop_context(const void* key,
 				   BasicBlockId continue_block,
 				   BasicBlockId break_block,
-				   std::optional<semantic::TypeId> break_type);
+				   std::optional<TypeId> break_type);
 	LoopContext& lookup_loop_context(const void* key);
 	LoopContext pop_loop_context(const void* key);
 	void finalize_loop_context(const LoopContext& ctx);
 
 	void lower_block(const hir::Block& hir_block);
-	Operand lower_block_expr(const hir::Block& block, semantic::TypeId expected_type);
+	Operand lower_block_expr(const hir::Block& block, TypeId expected_type);
 	void lower_statement(const hir::Stmt& stmt);
 	void lower_statement_impl(const hir::LetStmt& let_stmt);
 	void lower_statement_impl(const hir::ExprStmt& expr_stmt);
@@ -103,8 +103,8 @@ private:
 	LocalId require_local_id(const hir::Local* local) const;
 	Place make_local_place(const hir::Local* local) const;
 	Place make_local_place(LocalId local_id) const;
-	LocalId create_synthetic_local(semantic::TypeId type, bool is_mutable_reference);
-	Operand load_place_value(Place place, semantic::TypeId type);
+	LocalId create_synthetic_local(TypeId type, bool is_mutable_reference);
+	Operand load_place_value(Place place, TypeId type);
 	Operand lower_expr(const hir::Expr& expr);
 	Place lower_expr_place(const hir::Expr& expr);
 	Place ensure_reference_operand_place(const hir::Expr& operand,
@@ -148,7 +148,7 @@ private:
 
     Operand emit_unary_value(const hir::UnaryOperator& op,
                              const hir::Expr& operand_expr,
-                             semantic::TypeId result_type);
+                             TypeId result_type);
 
 	Operand lower_if_expr(const hir::If& if_expr, const semantic::ExprInfo& info);
 	Operand lower_short_circuit(const hir::BinaryOp& binary,

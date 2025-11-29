@@ -4,8 +4,8 @@
 #include "semantic/hir/helper.hpp"
 #include "semantic/pass/semantic_check/expr_check.hpp"
 #include "semantic/pass/semantic_check/type_compatibility.hpp"
-#include "semantic/type/helper.hpp"
-#include "semantic/type/type.hpp"
+#include "type/helper.hpp"
+#include "type/type.hpp"
 #include "semantic/utils.hpp"
 #include "src/utils/error.hpp"
 #include <stdexcept>
@@ -151,10 +151,12 @@ TypeId SemanticContext::resolve_type_node(const hir::TypeNode& node) {
             }
             struct DefVisitor {
                 TypeId operator()(const hir::StructDef* def) {
-                    return get_typeID(Type{StructType{.symbol = def}});
+                    auto id = TypeContext::get_instance().get_or_register_struct(def);
+                    return get_typeID(Type{StructType{.id = id}});
                 }
                 TypeId operator()(const hir::EnumDef* def) {
-                    return get_typeID(Type{EnumType{.symbol = def}});
+                    auto id = TypeContext::get_instance().get_or_register_enum(def);
+                    return get_typeID(Type{EnumType{.id = id}});
                 }
                 TypeId operator()(const hir::Trait*) {
                     throw std::logic_error("Trait cannot be used as a concrete type");
