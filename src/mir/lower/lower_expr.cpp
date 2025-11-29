@@ -144,15 +144,9 @@ Operand FunctionLowerer::lower_expr_impl(const hir::ArrayRepeat& array_repeat, c
 	if (!array_repeat.value) {
 		throw std::logic_error("Array repeat missing value during MIR lowering");
 	}
-	AggregateRValue aggregate;
-	aggregate.kind = AggregateRValue::Kind::Array;
 	size_t count = hir::helper::get_array_count(array_repeat);
-	aggregate.elements.reserve(count);
 	Operand value = lower_expr(*array_repeat.value);
-	for (size_t i = 0; i < count; ++i) {
-		aggregate.elements.push_back(value);
-	}
-	return emit_aggregate(std::move(aggregate), info.type);
+	return emit_array_repeat(std::move(value), count, info.type);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::Variable& variable, const semantic::ExprInfo& info) {

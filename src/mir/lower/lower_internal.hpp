@@ -63,6 +63,7 @@ private:
 	FunctionId lookup_function_id(const void* key) const;
 	Operand emit_call(FunctionId target, semantic::TypeId result_type, std::vector<Operand>&& args);
 	Operand emit_aggregate(AggregateRValue aggregate, semantic::TypeId result_type);
+	Operand emit_array_repeat(Operand value, std::size_t count, semantic::TypeId result_type);
 	BasicBlockId create_block();
 	bool block_is_terminated(BasicBlockId id) const;
 	BasicBlockId current_block_id() const;

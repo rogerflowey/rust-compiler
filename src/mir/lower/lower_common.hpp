@@ -26,6 +26,7 @@ std::optional<semantic::PrimitiveKind> get_primitive_kind(semantic::TypeId type)
 bool is_signed_integer_type(semantic::TypeId type);
 bool is_unsigned_integer_type(semantic::TypeId type);
 bool is_bool_type(semantic::TypeId type);
+semantic::TypeId canonicalize_type_for_mir(semantic::TypeId type);
 
 BinaryOpRValue::Kind classify_binary_kind(const hir::BinaryOp& binary,
                                           semantic::TypeId lhs_type,

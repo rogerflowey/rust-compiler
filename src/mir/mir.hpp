@@ -2,6 +2,7 @@
 
 #include "semantic/type/type.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -154,6 +155,11 @@ struct AggregateRValue {
     std::vector<Operand> elements;
 };
 
+struct ArrayRepeatRValue {
+    Operand value;
+    std::size_t count = 0;
+};
+
 struct CastRValue {
     Operand value;
     semantic::TypeId target_type = semantic::invalid_type_id;
@@ -179,6 +185,7 @@ using RValueVariant = std::variant<
     UnaryOpRValue,
     RefRValue,
     AggregateRValue,
+    ArrayRepeatRValue,
     CastRValue,
     FieldAccessRValue,
     IndexAccessRValue

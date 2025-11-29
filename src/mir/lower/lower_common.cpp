@@ -67,6 +67,44 @@ bool is_bool_kind(semantic::PrimitiveKind kind) {
     return kind == semantic::PrimitiveKind::BOOL;
 }
 
+semantic::TypeId enum_discriminant_type() {
+    static const semantic::TypeId usize_type = semantic::get_typeID(semantic::Type{semantic::PrimitiveKind::USIZE});
+    return usize_type;
+}
+
+semantic::TypeId canonicalize_type_impl(semantic::TypeId type) {
+    if (!type) {
+        return type;
+    }
+
+    return std::visit(Overloaded{
+        [](const semantic::EnumType&) {
+            return enum_discriminant_type();
+        },
+        [&](const semantic::ReferenceType& reference) {
+            semantic::TypeId normalized = canonicalize_type_impl(reference.referenced_type);
+            if (normalized == reference.referenced_type) {
+                return type;
+            }
+            semantic::ReferenceType updated = reference;
+            updated.referenced_type = normalized;
+            return semantic::get_typeID(semantic::Type{updated});
+        },
+        [&](const semantic::ArrayType& array) {
+            semantic::TypeId normalized = canonicalize_type_impl(array.element_type);
+            if (normalized == array.element_type) {
+                return type;
+            }
+            semantic::ArrayType updated = array;
+            updated.element_type = normalized;
+            return semantic::get_typeID(semantic::Type{updated});
+        },
+        [&](const auto&) {
+            return type;
+        }
+    }, type->value);
+}
+
 } // namespace
 
 semantic::TypeId get_unit_type() {
@@ -99,6 +137,10 @@ Constant make_unit_constant() {
     constant.type = get_unit_type();
     constant.value = UnitConstant{};
     return constant;
+}
+
+semantic::TypeId canonicalize_type_for_mir(semantic::TypeId type) {
+    return canonicalize_type_impl(type);
 }
 
 Operand make_constant_operand(const Constant& constant) {
@@ -383,7 +425,7 @@ std::string type_name(semantic::TypeId type) {
 }
 
 std::string derive_function_name(const hir::Function& function, const std::string& scope) {
-    std::string base = safe_function_name(function);
+    std::string base = hir::helper::get_name(function).name;
     if (base.empty()) {
         base = pointer_label("fn@", &function);
     }
@@ -391,7 +433,7 @@ std::string derive_function_name(const hir::Function& function, const std::strin
 }
 
 std::string derive_method_name(const hir::Method& method, const std::string& scope) {
-    std::string base = safe_method_name(method);
+    std::string base = hir::helper::get_name(method).name;
     if (base.empty()) {
         base = pointer_label("method@", &method);
     }

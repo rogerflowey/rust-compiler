@@ -3,6 +3,7 @@
 #include "hir/hir.hpp"
 #include "semantic/const/evaluator.hpp"
 #include "pass/semantic_check/expr_info.hpp"
+#include <cstddef>
 #include <type_traits>
 #include "pass/semantic_check/other_check.hpp"
 #include "semantic/query/semantic_context.hpp"
@@ -256,19 +257,26 @@ ExprInfo ExprChecker::check(hir::FieldAccess &expr, TypeExpectation) {
   auto &struct_def = mut_ptr(struct_type->symbol, "struct definition");
 
   // resolve field
-  auto name_ptr = std::get_if<ast::Identifier>(&expr.field);
-  if (!name_ptr) {
-    throw std::logic_error("Field access already resolved");
-  }
-  auto field_id = struct_def.find_field(*name_ptr);
-  if (!field_id) {
-    throw_in_context("Field '" + name_ptr->name + "' not found in struct '" +
-                     get_name(struct_def).name + "'", expr.span);
-  }
-  expr.field = *field_id;
+  std::size_t field_id = std::visit(Overloaded{
+    [&](ast::Identifier &id) -> std::size_t {
+      auto field_id = struct_def.find_field(id);
+      if (!field_id) {
+        throw_in_context("Field '" + id.name + "' not found in struct '" +
+                         get_name(struct_def).name + "'", expr.span);
+      }
+      return *field_id;
+    },
+    [&](std::size_t &index) -> std::size_t {
+      return index;
+    }
+  },
+  expr.field
+  );
+
+  expr.field = field_id;
   TypeId type =
-      context.type_query(struct_def.field_type_annotations[*field_id]);
-  struct_def.fields[*field_id].type = type;
+      context.type_query(struct_def.field_type_annotations[field_id]);
+  struct_def.fields[field_id].type = type;
   const bool is_place = base_info.is_place;
   return ExprInfo{.type = type,
                   .has_type = true,

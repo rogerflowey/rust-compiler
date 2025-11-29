@@ -41,7 +41,7 @@ endif()
 
 
 # --- Dependencies ---
-add_subdirectory(lib/llvmbuilder)
+add_subdirectory(lib/llvmbuilder) #note depricated!
 add_subdirectory(lib/parsecpp)
 add_subdirectory(src/span)
 add_subdirectory(src/lexer)

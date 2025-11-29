@@ -656,7 +656,7 @@ struct Method {
 
 
 struct StructDef {
-        ast::Identifier name;
+    ast::Identifier name;
     std::vector<semantic::Field> fields;
     std::vector<TypeAnnotation> field_type_annotations;
     span::Span span = span::Span::invalid();

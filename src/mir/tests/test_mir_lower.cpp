@@ -1,4 +1,5 @@
 #include "mir/lower/lower.hpp"
+#include "mir/lower/lower_common.hpp"
 
 #include "mir/mir.hpp"
 #include "semantic/const/const.hpp"
@@ -271,7 +272,7 @@ TEST(MirLowerTest, RecordsFunctionParameters) {
     function.params.push_back(std::move(param_pattern));
     function.param_type_annotations.push_back(hir::TypeAnnotation(int_type));
 
-    function.body = std::make_unique<hir::Block>();
+    function.body = make_block_with_expr(make_int_literal_expr(0, int_type));
 
     hir::Program program;
     program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
@@ -281,7 +282,8 @@ TEST(MirLowerTest, RecordsFunctionParameters) {
     const auto& lowered = module.functions.front();
     ASSERT_EQ(lowered.params.size(), 1u);
     EXPECT_EQ(lowered.params[0].local, 0u);
-    EXPECT_EQ(lowered.params[0].type, int_type);
+    semantic::TypeId expected_param_type = mir::detail::canonicalize_type_for_mir(int_type);
+    EXPECT_EQ(lowered.params[0].type, expected_param_type);
     EXPECT_EQ(lowered.params[0].name, "x");
 }
 
@@ -492,6 +494,7 @@ TEST(MirLowerTest, LowersEnumVariantExpression) {
     auto enum_def = std::make_unique<hir::EnumDef>();
     enum_def->variants.push_back(semantic::EnumVariant{.name = ast::Identifier{"A"}});
     semantic::TypeId enum_type = semantic::get_typeID(semantic::Type{semantic::EnumType{enum_def.get()}});
+    semantic::TypeId usize_type = make_type(semantic::PrimitiveKind::USIZE);
 
     hir::Function function;
     function.return_type = hir::TypeAnnotation(enum_type);
@@ -507,6 +510,7 @@ TEST(MirLowerTest, LowersEnumVariantExpression) {
     function.body = std::move(body);
 
     mir::MirFunction lowered = mir::lower_function(function);
+    EXPECT_EQ(lowered.return_type, usize_type);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
@@ -514,7 +518,7 @@ TEST(MirLowerTest, LowersEnumVariantExpression) {
     const auto& operand = ret.value.value();
     ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
     const auto& constant = std::get<mir::Constant>(operand.value);
-    EXPECT_EQ(constant.type, enum_type);
+    EXPECT_EQ(constant.type, usize_type);
     ASSERT_TRUE(std::holds_alternative<mir::IntConstant>(constant.value));
     EXPECT_EQ(std::get<mir::IntConstant>(constant.value).value, 0u);
 }
@@ -941,12 +945,10 @@ TEST(MirLowerTest, LowersArrayRepeatAggregate) {
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
     const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::AggregateRValue>(define_stmt.rvalue.value));
-    const auto& aggregate = std::get<mir::AggregateRValue>(define_stmt.rvalue.value);
-    EXPECT_EQ(aggregate.kind, mir::AggregateRValue::Kind::Array);
-    ASSERT_EQ(aggregate.elements.size(), 3u);
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[0].value));
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[2].value));
+    ASSERT_TRUE(std::holds_alternative<mir::ArrayRepeatRValue>(define_stmt.rvalue.value));
+    const auto& repeat = std::get<mir::ArrayRepeatRValue>(define_stmt.rvalue.value);
+    EXPECT_EQ(repeat.count, 3u);
+    ASSERT_TRUE(std::holds_alternative<mir::Constant>(repeat.value.value));
 }
 
 TEST(MirLowerTest, LowersMethodCallWithReceiver) {

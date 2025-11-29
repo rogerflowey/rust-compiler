@@ -3,6 +3,8 @@
 #include "semantic/const/const.hpp"
 #include "semantic/hir/helper.hpp"
 
+#include "mir/lower/lower_common.hpp"
+
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -75,7 +77,7 @@ ConstantValue convert_const_value(const semantic::StringConst& value) {
 
 Constant lower_literal(const hir::Literal& literal, semantic::TypeId type) {
     Constant constant;
-    constant.type = type;
+    constant.type = canonicalize_type_for_mir(type);
     constant.value = std::visit([&](const auto& value) -> ConstantValue {
         return convert_literal_value(value);
     }, literal.value);
@@ -88,7 +90,7 @@ Constant lower_const_definition(const hir::ConstDef& const_def, semantic::TypeId
     }
     semantic::ConstVariant value = hir::helper::get_const_value(const_def);
     Constant constant;
-    constant.type = type;
+    constant.type = canonicalize_type_for_mir(type);
     constant.value = std::visit([&](const auto& variant) -> ConstantValue {
         return convert_const_value(variant);
     }, value);
@@ -107,7 +109,7 @@ Constant lower_enum_variant(const hir::EnumVariant& enum_variant, semantic::Type
     discriminant.is_negative = false;
     discriminant.is_signed = false;
     Constant constant;
-    constant.type = type;
+    constant.type = canonicalize_type_for_mir(type);
     constant.value = discriminant;
     return constant;
 }
