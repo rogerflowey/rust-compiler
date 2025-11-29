@@ -14,7 +14,7 @@
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
 #include "src/semantic/pass/semantic_check/semantic_check.hpp"
 #include "src/semantic/query/semantic_context.hpp"
-#include "src/semantic/type/impl_table.hpp"
+#include "src/type/impl_table.hpp"
 
 namespace {
 
@@ -168,7 +168,6 @@ TEST(SemanticQueryTest, ResolvesAnnotationsAndConstants) {
     // Struct field types are resolved
     ASSERT_EQ(struct_def_ptr->fields.size(), 1u);
     ASSERT_TRUE(struct_def_ptr->fields[0].type.has_value());
-    EXPECT_NE(struct_def_ptr->fields[0].type.value(), nullptr);
     ASSERT_EQ(struct_def_ptr->field_type_annotations.size(), 1u);
     ASSERT_TRUE(std::holds_alternative<semantic::TypeId>(struct_def_ptr->field_type_annotations[0]));
     auto field_type_id = std::get<semantic::TypeId>(struct_def_ptr->field_type_annotations[0]);

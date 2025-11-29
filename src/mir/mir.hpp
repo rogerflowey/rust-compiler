@@ -1,7 +1,8 @@
 #pragma once
 
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -14,15 +15,17 @@ using TempId = std::uint32_t;
 using LocalId = std::uint32_t;
 using BasicBlockId = std::uint32_t;
 using FunctionId = std::uint32_t;
+using TypeId = type::TypeId;
+inline constexpr TypeId invalid_type_id = type::invalid_type_id;
 
 struct LocalInfo {
-    semantic::TypeId type = semantic::invalid_type_id;
+    TypeId type = invalid_type_id;
     std::string debug_name;
 };
 
 struct FunctionParameter {
     LocalId local = 0;
-    semantic::TypeId type = semantic::invalid_type_id;
+    TypeId type = invalid_type_id;
     std::string name;
 };
 
@@ -51,7 +54,7 @@ struct UnitConstant {};
 using ConstantValue = std::variant<BoolConstant, IntConstant, UnitConstant, CharConstant, StringConstant>;
 
 struct Constant {
-    semantic::TypeId type = semantic::invalid_type_id;
+    TypeId type = invalid_type_id;
     ConstantValue value;
 };
 
@@ -154,9 +157,14 @@ struct AggregateRValue {
     std::vector<Operand> elements;
 };
 
+struct ArrayRepeatRValue {
+    Operand value;
+    std::size_t count = 0;
+};
+
 struct CastRValue {
     Operand value;
-    semantic::TypeId target_type = semantic::invalid_type_id;
+    TypeId target_type = invalid_type_id;
 };
 
 struct FieldAccessRValue {
@@ -179,6 +187,7 @@ using RValueVariant = std::variant<
     UnaryOpRValue,
     RefRValue,
     AggregateRValue,
+    ArrayRepeatRValue,
     CastRValue,
     FieldAccessRValue,
     IndexAccessRValue
@@ -262,11 +271,11 @@ struct MirFunction {
     FunctionId id = 0;
     std::string name;
     std::vector<FunctionParameter> params;
-    std::vector<semantic::TypeId> temp_types;
+    std::vector<TypeId> temp_types;
     std::vector<LocalInfo> locals;
     std::vector<BasicBlock> basic_blocks;
     BasicBlockId start_block = 0;
-    semantic::TypeId return_type = semantic::invalid_type_id;
+    TypeId return_type = invalid_type_id;
 };
 
 struct MirModule {

@@ -1,24 +1,38 @@
 #include "mir/lower/lower.hpp"
+#include "mir/lower/lower_common.hpp"
 
 #include "mir/mir.hpp"
 #include "semantic/const/const.hpp"
 #include "semantic/pass/semantic_check/expr_info.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 
 #include "tests/catch_gtest_compat.hpp"
 #include <unordered_map>
 
 namespace {
 
-semantic::TypeId make_type(semantic::PrimitiveKind kind) {
-    return semantic::get_typeID(semantic::Type{kind});
+using mir::TypeId;
+using mir::invalid_type_id;
+
+TypeId make_type(type::PrimitiveKind kind) {
+    return type::get_typeID(type::Type{kind});
 }
 
-semantic::TypeId make_unit_type() {
-    return semantic::get_typeID(semantic::Type{semantic::UnitType{}});
+TypeId make_unit_type() {
+    return type::get_typeID(type::Type{type::UnitType{}});
 }
 
-semantic::ExprInfo make_value_info(semantic::TypeId type, bool is_place = false) {
+TypeId make_enum_type(const hir::EnumDef* def) {
+    auto enum_id = type::TypeContext::get_instance().get_or_register_enum(def);
+    return type::get_typeID(type::Type{type::EnumType{enum_id}});
+}
+
+TypeId make_struct_type(const hir::StructDef* def) {
+    auto struct_id = type::TypeContext::get_instance().get_or_register_struct(def);
+    return type::get_typeID(type::Type{type::StructType{struct_id}});
+}
+
+semantic::ExprInfo make_value_info(TypeId type, bool is_place = false) {
     semantic::ExprInfo info;
     info.type = type;
     info.has_type = true;
@@ -29,7 +43,7 @@ semantic::ExprInfo make_value_info(semantic::TypeId type, bool is_place = false)
     return info;
 }
 
-std::unique_ptr<hir::Expr> make_bool_literal_expr(bool value, semantic::TypeId type) {
+std::unique_ptr<hir::Expr> make_bool_literal_expr(bool value, TypeId type) {
     hir::Literal literal{
         .value = hir::Literal::Value{value},
         
@@ -39,7 +53,7 @@ std::unique_ptr<hir::Expr> make_bool_literal_expr(bool value, semantic::TypeId t
     return expr;
 }
 
-std::unique_ptr<hir::Expr> make_int_literal_expr(uint64_t value, semantic::TypeId type) {
+std::unique_ptr<hir::Expr> make_int_literal_expr(uint64_t value, TypeId type) {
     hir::Literal literal{
         .value = hir::Literal::Value{hir::Literal::Integer{.value = value, .suffix_type = ast::IntegerLiteralExpr::I32, .is_negative = false}},
         
@@ -49,7 +63,7 @@ std::unique_ptr<hir::Expr> make_int_literal_expr(uint64_t value, semantic::TypeI
     return expr;
 }
 
-std::unique_ptr<hir::Expr> make_char_literal_expr(char value, semantic::TypeId type) {
+std::unique_ptr<hir::Expr> make_char_literal_expr(char value, TypeId type) {
     hir::Literal literal{
         .value = hir::Literal::Value{value},
         
@@ -59,7 +73,7 @@ std::unique_ptr<hir::Expr> make_char_literal_expr(char value, semantic::TypeId t
     return expr;
 }
 
-std::unique_ptr<hir::Expr> make_string_literal_expr(std::string value, semantic::TypeId type, bool is_cstyle = false) {
+std::unique_ptr<hir::Expr> make_string_literal_expr(std::string value, TypeId type, bool is_cstyle = false) {
     hir::Literal literal{
         .value = hir::Literal::Value{hir::Literal::String{.value = std::move(value), .is_cstyle = is_cstyle}},
         
@@ -69,15 +83,15 @@ std::unique_ptr<hir::Expr> make_string_literal_expr(std::string value, semantic:
     return expr;
 }
 
-semantic::TypeId make_string_ref_type() {
-    semantic::TypeId string_type = make_type(semantic::PrimitiveKind::STRING);
-    return semantic::get_typeID(semantic::Type{semantic::ReferenceType{string_type, false}});
+TypeId make_string_ref_type() {
+    TypeId string_type = make_type(type::PrimitiveKind::STRING);
+    return type::get_typeID(type::Type{type::ReferenceType{string_type, false}});
 }
 
 std::unique_ptr<hir::Expr> make_binary_expr(hir::BinaryOperator op,
                                             std::unique_ptr<hir::Expr> lhs,
                                             std::unique_ptr<hir::Expr> rhs,
-                                            semantic::TypeId type) {
+                                            TypeId type) {
     hir::BinaryOp binary;
     binary.op = std::move(op);
     binary.lhs = std::move(lhs);
@@ -104,7 +118,7 @@ std::unique_ptr<hir::Expr> make_func_use_expr(hir::Function* function) {
 } // namespace
 
 TEST(MirLowerTest, LowersFunctionReturningLiteral) {
-    semantic::TypeId bool_type = make_type(semantic::PrimitiveKind::BOOL);
+    TypeId bool_type = make_type(type::PrimitiveKind::BOOL);
 
     hir::Function function;
     function.return_type = hir::TypeAnnotation(bool_type);
@@ -129,7 +143,7 @@ TEST(MirLowerTest, LowersFunctionReturningLiteral) {
 }
 
 TEST(MirLowerTest, LowersCharLiteral) {
-    semantic::TypeId char_type = make_type(semantic::PrimitiveKind::CHAR);
+    TypeId char_type = make_type(type::PrimitiveKind::CHAR);
 
     hir::Function function;
     function.return_type = hir::TypeAnnotation(char_type);
@@ -152,7 +166,7 @@ TEST(MirLowerTest, LowersCharLiteral) {
 }
 
 TEST(MirLowerTest, LowersStringLiteralWithNullTerminator) {
-    semantic::TypeId string_ref_type = make_string_ref_type();
+    TypeId string_ref_type = make_string_ref_type();
 
     hir::Function function;
     function.return_type = hir::TypeAnnotation(string_ref_type);
@@ -180,7 +194,7 @@ TEST(MirLowerTest, LowersStringLiteralWithNullTerminator) {
 }
 
 TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto local = std::make_unique<hir::Local>();
     local->name = ast::Identifier{"x"};
@@ -253,7 +267,7 @@ TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
 }
 
 TEST(MirLowerTest, RecordsFunctionParameters) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto param_local = std::make_unique<hir::Local>();
     param_local->name = ast::Identifier{"x"};
@@ -271,7 +285,7 @@ TEST(MirLowerTest, RecordsFunctionParameters) {
     function.params.push_back(std::move(param_pattern));
     function.param_type_annotations.push_back(hir::TypeAnnotation(int_type));
 
-    function.body = std::make_unique<hir::Block>();
+    function.body = make_block_with_expr(make_int_literal_expr(0, int_type));
 
     hir::Program program;
     program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
@@ -281,12 +295,13 @@ TEST(MirLowerTest, RecordsFunctionParameters) {
     const auto& lowered = module.functions.front();
     ASSERT_EQ(lowered.params.size(), 1u);
     EXPECT_EQ(lowered.params[0].local, 0u);
-    EXPECT_EQ(lowered.params[0].type, int_type);
+    TypeId expected_param_type = mir::detail::canonicalize_type_for_mir(int_type);
+    EXPECT_EQ(lowered.params[0].type, expected_param_type);
     EXPECT_EQ(lowered.params[0].name, "x");
 }
 
 TEST(MirLowerTest, LowersBinaryAddition) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     hir::Function function;
     function.return_type = hir::TypeAnnotation(int_type);
@@ -319,8 +334,8 @@ TEST(MirLowerTest, LowersBinaryAddition) {
 }
 
 TEST(MirLowerTest, LowersSignedComparison) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId bool_type = make_type(semantic::PrimitiveKind::BOOL);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId bool_type = make_type(type::PrimitiveKind::BOOL);
 
     hir::Function function;
     function.return_type = hir::TypeAnnotation(bool_type);
@@ -352,8 +367,8 @@ TEST(MirLowerTest, LowersSignedComparison) {
 }
 
 TEST(MirLowerTest, LowersCastExpression) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId usize_type = make_type(semantic::PrimitiveKind::USIZE);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId usize_type = make_type(type::PrimitiveKind::USIZE);
 
     hir::Function function;
     function.return_type = hir::TypeAnnotation(usize_type);
@@ -384,7 +399,7 @@ TEST(MirLowerTest, LowersCastExpression) {
 }
 
 TEST(MirLowerTest, LowersConstUseExpression) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto const_owner = std::make_unique<hir::ConstDef>();
     const_owner->type = hir::TypeAnnotation(int_type);
@@ -417,7 +432,7 @@ TEST(MirLowerTest, LowersConstUseExpression) {
 }
 
 TEST(MirLowerTest, LowersStringConstUseExpression) {
-    semantic::TypeId string_ref_type = make_string_ref_type();
+    TypeId string_ref_type = make_string_ref_type();
 
     auto const_owner = std::make_unique<hir::ConstDef>();
     const_owner->type = hir::TypeAnnotation(string_ref_type);
@@ -455,7 +470,7 @@ TEST(MirLowerTest, LowersStringConstUseExpression) {
 }
 
 TEST(MirLowerTest, LowersStructConstExpression) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto struct_def = std::make_unique<hir::StructDef>();
     auto assoc_const = std::make_unique<hir::ConstDef>();
@@ -491,7 +506,8 @@ TEST(MirLowerTest, LowersStructConstExpression) {
 TEST(MirLowerTest, LowersEnumVariantExpression) {
     auto enum_def = std::make_unique<hir::EnumDef>();
     enum_def->variants.push_back(semantic::EnumVariant{.name = ast::Identifier{"A"}});
-    semantic::TypeId enum_type = semantic::get_typeID(semantic::Type{semantic::EnumType{enum_def.get()}});
+    TypeId enum_type = make_enum_type(enum_def.get());
+    TypeId usize_type = make_type(type::PrimitiveKind::USIZE);
 
     hir::Function function;
     function.return_type = hir::TypeAnnotation(enum_type);
@@ -507,6 +523,7 @@ TEST(MirLowerTest, LowersEnumVariantExpression) {
     function.body = std::move(body);
 
     mir::MirFunction lowered = mir::lower_function(function);
+    EXPECT_EQ(lowered.return_type, usize_type);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
@@ -514,14 +531,14 @@ TEST(MirLowerTest, LowersEnumVariantExpression) {
     const auto& operand = ret.value.value();
     ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
     const auto& constant = std::get<mir::Constant>(operand.value);
-    EXPECT_EQ(constant.type, enum_type);
+    EXPECT_EQ(constant.type, usize_type);
     ASSERT_TRUE(std::holds_alternative<mir::IntConstant>(constant.value));
     EXPECT_EQ(std::get<mir::IntConstant>(constant.value).value, 0u);
 }
 
 TEST(MirLowerTest, LowersIfExpressionWithPhi) {
-    semantic::TypeId bool_type = make_type(semantic::PrimitiveKind::BOOL);
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId bool_type = make_type(type::PrimitiveKind::BOOL);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     hir::If if_expr;
     if_expr.condition = make_bool_literal_expr(true, bool_type);
@@ -557,7 +574,7 @@ TEST(MirLowerTest, LowersIfExpressionWithPhi) {
 }
 
 TEST(MirLowerTest, LowersShortCircuitAnd) {
-    semantic::TypeId bool_type = make_type(semantic::PrimitiveKind::BOOL);
+    TypeId bool_type = make_type(type::PrimitiveKind::BOOL);
 
     auto lhs = make_bool_literal_expr(true, bool_type);
     auto rhs = make_bool_literal_expr(false, bool_type);
@@ -586,7 +603,7 @@ TEST(MirLowerTest, LowersShortCircuitAnd) {
 }
 
 TEST(MirLowerTest, LowersShortCircuitOr) {
-    semantic::TypeId bool_type = make_type(semantic::PrimitiveKind::BOOL);
+    TypeId bool_type = make_type(type::PrimitiveKind::BOOL);
 
     auto lhs = make_bool_literal_expr(true, bool_type);
     auto rhs = make_bool_literal_expr(false, bool_type);
@@ -621,7 +638,7 @@ TEST(MirLowerTest, LowersShortCircuitOr) {
 }
 
 TEST(MirLowerTest, LowersLoopWithBreakValue) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto loop_expr_node = std::make_unique<hir::Expr>(hir::ExprVariant{hir::Loop{}});
     auto& loop = std::get<hir::Loop>(loop_expr_node->value);
@@ -658,8 +675,8 @@ TEST(MirLowerTest, LowersLoopWithBreakValue) {
 }
 
 TEST(MirLowerTest, LowersWhileLoopControlFlow) {
-    semantic::TypeId bool_type = make_type(semantic::PrimitiveKind::BOOL);
-    semantic::TypeId unit_type = make_unit_type();
+    TypeId bool_type = make_type(type::PrimitiveKind::BOOL);
+    TypeId unit_type = make_unit_type();
 
     auto while_expr = std::make_unique<hir::Expr>(hir::ExprVariant{hir::While{}});
     auto& while_node = std::get<hir::While>(while_expr->value);
@@ -683,7 +700,7 @@ TEST(MirLowerTest, LowersWhileLoopControlFlow) {
 }
 
 TEST(MirLowerTest, LowersDirectFunctionCall) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto callee_item = std::make_unique<hir::Item>(hir::Function{});
     auto& callee = std::get<hir::Function>(callee_item->value);
@@ -728,7 +745,7 @@ TEST(MirLowerTest, LowersDirectFunctionCall) {
 }
 
 TEST(MirLowerTest, LowerFunctionUsesProvidedIdMapForCalls) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     hir::Function callee;
     callee.return_type = hir::TypeAnnotation(int_type);
@@ -764,7 +781,7 @@ TEST(MirLowerTest, LowerFunctionUsesProvidedIdMapForCalls) {
 }
 
 TEST(MirLowerTest, LowersLoopWithContinue) {
-    semantic::TypeId unit_type = make_unit_type();
+    TypeId unit_type = make_unit_type();
 
     auto loop_expr = std::make_unique<hir::Expr>(hir::ExprVariant{hir::Loop{}});
     auto& loop = std::get<hir::Loop>(loop_expr->value);
@@ -794,7 +811,7 @@ TEST(MirLowerTest, LowersLoopWithContinue) {
 }
 
 TEST(MirLowerTest, LowersNestedLoopBreakValue) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto outer_loop_expr = std::make_unique<hir::Expr>(hir::ExprVariant{hir::Loop{}});
     auto& outer_loop = std::get<hir::Loop>(outer_loop_expr->value);
@@ -850,7 +867,7 @@ TEST(MirLowerTest, LowersNestedLoopBreakValue) {
 }
 
 TEST(MirLowerTest, LowersStructLiteralAggregate) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto struct_item = std::make_unique<hir::Item>(hir::StructDef{});
     auto& struct_def = std::get<hir::StructDef>(struct_item->value);
@@ -859,7 +876,7 @@ TEST(MirLowerTest, LowersStructLiteralAggregate) {
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
 
-    semantic::TypeId struct_type = semantic::get_typeID(semantic::Type{semantic::StructType{&struct_def}});
+    TypeId struct_type = make_struct_type(&struct_def);
 
     hir::StructLiteral literal;
     literal.struct_path = &struct_def;
@@ -892,8 +909,8 @@ TEST(MirLowerTest, LowersStructLiteralAggregate) {
 }
 
 TEST(MirLowerTest, LowersArrayLiteralAggregate) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId array_type = semantic::get_typeID(semantic::Type{semantic::ArrayType{int_type, 2}});
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId array_type = type::get_typeID(type::Type{type::ArrayType{int_type, 2}});
 
     hir::ArrayLiteral array_literal;
     array_literal.elements.push_back(make_int_literal_expr(3, int_type));
@@ -920,8 +937,8 @@ TEST(MirLowerTest, LowersArrayLiteralAggregate) {
 }
 
 TEST(MirLowerTest, LowersArrayRepeatAggregate) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId array_type = semantic::get_typeID(semantic::Type{semantic::ArrayType{int_type, 3}});
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId array_type = type::get_typeID(type::Type{type::ArrayType{int_type, 3}});
 
     hir::ArrayRepeat array_repeat;
     array_repeat.value = make_int_literal_expr(9, int_type);
@@ -941,20 +958,18 @@ TEST(MirLowerTest, LowersArrayRepeatAggregate) {
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
     const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::AggregateRValue>(define_stmt.rvalue.value));
-    const auto& aggregate = std::get<mir::AggregateRValue>(define_stmt.rvalue.value);
-    EXPECT_EQ(aggregate.kind, mir::AggregateRValue::Kind::Array);
-    ASSERT_EQ(aggregate.elements.size(), 3u);
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[0].value));
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[2].value));
+    ASSERT_TRUE(std::holds_alternative<mir::ArrayRepeatRValue>(define_stmt.rvalue.value));
+    const auto& repeat = std::get<mir::ArrayRepeatRValue>(define_stmt.rvalue.value);
+    EXPECT_EQ(repeat.count, 3u);
+    ASSERT_TRUE(std::holds_alternative<mir::Constant>(repeat.value.value));
 }
 
 TEST(MirLowerTest, LowersMethodCallWithReceiver) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto struct_item = std::make_unique<hir::Item>(hir::StructDef{});
     auto& struct_def = std::get<hir::StructDef>(struct_item->value);
-    semantic::TypeId struct_type = semantic::get_typeID(semantic::Type{semantic::StructType{&struct_def}});
+    TypeId struct_type = make_struct_type(&struct_def);
 
     auto impl_item = std::make_unique<hir::Item>(hir::Impl{});
     auto& impl = std::get<hir::Impl>(impl_item->value);
@@ -1012,8 +1027,8 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
 }
 
 TEST(MirLowerTest, LowersReferenceToLocalPlace) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId ref_type = semantic::get_typeID(semantic::Type{semantic::ReferenceType{int_type, false}});
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId ref_type = type::get_typeID(type::Type{type::ReferenceType{int_type, false}});
 
     auto local = std::make_unique<hir::Local>();
     local->name = ast::Identifier{"x"};
@@ -1070,7 +1085,7 @@ TEST(MirLowerTest, LowersReferenceToLocalPlace) {
 }
 
 TEST(MirLowerTest, LowersReferenceToFieldPlace) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     auto struct_item = std::make_unique<hir::Item>(hir::StructDef{});
     auto& struct_def = std::get<hir::StructDef>(struct_item->value);
@@ -1078,8 +1093,8 @@ TEST(MirLowerTest, LowersReferenceToFieldPlace) {
     struct_def.fields.push_back(semantic::Field{.name = ast::Identifier{"b"}, .type = std::nullopt});
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
-    semantic::TypeId struct_type = semantic::get_typeID(semantic::Type{semantic::StructType{&struct_def}});
-    semantic::TypeId ref_type = semantic::get_typeID(semantic::Type{semantic::ReferenceType{int_type, false}});
+    TypeId struct_type = make_struct_type(&struct_def);
+    TypeId ref_type = type::get_typeID(type::Type{type::ReferenceType{int_type, false}});
 
     auto local = std::make_unique<hir::Local>();
     local->name = ast::Identifier{"s"};
@@ -1154,10 +1169,10 @@ TEST(MirLowerTest, LowersReferenceToFieldPlace) {
 }
 
 TEST(MirLowerTest, LowersReferenceToIndexedPlace) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId index_type = make_type(semantic::PrimitiveKind::USIZE);
-    semantic::TypeId array_type = semantic::get_typeID(semantic::Type{semantic::ArrayType{int_type, 2}});
-    semantic::TypeId ref_type = semantic::get_typeID(semantic::Type{semantic::ReferenceType{int_type, false}});
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId index_type = make_type(type::PrimitiveKind::USIZE);
+    TypeId array_type = type::get_typeID(type::Type{type::ArrayType{int_type, 2}});
+    TypeId ref_type = type::get_typeID(type::Type{type::ReferenceType{int_type, false}});
 
     auto local = std::make_unique<hir::Local>();
     local->name = ast::Identifier{"arr"};
@@ -1226,8 +1241,8 @@ TEST(MirLowerTest, LowersReferenceToIndexedPlace) {
 }
 
 TEST(MirLowerTest, LowersReferenceToRValueByMaterializingLocal) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId ref_type = semantic::get_typeID(semantic::Type{semantic::ReferenceType{int_type, false}});
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId ref_type = type::get_typeID(type::Type{type::ReferenceType{int_type, false}});
 
     hir::Literal literal{
         .value = hir::Literal::Integer{.value = 5, .suffix_type = ast::IntegerLiteralExpr::I32, .is_negative = false},
@@ -1270,8 +1285,8 @@ TEST(MirLowerTest, LowersReferenceToRValueByMaterializingLocal) {
 }
 
 TEST(MirLowerTest, LowersMutableReferenceToRValueByMaterializingLocal) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId ref_type = semantic::get_typeID(semantic::Type{semantic::ReferenceType{int_type, true}});
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId ref_type = type::get_typeID(type::Type{type::ReferenceType{int_type, true}});
 
     hir::Literal literal{
         .value = hir::Literal::Integer{.value = 9, .suffix_type = ast::IntegerLiteralExpr::I32, .is_negative = false},
@@ -1312,10 +1327,10 @@ TEST(MirLowerTest, LowersMutableReferenceToRValueByMaterializingLocal) {
 }
 
 TEST(MirLowerTest, LowersAssignmentToIndexedPlace) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId unit_type = make_unit_type();
-    semantic::TypeId index_type = make_type(semantic::PrimitiveKind::USIZE);
-    semantic::TypeId array_type = semantic::get_typeID(semantic::Type{semantic::ArrayType{int_type, 2}});
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId unit_type = make_unit_type();
+    TypeId index_type = make_type(type::PrimitiveKind::USIZE);
+    TypeId array_type = type::get_typeID(type::Type{type::ArrayType{int_type, 2}});
 
     auto local = std::make_unique<hir::Local>();
     local->name = ast::Identifier{"arr"};
@@ -1386,8 +1401,8 @@ TEST(MirLowerTest, LowersAssignmentToIndexedPlace) {
 }
 
 TEST(MirLowerTest, LowersAssignmentToFieldPlace) {
-    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
-    semantic::TypeId unit_type = make_unit_type();
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId unit_type = make_unit_type();
 
     auto struct_item = std::make_unique<hir::Item>(hir::StructDef{});
     auto& struct_def = std::get<hir::StructDef>(struct_item->value);
@@ -1395,7 +1410,7 @@ TEST(MirLowerTest, LowersAssignmentToFieldPlace) {
     struct_def.fields.push_back(semantic::Field{.name = ast::Identifier{"b"}, .type = std::nullopt});
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
     struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
-    semantic::TypeId struct_type = semantic::get_typeID(semantic::Type{semantic::StructType{&struct_def}});
+    TypeId struct_type = make_struct_type(&struct_def);
 
     auto local = std::make_unique<hir::Local>();
     local->name = ast::Identifier{"s"};

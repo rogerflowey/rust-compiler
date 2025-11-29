@@ -228,21 +228,21 @@ AST → HIR Converter → Name Resolution → Type & Const Finalization → Sema
 
 #### Type System
 
-**Location**: [`src/semantic/type/`](../src/semantic/type/)
+**Location**: [`src/type/`](../src/type/)
 
-The type system provides type representation, resolution, and operations.
+The standalone type module owns `TypeId` allocation, canonical struct/enum metadata, and helper utilities consumed by semantic analysis, MIR lowering, and codegen.
 
 **Key Files**:
-- [`type.hpp`](../src/semantic/type/type.hpp): Type definitions and variant types
-- [`resolver.hpp`](../src/semantic/type/resolver.hpp): Type resolution implementation
-- [`impl_table.hpp`](../src/semantic/type/impl_table.hpp): Type implementation table
-- [`helper.hpp`](../src/semantic/type/helper.hpp): Type system utilities
+- [`type.hpp`](../src/type/type.hpp): Type definitions, integer `TypeId`, and canonical type tables
+- [`resolver.hpp`](../src/type/resolver.hpp): Type resolution implementation
+- [`impl_table.hpp`](../src/type/impl_table.hpp): Type implementation table
+- [`helper.hpp`](../src/type/helper.hpp): Type system utilities
 
 **Design Characteristics**:
-- Opaque `TypeId` handles for efficient comparison
-- Centralized type storage with deduplication
+- Integer `TypeId` handles backed by a canonical `TypeContext` registry
+- Struct/enum metadata stored in dedicated ID-indexed tables
 - Demand-driven resolution with cycle detection
-- Support for recursive types through indirection
+- Clear separation between HIR ownership and type metadata
 
 #### Symbol Management
 
@@ -378,7 +378,7 @@ ControlFlowLinker linker;
 2. **Parser Extension**: Add parsing rules in [`src/parser/`](../src/parser/)
 3. **HIR Extension**: Add corresponding HIR nodes in [`src/semantic/hir/`](../src/semantic/hir/)
 4. **Pass Updates**: Update relevant analysis passes in [`src/semantic/pass/`](../src/semantic/pass/)
-5. **Type System**: Extend type system if needed in [`src/semantic/type/`](../src/semantic/type/)
+5. **Type System**: Extend type system if needed in [`src/type/`](../src/type/)
 
 ### Code Quality Practices
 

@@ -23,7 +23,7 @@ This document describes what `test/mir/test_mir_lower.cpp` currently asserts. Us
 
 - `LowersStructLiteralAggregate` – asserts struct literals produce a single `DefineStatement` with an `AggregateRValue::Struct` plus constants for each field initializer.
 - `LowersArrayLiteralAggregate` – same for arrays, verifying `AggregateRValue::Array` and the expected element count/order.
-- `LowersArrayRepeatAggregate` – confirms repeat lowering reuses one operand for every slot and materializes constants once.
+- `LowersArrayRepeatAggregate` – ensures repeats lower to `ArrayRepeatRValue`, preserving the repeat count while referencing a single evaluated operand.
 
 ## Loops and Break Targets
 

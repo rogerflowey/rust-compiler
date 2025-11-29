@@ -106,7 +106,7 @@ private:
 const int MAX_NESTING_DEPTH = 64;
 
 // Type aliases: contextual
-using TypeId = const Type*;
+using TypeId = std::uint32_t;
 using ExprVariant = std::variant<...>;
 ```
 

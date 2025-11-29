@@ -3,6 +3,8 @@
 #include "semantic/const/const.hpp"
 #include "semantic/hir/helper.hpp"
 
+#include "mir/lower/lower_common.hpp"
+
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -73,33 +75,33 @@ ConstantValue convert_const_value(const semantic::StringConst& value) {
 
 } // namespace
 
-Constant lower_literal(const hir::Literal& literal, semantic::TypeId type) {
+Constant lower_literal(const hir::Literal& literal, TypeId type) {
     Constant constant;
-    constant.type = type;
+    constant.type = canonicalize_type_for_mir(type);
     constant.value = std::visit([&](const auto& value) -> ConstantValue {
         return convert_literal_value(value);
     }, literal.value);
     return constant;
 }
 
-Constant lower_const_definition(const hir::ConstDef& const_def, semantic::TypeId type) {
-    if (!type) {
+Constant lower_const_definition(const hir::ConstDef& const_def, TypeId type) {
+    if (type == invalid_type_id) {
         throw std::logic_error("Const definition missing resolved type during MIR lowering");
     }
     semantic::ConstVariant value = hir::helper::get_const_value(const_def);
     Constant constant;
-    constant.type = type;
+    constant.type = canonicalize_type_for_mir(type);
     constant.value = std::visit([&](const auto& variant) -> ConstantValue {
         return convert_const_value(variant);
     }, value);
     return constant;
 }
 
-Constant lower_enum_variant(const hir::EnumVariant& enum_variant, semantic::TypeId type) {
+Constant lower_enum_variant(const hir::EnumVariant& enum_variant, TypeId type) {
     if (!enum_variant.enum_def) {
         throw std::logic_error("Enum variant missing enum definition during MIR lowering");
     }
-    if (!type) {
+    if (type == invalid_type_id) {
         throw std::logic_error("Enum variant missing resolved type during MIR lowering");
     }
     IntConstant discriminant;
@@ -107,7 +109,7 @@ Constant lower_enum_variant(const hir::EnumVariant& enum_variant, semantic::Type
     discriminant.is_negative = false;
     discriminant.is_signed = false;
     Constant constant;
-    constant.type = type;
+    constant.type = canonicalize_type_for_mir(type);
     constant.value = discriminant;
     return constant;
 }

@@ -38,7 +38,8 @@ The goal of this split is to keep the architecture explanation here accurate eve
 
 ## Aggregate Literals
 
-- Struct, array, and array-repeat expressions now lower via a shared `emit_aggregate` helper. We first visit every initializer, collect the resulting operands in `AggregateRValue::elements`, then emit a `DefineStatement` storing the aggregate into a fresh temp. For repeats we reuse the single lowered operand `count` times—HIR already enforces identical expressions so sharing the operand is safe.
+- Struct and array literals lower via `emit_aggregate`. We visit each initializer, collect the operands inside `AggregateRValue::elements`, then emit a `DefineStatement` that stores the aggregate into a fresh temp.
+- Array repeat literals now use a dedicated `emit_array_repeat` helper that produces an `ArrayRepeatRValue` containing the shared operand plus the repeat count. This keeps the MIR small and gives later passes the opportunity to materialize the repetition more efficiently.
 - These aggregates are emitted eagerly inside the enclosing block; later passes can decide whether to keep them materialized or scalarize them.
 
 ## Error/Invariant Checks

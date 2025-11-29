@@ -1,6 +1,6 @@
 #include "semantic/pass/trait_check/trait_check.hpp"
 #include "semantic/hir/hir.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "ast/ast.hpp"
 
 #include "tests/catch_gtest_compat.hpp"

@@ -1,10 +1,10 @@
 #include "semantic/pass/semantic_check/expr_check.hpp"
 #include "semantic/hir/hir.hpp"
 #include "semantic/query/semantic_context.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "semantic/const/const.hpp"
-#include "semantic/type/helper.hpp"
-#include "semantic/type/impl_table.hpp"
+#include "type/helper.hpp"
+#include "type/impl_table.hpp"
 #include "utils/error.hpp"
 
 #include "tests/catch_gtest_compat.hpp"

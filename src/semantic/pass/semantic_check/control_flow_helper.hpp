@@ -1,7 +1,7 @@
 #pragma once
 
 #include "expr_info.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "semantic/hir/hir.hpp"
 #include <optional>
 #include <variant>

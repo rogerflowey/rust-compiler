@@ -1,12 +1,12 @@
 #include "mir/lower/lower_internal.hpp"
 
 #include "semantic/hir/helper.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "semantic/utils.hpp"
 
 namespace mir::detail {
 
-Operand FunctionLowerer::load_place_value(Place place, semantic::TypeId type) {
+Operand FunctionLowerer::load_place_value(Place place, TypeId type) {
 	TempId temp = allocate_temp(type);
 	LoadStatement load{.dest = temp, .src = std::move(place)};
 	Statement stmt;
@@ -144,15 +144,9 @@ Operand FunctionLowerer::lower_expr_impl(const hir::ArrayRepeat& array_repeat, c
 	if (!array_repeat.value) {
 		throw std::logic_error("Array repeat missing value during MIR lowering");
 	}
-	AggregateRValue aggregate;
-	aggregate.kind = AggregateRValue::Kind::Array;
 	size_t count = hir::helper::get_array_count(array_repeat);
-	aggregate.elements.reserve(count);
 	Operand value = lower_expr(*array_repeat.value);
-	for (size_t i = 0; i < count; ++i) {
-		aggregate.elements.push_back(value);
-	}
-	return emit_aggregate(std::move(aggregate), info.type);
+	return emit_array_repeat(std::move(value), count, info.type);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::Variable& variable, const semantic::ExprInfo& info) {
@@ -163,11 +157,11 @@ Operand FunctionLowerer::lower_expr_impl(const hir::ConstUse& const_use, const s
 	if (!const_use.def) {
 		throw std::logic_error("Const use missing definition during MIR lowering");
 	}
-	semantic::TypeId type = info.type;
-	if (!type && const_use.def->type) {
+	TypeId type = info.type;
+	if (type == invalid_type_id && const_use.def->type) {
 		type = hir::helper::get_resolved_type(*const_use.def->type);
 	}
-	if (!type) {
+	if (type == invalid_type_id) {
 		throw std::logic_error("Const use missing resolved type during MIR lowering");
 	}
 	Constant constant = lower_const_definition(*const_use.def, type);
@@ -178,11 +172,11 @@ Operand FunctionLowerer::lower_expr_impl(const hir::StructConst& struct_const, c
 	if (!struct_const.assoc_const) {
 		throw std::logic_error("Struct const missing associated const during MIR lowering");
 	}
-	semantic::TypeId type = info.type;
-	if (!type && struct_const.assoc_const->type) {
+	TypeId type = info.type;
+	if (type == invalid_type_id && struct_const.assoc_const->type) {
 		type = hir::helper::get_resolved_type(*struct_const.assoc_const->type);
 	}
-	if (!type) {
+	if (type == invalid_type_id) {
 		throw std::logic_error("Struct const missing resolved type during MIR lowering");
 	}
 	Constant constant = lower_const_definition(*struct_const.assoc_const, type);
@@ -190,15 +184,16 @@ Operand FunctionLowerer::lower_expr_impl(const hir::StructConst& struct_const, c
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info) {
-	semantic::TypeId type = info.type;
-	if (!type) {
-		if (!enum_variant.enum_def) {
-			throw std::logic_error("Enum variant missing enum definition during MIR lowering");
-		}
-		type = semantic::get_typeID(semantic::Type{semantic::EnumType{enum_variant.enum_def}});
-	}
-	Constant constant = lower_enum_variant(enum_variant, type);
-	return make_constant_operand(constant);
+		TypeId type = info.type;
+		if (type == invalid_type_id) {
+                if (!enum_variant.enum_def) {
+                        throw std::logic_error("Enum variant missing enum definition during MIR lowering");
+                }
+                auto enum_id = type::TypeContext::get_instance().get_or_register_enum(enum_variant.enum_def);
+                type = type::get_typeID(type::Type{type::EnumType{enum_id}});
+        }
+        Constant constant = lower_enum_variant(enum_variant, type);
+        return make_constant_operand(constant);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::FieldAccess& field_access, const semantic::ExprInfo& info) {
@@ -379,7 +374,7 @@ Operand FunctionLowerer::lower_expr_impl(const hir::MethodCall& method_call, con
 
 Operand FunctionLowerer::emit_unary_value(const hir::UnaryOperator& op,
                                           const hir::Expr& operand_expr,
-                                          semantic::TypeId result_type) {
+                                          TypeId result_type) {
         Operand operand = lower_expr(operand_expr);
         TempId dest = allocate_temp(result_type);
         UnaryOpRValue::Kind kind;
@@ -627,7 +622,7 @@ Operand FunctionLowerer::lower_break_expr(const hir::Break& break_expr) {
 	LoopContext& ctx = lookup_loop_context(key);
 	BasicBlockId from_block = current_block ? current_block_id() : ctx.break_block;
 	if (ctx.break_result) {
-		semantic::TypeId ty = ctx.break_type.value();
+		TypeId ty = ctx.break_type.value();
 		TempId temp = materialize_operand(break_value, ty);
 		ctx.break_incomings.push_back(PhiIncoming{from_block, temp});
 	}

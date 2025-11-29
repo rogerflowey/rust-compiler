@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "../span/span.hpp"
+#include "type/type.hpp"
 
 class CompilerError : public std::runtime_error {
 public:
@@ -46,12 +47,6 @@ struct Diagnostic {
     std::vector<std::string> notes;
 };
 
-// Forward declaration
-namespace semantic {
-    class Type;
-    using TypeId = const Type*;
-}
-
 // Error reporting helper functions
 namespace error_helper {
 
@@ -65,10 +60,10 @@ inline void report_error(const std::string& message) {
 /**
  * @brief Report a type mismatch error
  */
-inline void report_type_mismatch(semantic::TypeId expected_type, 
-                                 semantic::TypeId actual_type) {
+inline void report_type_mismatch(type::TypeId expected_type,
+                                 type::TypeId actual_type) {
     std::ostringstream oss;
-    oss << "Type mismatch: expected " << expected_type 
+    oss << "Type mismatch: expected " << expected_type
         << " but found " << actual_type;
     report_error(oss.str());
 }

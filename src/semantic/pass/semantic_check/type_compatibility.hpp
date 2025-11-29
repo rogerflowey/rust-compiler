@@ -1,6 +1,6 @@
 #pragma once
-#include "semantic/type/type.hpp"
-#include "semantic/type/helper.hpp"
+#include "type/type.hpp"
+#include "type/helper.hpp"
 #include "semantic/utils.hpp"
 #include "hir/helper.hpp"
 #include "utils/debug_context.hpp"
@@ -24,16 +24,17 @@ namespace semantic {
  * - Reference type handling
  * 
  * Dependencies:
- * - Type system (src/semantic/type/type.hpp)
+ * - Type system (src/type/type.hpp)
  * - Expression checker (src/semantic/pass/semantic_check/expr_check.cpp)
  */
 
 // ===== Helper Functions =====
 
 inline std::string describe_type(TypeId type) {
-    if (!type) {
+    if (type == invalid_type_id) {
         return "<invalid type>";
     }
+    const auto& resolved = get_type_from_id(type);
     return std::visit(
         Overloaded{
             [](PrimitiveKind kind) -> std::string {
@@ -56,10 +57,12 @@ inline std::string describe_type(TypeId type) {
                 return "<primitive>";
             },
             [](const StructType& st) -> std::string {
-                return "struct " + hir::helper::get_name(*st.symbol).name;
+                const auto& info = TypeContext::get_instance().get_struct(st.id);
+                return "struct " + info.name;
             },
             [](const EnumType& en) -> std::string {
-                return "enum " + hir::helper::get_name(*en.symbol).name;
+                const auto& info = TypeContext::get_instance().get_enum(en.id);
+                return "enum " + info.name;
             },
             [](const ReferenceType& ref) -> std::string {
                 return std::string(ref.is_mutable ? "&mut " : "&") + describe_type(ref.referenced_type);
@@ -77,7 +80,7 @@ inline std::string describe_type(TypeId type) {
                 return "_";
             }
         },
-        type->value);
+        resolved.value);
 }
 
 // Forward declaration
@@ -88,8 +91,10 @@ inline std::optional<TypeId> try_coerce_to(TypeId from, TypeId to);
  */
 template<typename CompositeType>
 inline std::optional<TypeId> coerce_composite_types(TypeId from, TypeId to) {
-    if (auto from_comp = std::get_if<CompositeType>(&from->value)) {
-        if (auto to_comp = std::get_if<CompositeType>(&to->value)) {
+    const auto& from_type = get_type_from_id(from);
+    const auto& to_type = get_type_from_id(to);
+    if (auto from_comp = std::get_if<CompositeType>(&from_type.value)) {
+        if (auto to_comp = std::get_if<CompositeType>(&to_type.value)) {
             // For arrays: check size match, then recurse on element types
             if constexpr (std::is_same_v<CompositeType, ArrayType>) {
                 if (from_comp->size != to_comp->size) {
@@ -144,19 +149,22 @@ inline std::optional<TypeId> try_coerce_to(TypeId from, TypeId to) {
         return to;
     }
 
+    const auto& from_type = get_type_from_id(from);
+    const auto& to_type = get_type_from_id(to);
+
     if (helper::type_helper::is_underscore_type(from) ||
         helper::type_helper::is_underscore_type(to)) {
         return std::nullopt;
     }
     
     // NeverType can coerce to any type (bottom type)
-    if (std::holds_alternative<NeverType>(from->value)) {
+    if (std::holds_alternative<NeverType>(from_type.value)) {
         return to;
     }
     
     // Primitive types only coerce if identical
-    if (auto from_prim = std::get_if<PrimitiveKind>(&from->value)) {
-        if (auto to_prim = std::get_if<PrimitiveKind>(&to->value)) {
+    if (auto from_prim = std::get_if<PrimitiveKind>(&from_type.value)) {
+        if (auto to_prim = std::get_if<PrimitiveKind>(&to_type.value)) {
             if (*from_prim == *to_prim) {
                 return to;
             }
@@ -194,27 +202,30 @@ inline std::optional<TypeId> find_common_type(TypeId left, TypeId right) {
     if (left == right) {
         return left;
     }
-    
+
+    const auto& left_type = get_type_from_id(left);
+    const auto& right_type = get_type_from_id(right);
+
     // If one operand is NeverType, return the other type
-    if (std::holds_alternative<NeverType>(left->value)) {
+    if (std::holds_alternative<NeverType>(left_type.value)) {
         return right;
     }
-    if (std::holds_alternative<NeverType>(right->value)) {
+    if (std::holds_alternative<NeverType>(right_type.value)) {
         return left;
     }
-    
+
     // Handle primitive type common type resolution via coercion in either direction
-    if (auto left_prim = std::get_if<PrimitiveKind>(&left->value)) {
-        if (auto right_prim = std::get_if<PrimitiveKind>(&right->value)) {
+    if (auto left_prim = std::get_if<PrimitiveKind>(&left_type.value)) {
+        if (auto right_prim = std::get_if<PrimitiveKind>(&right_type.value)) {
             if (*left_prim == *right_prim) {
                 return left;
             }
         }
     }
-    
+
     // Handle array type common type resolution
-    if (auto left_array = std::get_if<ArrayType>(&left->value)) {
-        if (auto right_array = std::get_if<ArrayType>(&right->value)) {
+    if (auto left_array = std::get_if<ArrayType>(&left_type.value)) {
+        if (auto right_array = std::get_if<ArrayType>(&right_type.value)) {
             if (left_array->size == right_array->size) {
                 if (auto common_elem = find_common_type(left_array->element_type, right_array->element_type)) {
                     return get_typeID(Type{ArrayType{*common_elem, left_array->size}});
@@ -275,6 +286,9 @@ inline bool is_castable_to(TypeId from, TypeId to) {
         return true;
     }
 
+    const auto& from_type = get_type_from_id(from);
+    const auto& to_type = get_type_from_id(to);
+
     if (helper::type_helper::is_underscore_type(from) ||
         helper::type_helper::is_underscore_type(to)) {
         return false;
@@ -286,22 +300,22 @@ inline bool is_castable_to(TypeId from, TypeId to) {
     }
     
     // All primitive types can be cast to each other (with potential data loss)
-    if (std::holds_alternative<PrimitiveKind>(from->value) &&
-        std::holds_alternative<PrimitiveKind>(to->value)) {
+    if (std::holds_alternative<PrimitiveKind>(from_type.value) &&
+        std::holds_alternative<PrimitiveKind>(to_type.value)) {
         return true;
     }
     
     // Reference types can be cast if their underlying types are castable
-    if (auto from_ref = std::get_if<ReferenceType>(&from->value)) {
-        if (auto to_ref = std::get_if<ReferenceType>(&to->value)) {
+    if (auto from_ref = std::get_if<ReferenceType>(&from_type.value)) {
+        if (auto to_ref = std::get_if<ReferenceType>(&to_type.value)) {
             return is_castable_to(from_ref->referenced_type, to_ref->referenced_type);
         }
     }
     
     // Arrays can be cast if their element types are castable and sizes match
-    if (auto from_array = std::get_if<ArrayType>(&from->value)) {
-        if (auto to_array = std::get_if<ArrayType>(&to->value)) {
-            return from_array->size == to_array->size && 
+    if (auto from_array = std::get_if<ArrayType>(&from_type.value)) {
+        if (auto to_array = std::get_if<ArrayType>(&to_type.value)) {
+            return from_array->size == to_array->size &&
                    is_castable_to(from_array->element_type, to_array->element_type);
         }
     }

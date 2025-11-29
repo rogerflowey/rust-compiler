@@ -1,26 +1,28 @@
 #pragma once
 
-#include "common.hpp"
-#include "type.hpp"
+#include "semantic/common.hpp"
+#include "type/type.hpp"
 #include "semantic/hir/hir.hpp"
 #include "semantic/utils.hpp"
 #include <stdexcept>
 #include <optional>
 
-namespace semantic{
+namespace type {
 namespace helper {
 
 /* @brief Convert a TypeDef (which is a variant of StructDef*, EnumDef*, Trait*) to a Type
  * @param def The TypeDef to convert
  * @return The corresponding Type
  */
-inline Type to_type(const TypeDef& def){
+inline Type to_type(const TypeDef& def) {
     return std::visit(Overloaded{
         [](hir::StructDef* sd) -> Type {
-            return Type{StructType{.symbol = sd}};
+            auto id = TypeContext::get_instance().get_or_register_struct(sd);
+            return Type{StructType{.id = id}};
         },
         [](hir::EnumDef* ed) -> Type {
-            return Type{EnumType{.symbol = ed}};
+            auto id = TypeContext::get_instance().get_or_register_enum(ed);
+            return Type{EnumType{.id = id}};
         },
         [](hir::Trait*) -> Type {
             throw std::logic_error("Cannot convert Trait to Type");
@@ -35,25 +37,26 @@ namespace type_helper {
  * @brief Check if a type is a reference type
  */
 inline bool is_reference_type(TypeId type) {
-    return std::holds_alternative<ReferenceType>(type->value);
+    return std::holds_alternative<ReferenceType>(get_type_from_id(type).value);
 }
 
 /**
  * @brief Get the referenced type from a reference type
  */
 inline TypeId get_referenced_type(TypeId ref_type) {
-    if (auto ref = std::get_if<ReferenceType>(&ref_type->value)) {
-        return ref->referenced_type;
+    auto ref = std::get_if<ReferenceType>(&get_type_from_id(ref_type).value);
+    if (!ref) {
+        return invalid_type_id;
     }
-    return nullptr;
+    return ref->referenced_type;
 }
 
 /**
  * @brief Check if a type is numeric
  */
 inline bool is_numeric_type(TypeId type) {
-    auto prim = std::get_if<PrimitiveKind>(&type->value);
-    if(!prim) return false;
+    auto prim = std::get_if<PrimitiveKind>(&get_type_from_id(type).value);
+    if (!prim) return false;
     switch (*prim) {
         case PrimitiveKind::I32:
         case PrimitiveKind::ISIZE:
@@ -66,7 +69,7 @@ inline bool is_numeric_type(TypeId type) {
 }
 
 inline bool is_signed_integer_type(TypeId type) {
-    auto prim = std::get_if<PrimitiveKind>(&type->value);
+    auto prim = std::get_if<PrimitiveKind>(&get_type_from_id(type).value);
     if (!prim) {
         return false;
     }
@@ -80,7 +83,7 @@ inline bool is_signed_integer_type(TypeId type) {
 }
 
 inline bool is_unsigned_integer_type(TypeId type) {
-    auto prim = std::get_if<PrimitiveKind>(&type->value);
+    auto prim = std::get_if<PrimitiveKind>(&get_type_from_id(type).value);
     if (!prim) {
         return false;
     }
@@ -94,7 +97,7 @@ inline bool is_unsigned_integer_type(TypeId type) {
 }
 
 inline bool is_integer_type(TypeId type) {
-    auto prim = std::get_if<PrimitiveKind>(&type->value);
+    auto prim = std::get_if<PrimitiveKind>(&get_type_from_id(type).value);
     if (!prim) {
         return false;
     }
@@ -114,7 +117,7 @@ inline bool is_integer_type(TypeId type) {
  * @brief Check if a type is boolean
  */
 inline bool is_bool_type(TypeId type) {
-    if (auto prim = std::get_if<PrimitiveKind>(&type->value)) {
+    if (auto prim = std::get_if<PrimitiveKind>(&get_type_from_id(type).value)) {
         return *prim == PrimitiveKind::BOOL;
     }
     return false;
@@ -124,37 +127,37 @@ inline bool is_bool_type(TypeId type) {
  * @brief Check if a type is array or slice
  */
 inline bool is_array_type(TypeId type) {
-    return std::holds_alternative<ArrayType>(type->value);
+    return std::holds_alternative<ArrayType>(get_type_from_id(type).value);
 }
 
 /**
  * @brief Get element type from array type
  */
 inline TypeId get_element_type(TypeId array_type) {
-    if (auto array = std::get_if<ArrayType>(&array_type->value)) {
-        return array->element_type;
+    auto array = std::get_if<ArrayType>(&get_type_from_id(array_type).value);
+    if (!array) {
+        return invalid_type_id;
     }
-    return nullptr;
+    return array->element_type;
 }
 
 /**
  * @brief Check if a type is a mutable reference
  */
 inline bool is_mutable_reference(TypeId type) {
-    if (auto ref = std::get_if<ReferenceType>(&type->value)) {
-        return ref->is_mutable;
-    }
-    return false;
+    auto ref = std::get_if<ReferenceType>(&get_type_from_id(type).value);
+    return ref && ref->is_mutable;
 }
 
 /**
  * @brief Get the mutability of a reference type
  */
 inline bool get_reference_mutability(TypeId ref_type) {
-    if (auto ref = std::get_if<ReferenceType>(&ref_type->value)) {
-        return ref->is_mutable;
+    auto ref = std::get_if<ReferenceType>(&get_type_from_id(ref_type).value);
+    if (!ref) {
+        throw std::logic_error("Not a reference type");
     }
-    throw std::logic_error("Not a reference type");
+    return ref->is_mutable;
 }
 
 /**
@@ -174,7 +177,7 @@ inline TypeId create_reference_type(TypeId referenced_type, bool is_mutable) {
  */
 inline TypeId get_base_type(TypeId type) {
     TypeId current = type;
-    while (auto ref = std::get_if<ReferenceType>(&current->value)) {
+    while (auto ref = std::get_if<ReferenceType>(&get_type_from_id(current).value)) {
         current = ref->referenced_type;
     }
     return current;
@@ -184,14 +187,18 @@ inline TypeId get_base_type(TypeId type) {
  * @brief Check if a type is NeverType
  */
 inline bool is_never_type(TypeId type) {
-    return std::holds_alternative<NeverType>(type->value);
+    return std::holds_alternative<NeverType>(get_type_from_id(type).value);
 }
 
 inline bool is_underscore_type(TypeId type) {
-    return std::holds_alternative<UnderscoreType>(type->value);
+    return std::holds_alternative<UnderscoreType>(get_type_from_id(type).value);
 }
 
 } // namespace type_helper
 
-}
+} // namespace helper
+} // namespace type
+
+namespace semantic {
+namespace helper = type::helper;
 }

@@ -296,7 +296,7 @@ Types transform to code with these properties:
 
 - **High-Level Overview**: [../../docs/component-overviews/ast-overview.md](../../docs/component-overviews/ast-overview.md) - AST architecture and design overview
 - **AST Architecture**: [./README.md](./README.md) - Variant-based node design
-- **Type System**: [../../semantic/type/type.md](../../semantic/type/type.md) - Semantic type system
+- **Type System**: [../../type/type.md](../../type/type.md) - Semantic type system
 - **Expression Types**: [./expr.md](./expr.md) - Type annotations in expressions
 - **Item Types**: [./item.md](./item.md) - Type definitions in items
 - **Type Parsing**: [../parser/type_parse.md](../parser/type_parse.md) - Type syntax parsing

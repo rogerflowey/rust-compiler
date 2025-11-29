@@ -1,8 +1,8 @@
 #pragma once
 #include "symbol/scope.hpp"
 #include "semantic/hir/hir.hpp"
-#include "semantic/type/impl_table.hpp"
-#include "semantic/type/type.hpp"
+#include "type/impl_table.hpp"
+#include "type/type.hpp"
 
 #include <algorithm>
 #include <initializer_list>
@@ -16,6 +16,8 @@
 
 namespace semantic {
 
+using type::ImplTable;
+
 struct PredefinedMethodEntry {
     std::string name;
     hir::Method* method;
@@ -23,7 +25,7 @@ struct PredefinedMethodEntry {
 
 struct PredefinedTypeIdHasher {
     size_t operator()(TypeId type) const noexcept {
-        return std::hash<const Type*>{}(type);
+        return std::hash<TypeId>{}(type);
     }
 };
 
@@ -86,9 +88,8 @@ inline TypeId primitive_string_type() {
 }
 
 inline TypeId string_struct_type() {
-    auto struct_type = StructType();
-    struct_type.symbol = &struct_String;
-    static const TypeId id = get_typeID(Type{std::move(struct_type)});
+    static const StructId struct_id = TypeContext::get_instance().get_or_register_struct(&struct_String);
+    static const TypeId id = get_typeID(Type{StructType{.id = struct_id}});
     return id;
 }
 

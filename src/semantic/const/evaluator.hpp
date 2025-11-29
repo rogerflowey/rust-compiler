@@ -1,7 +1,7 @@
 #pragma once
 #include "const.hpp"
 #include "semantic/hir/hir.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include <cstdint>
 #include <optional>
 #include <type_traits>
@@ -13,10 +13,10 @@ namespace semantic::const_eval {
 namespace detail {
 
 inline std::optional<PrimitiveKind> primitive_kind(TypeId type) {
-    if (!type) {
+    if (type == invalid_type_id) {
         return std::nullopt;
     }
-    if (auto kind = std::get_if<PrimitiveKind>(&type->value)) {
+    if (auto kind = std::get_if<PrimitiveKind>(&type::get_type_from_id(type).value)) {
         return *kind;
     }
     return std::nullopt;
@@ -35,15 +35,17 @@ inline bool is_integer_kind(PrimitiveKind kind) {
 }
 
 inline bool is_string_reference(TypeId type) {
-    if (!type) {
+    if (type == invalid_type_id) {
         return false;
     }
-    if (auto kind = std::get_if<PrimitiveKind>(&type->value)) {
+    const auto& resolved = type::get_type_from_id(type);
+    if (auto kind = std::get_if<PrimitiveKind>(&resolved.value)) {
         return *kind == PrimitiveKind::STRING;
     }
-    if (auto ref = std::get_if<ReferenceType>(&type->value)) {
-        if (auto inner = std::get_if<PrimitiveKind>(&ref->referenced_type->value)) {
-            return *inner == PrimitiveKind::STRING;
+    if (auto ref = std::get_if<ReferenceType>(&resolved.value)) {
+        const auto& inner = type::get_type_from_id(ref->referenced_type);
+        if (auto inner_kind = std::get_if<PrimitiveKind>(&inner.value)) {
+            return *inner_kind == PrimitiveKind::STRING;
         }
     }
     return false;
@@ -107,7 +109,7 @@ inline bool is_char_type(TypeId type) {
 } // namespace detail
 
 inline std::optional<ConstVariant> literal_value(const hir::Literal &literal, TypeId resolved_type) {
-    if (!resolved_type) {
+    if (resolved_type == invalid_type_id) {
         return std::nullopt;
     }
 
@@ -403,6 +405,8 @@ inline std::optional<ConstVariant> eval_binary(const hir::BinaryOperator &op,
                 return comparison_numeric(eq.kind,
                     [](int64_t, int64_t) { return false; },
                     [](uint64_t l, uint64_t r) { return l == r; });
+            case hir::Equal::Kind::Enum:
+                return std::nullopt;
             case hir::Equal::Kind::Unspecified:
                 return std::nullopt;
             }
@@ -436,6 +440,8 @@ inline std::optional<ConstVariant> eval_binary(const hir::BinaryOperator &op,
                 return comparison_numeric(ne.kind,
                     [](int64_t, int64_t) { return false; },
                     [](uint64_t l, uint64_t r) { return l != r; });
+            case decltype(ne.kind)::Enum:
+                return std::nullopt;
             case decltype(ne.kind)::Unspecified:
                 return std::nullopt;
             }

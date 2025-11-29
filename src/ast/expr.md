@@ -167,5 +167,5 @@ Semantic analysis relies on:
 - **High-Level Overview**: [../../docs/component-overviews/ast-overview.md](../../docs/component-overviews/ast-overview.md) - AST architecture and design overview
 - **AST Architecture**: [./README.md](./README.md) - Variant-based node design
 - **Expression Parsing**: [../parser/expr_parse.md](../parser/expr_parse.md) - Construction patterns
-- **Type System**: [../semantic/type/type.md](../semantic/type/type.md) - Type annotation process
+- **Type System**: [../type/type.md](../type/type.md) - Type annotation process
 - **Visitor Pattern**: [./visitor/visitor_base.md](./visitor/visitor_base.md) - Traversal and transformation

@@ -3,7 +3,7 @@
 #include "ast/common.hpp"
 #include "semantic/common.hpp"
 #include "semantic/const/const.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "ast/ast.hpp"
 #include "span/span.hpp"
 
@@ -390,12 +390,12 @@ struct ShiftRight {
 };
 
 struct Equal {
-    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char, Enum };
     Kind kind = Kind::Unspecified;
 };
 
 struct NotEqual {
-    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char };
+    enum class Kind { Unspecified, SignedInt, UnsignedInt, Bool, Char, Enum };
     Kind kind = Kind::Unspecified;
 };
 
@@ -656,7 +656,7 @@ struct Method {
 
 
 struct StructDef {
-        ast::Identifier name;
+    ast::Identifier name;
     std::vector<semantic::Field> fields;
     std::vector<TypeAnnotation> field_type_annotations;
     span::Span span = span::Span::invalid();
