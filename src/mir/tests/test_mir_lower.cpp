@@ -1,4 +1,4 @@
-#include "mir/lower.hpp"
+#include "mir/lower/lower.hpp"
 
 #include "mir/mir.hpp"
 #include "semantic/const/const.hpp"
@@ -47,6 +47,31 @@ std::unique_ptr<hir::Expr> make_int_literal_expr(uint64_t value, semantic::TypeI
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
     expr->expr_info = make_value_info(type, false);
     return expr;
+}
+
+std::unique_ptr<hir::Expr> make_char_literal_expr(char value, semantic::TypeId type) {
+    hir::Literal literal{
+        .value = hir::Literal::Value{value},
+        
+    };
+    auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
+    expr->expr_info = make_value_info(type, false);
+    return expr;
+}
+
+std::unique_ptr<hir::Expr> make_string_literal_expr(std::string value, semantic::TypeId type, bool is_cstyle = false) {
+    hir::Literal literal{
+        .value = hir::Literal::Value{hir::Literal::String{.value = std::move(value), .is_cstyle = is_cstyle}},
+        
+    };
+    auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
+    expr->expr_info = make_value_info(type, false);
+    return expr;
+}
+
+semantic::TypeId make_string_ref_type() {
+    semantic::TypeId string_type = make_type(semantic::PrimitiveKind::STRING);
+    return semantic::get_typeID(semantic::Type{semantic::ReferenceType{string_type, false}});
 }
 
 std::unique_ptr<hir::Expr> make_binary_expr(hir::BinaryOperator op,
@@ -101,6 +126,57 @@ TEST(MirLowerTest, LowersFunctionReturningLiteral) {
     EXPECT_EQ(constant.type, bool_type);
     ASSERT_TRUE(std::holds_alternative<mir::BoolConstant>(constant.value));
     EXPECT_TRUE(std::get<mir::BoolConstant>(constant.value).value);
+}
+
+TEST(MirLowerTest, LowersCharLiteral) {
+    semantic::TypeId char_type = make_type(semantic::PrimitiveKind::CHAR);
+
+    hir::Function function;
+    function.return_type = hir::TypeAnnotation(char_type);
+
+    auto body = std::make_unique<hir::Block>();
+    body->final_expr = make_char_literal_expr('z', char_type);
+    function.body = std::move(body);
+
+    mir::MirFunction lowered = mir::lower_function(function);
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+    ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
+    const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
+    ASSERT_TRUE(ret.value.has_value());
+    const auto& operand = ret.value.value();
+    ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
+    const auto& constant = std::get<mir::Constant>(operand.value);
+    ASSERT_TRUE(std::holds_alternative<mir::CharConstant>(constant.value));
+    EXPECT_EQ(std::get<mir::CharConstant>(constant.value).value, 'z');
+}
+
+TEST(MirLowerTest, LowersStringLiteralWithNullTerminator) {
+    semantic::TypeId string_ref_type = make_string_ref_type();
+
+    hir::Function function;
+    function.return_type = hir::TypeAnnotation(string_ref_type);
+
+    auto body = std::make_unique<hir::Block>();
+    body->final_expr = make_string_literal_expr("hello", string_ref_type);
+    function.body = std::move(body);
+
+    mir::MirFunction lowered = mir::lower_function(function);
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+    ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
+    const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
+    ASSERT_TRUE(ret.value.has_value());
+    const auto& operand = ret.value.value();
+    ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
+    const auto& constant = std::get<mir::Constant>(operand.value);
+    ASSERT_TRUE(std::holds_alternative<mir::StringConstant>(constant.value));
+    const auto& string_const = std::get<mir::StringConstant>(constant.value);
+    EXPECT_EQ(string_const.length, 5u);
+    ASSERT_FALSE(string_const.data.empty());
+    EXPECT_EQ(string_const.data.back(), '\0');
+    EXPECT_EQ(std::string(string_const.data.c_str()), "hello");
+    EXPECT_FALSE(string_const.is_cstyle);
 }
 
 TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
@@ -174,6 +250,39 @@ TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
     const auto& operand = ret.value.value();
     ASSERT_TRUE(std::holds_alternative<mir::TempId>(operand.value));
     EXPECT_EQ(std::get<mir::TempId>(operand.value), load_stmt.dest);
+}
+
+TEST(MirLowerTest, RecordsFunctionParameters) {
+    semantic::TypeId int_type = make_type(semantic::PrimitiveKind::I32);
+
+    auto param_local = std::make_unique<hir::Local>();
+    param_local->name = ast::Identifier{"x"};
+    param_local->is_mutable = false;
+    param_local->type_annotation = hir::TypeAnnotation(int_type);
+    hir::Local* param_local_ptr = param_local.get();
+
+    hir::Function function;
+    function.return_type = hir::TypeAnnotation(int_type);
+    function.locals.push_back(std::move(param_local));
+
+    hir::BindingDef param_binding;
+    param_binding.local = param_local_ptr;
+    auto param_pattern = std::make_unique<hir::Pattern>(hir::PatternVariant{std::move(param_binding)});
+    function.params.push_back(std::move(param_pattern));
+    function.param_type_annotations.push_back(hir::TypeAnnotation(int_type));
+
+    function.body = std::make_unique<hir::Block>();
+
+    hir::Program program;
+    program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
+
+    mir::MirModule module = mir::lower_program(program);
+    ASSERT_EQ(module.functions.size(), 1u);
+    const auto& lowered = module.functions.front();
+    ASSERT_EQ(lowered.params.size(), 1u);
+    EXPECT_EQ(lowered.params[0].local, 0u);
+    EXPECT_EQ(lowered.params[0].type, int_type);
+    EXPECT_EQ(lowered.params[0].name, "x");
 }
 
 TEST(MirLowerTest, LowersBinaryAddition) {
@@ -305,6 +414,44 @@ TEST(MirLowerTest, LowersConstUseExpression) {
     EXPECT_EQ(constant.type, int_type);
     ASSERT_TRUE(std::holds_alternative<mir::IntConstant>(constant.value));
     EXPECT_EQ(std::get<mir::IntConstant>(constant.value).value, 42u);
+}
+
+TEST(MirLowerTest, LowersStringConstUseExpression) {
+    semantic::TypeId string_ref_type = make_string_ref_type();
+
+    auto const_owner = std::make_unique<hir::ConstDef>();
+    const_owner->type = hir::TypeAnnotation(string_ref_type);
+    semantic::StringConst string_const;
+    string_const.value = "hi";
+    const_owner->const_value = semantic::ConstVariant{string_const};
+
+    hir::Function function;
+    function.return_type = hir::TypeAnnotation(string_ref_type);
+
+    hir::ConstUse const_use;
+    const_use.def = const_owner.get();
+    auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(const_use)});
+    expr->expr_info = make_value_info(string_ref_type, false);
+
+    auto body = std::make_unique<hir::Block>();
+    body->final_expr = std::move(expr);
+    function.body = std::move(body);
+
+    mir::MirFunction lowered = mir::lower_function(function);
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+    ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
+    const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
+    ASSERT_TRUE(ret.value.has_value());
+    const auto& operand = ret.value.value();
+    ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
+    const auto& constant = std::get<mir::Constant>(operand.value);
+    ASSERT_TRUE(std::holds_alternative<mir::StringConstant>(constant.value));
+    const auto& string_constant = std::get<mir::StringConstant>(constant.value);
+    EXPECT_EQ(string_constant.length, 2u);
+    ASSERT_FALSE(string_constant.data.empty());
+    EXPECT_EQ(string_constant.data.back(), '\0');
+    EXPECT_EQ(std::string(string_constant.data.c_str()), "hi");
 }
 
 TEST(MirLowerTest, LowersStructConstExpression) {

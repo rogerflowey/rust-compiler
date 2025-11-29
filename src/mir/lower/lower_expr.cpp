@@ -1,4 +1,4 @@
-#include "mir/lower_internal.hpp"
+#include "mir/lower/lower_internal.hpp"
 
 #include "semantic/hir/helper.hpp"
 #include "semantic/type/type.hpp"
@@ -41,11 +41,11 @@ Place FunctionLowerer::lower_place_impl(const hir::Variable& variable, const sem
 
 Place FunctionLowerer::lower_place_impl(const hir::FieldAccess& field_access, const semantic::ExprInfo&) {
 	if (!field_access.base) {
-		throw std::logic_error("Field access missing base during MIR place lowering");
+		throw std::logic_error("Should Not Happen: Field access missing base during MIR place lowering");
 	}
 	semantic::ExprInfo base_info = hir::helper::get_expr_info(*field_access.base);
 	if (!base_info.is_place) {
-		throw std::logic_error("Field access base is not a place during MIR place lowering");
+		throw std::logic_error("Should Not Happen: Field access base is not a place during MIR place lowering");
 	}
 	Place place = lower_expr_place(*field_access.base);
 	std::size_t index = hir::helper::get_field_index(field_access);
@@ -70,9 +70,9 @@ Place FunctionLowerer::lower_place_impl(const hir::Index& index_expr, const sema
 }
 
 Place FunctionLowerer::lower_place_impl(const hir::UnaryOp& unary, const semantic::ExprInfo&) {
-        if (!std::holds_alternative<hir::Dereference>(unary.op)) {
-                throw std::logic_error("Only dereference unary ops can be lowered as places");
-        }
+    if (!std::holds_alternative<hir::Dereference>(unary.op)) {
+            throw std::logic_error("Only dereference unary ops can be lowered as places");
+    }
 	if (!unary.rhs) {
 		throw std::logic_error("Dereference expression missing operand during MIR place lowering");
 	}

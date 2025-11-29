@@ -1,4 +1,4 @@
-#include "mir/lower_common.hpp"
+#include "mir/lower/lower_common.hpp"
 
 #include "semantic/hir/helper.hpp"
 #include "semantic/utils.hpp"

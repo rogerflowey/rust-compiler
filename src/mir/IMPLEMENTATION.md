@@ -1,10 +1,10 @@
 # MIR Lowering Implementation
 
-This document describes how the MIR lowering pipeline turns the semantic HIR into MIR. The code is split across three files:
+This document describes how the MIR lowering pipeline turns the semantic HIR into MIR. The code is split across three files inside `src/mir/lower/`:
 
-- `src/mir/lower.cpp` hosts the public entry points plus the `FunctionLowerer` state/statement helpers.
-- `src/mir/lower_expr.cpp` contains every expression/place lowering routine.
-- `src/mir/lower_internal.hpp` declares `FunctionLowerer` so both translation units share the same private structure.
+- `src/mir/lower/lower.cpp` hosts the public entry points plus the `FunctionLowerer` state/statement helpers.
+- `src/mir/lower/lower_expr.cpp` contains every expression/place lowering routine.
+- `src/mir/lower/lower_internal.hpp` declares `FunctionLowerer` so both translation units share the same private structure.
 
 The goal of this split is to keep the architecture explanation here accurate even as expression coverage grows.
 

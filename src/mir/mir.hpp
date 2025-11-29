@@ -20,6 +20,12 @@ struct LocalInfo {
     std::string debug_name;
 };
 
+struct FunctionParameter {
+    LocalId local = 0;
+    semantic::TypeId type = semantic::invalid_type_id;
+    std::string name;
+};
+
 struct BoolConstant {
     bool value = false;
 };
@@ -30,9 +36,19 @@ struct IntConstant {
     bool is_signed = false;
 };
 
+struct CharConstant {
+    char value = '\0';
+};
+
+struct StringConstant {
+    std::string data;
+    std::size_t length = 0;
+    bool is_cstyle = false;
+};
+
 struct UnitConstant {};
 
-using ConstantValue = std::variant<BoolConstant, IntConstant, UnitConstant>;
+using ConstantValue = std::variant<BoolConstant, IntConstant, UnitConstant, CharConstant, StringConstant>;
 
 struct Constant {
     semantic::TypeId type = semantic::invalid_type_id;
@@ -245,6 +261,7 @@ struct BasicBlock {
 struct MirFunction {
     FunctionId id = 0;
     std::string name;
+    std::vector<FunctionParameter> params;
     std::vector<semantic::TypeId> temp_types;
     std::vector<LocalInfo> locals;
     std::vector<BasicBlock> basic_blocks;

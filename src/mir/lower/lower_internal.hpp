@@ -1,8 +1,8 @@
 #pragma once
 
 #include "mir/mir.hpp"
-#include "mir/lower_common.hpp"
-#include "mir/lower_const.hpp"
+#include "mir/lower/lower_common.hpp"
+#include "mir/lower/lower_const.hpp"
 
 #include "semantic/hir/hir.hpp"
 #include "semantic/pass/semantic_check/expr_info.hpp"
@@ -12,6 +12,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -75,6 +76,11 @@ private:
 	TempId materialize_operand(const Operand& operand, semantic::TypeId type);
 	Operand make_temp_operand(TempId temp);
 	void emit_return(std::optional<Operand> value);
+	void collect_parameters();
+	void collect_function_parameters(const hir::Function& function);
+	void collect_method_parameters(const hir::Method& method);
+	void append_parameter(const hir::Local* local, semantic::TypeId type);
+	const hir::Local* resolve_pattern_local(const hir::Pattern& pattern) const;
 
 	LoopContext& push_loop_context(const void* key,
 				   BasicBlockId continue_block,

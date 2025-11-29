@@ -10,6 +10,11 @@ target_include_directories(mir
 		../semantic
 )
 
+target_link_libraries(mir
+	PUBLIC
+		llvmbuilder
+)
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()

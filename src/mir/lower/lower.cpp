@@ -1,8 +1,8 @@
-#include "mir/lower.hpp"
+#include "mir/lower/lower.hpp"
 
-#include "mir/lower_internal.hpp"
-#include "mir/lower_common.hpp"
-#include "mir/lower_const.hpp"
+#include "mir/lower/lower_internal.hpp"
+#include "mir/lower/lower_common.hpp"
+#include "mir/lower/lower_const.hpp"
 
 #include "semantic/hir/helper.hpp"
 #include "semantic/type/type.hpp"
@@ -79,7 +79,7 @@ std::vector<FunctionDescriptor> collect_function_descriptors(const hir::Program&
 	return descriptors;
 }
 
-// FunctionLowerer declarations are provided in mir/lower_internal.hpp.
+// FunctionLowerer declarations are provided in mir/lower/lower_internal.hpp.
 
 } // namespace
 
@@ -124,6 +124,7 @@ void FunctionLowerer::initialize(FunctionId id, std::string name) {
 	mir_function.name = std::move(name);
 	mir_function.return_type = resolve_return_type();
 	init_locals();
+	collect_parameters();
 	BasicBlockId entry = create_block();
 	current_block = entry;
 	mir_function.start_block = entry;
@@ -179,6 +180,85 @@ void FunctionLowerer::init_locals() {
 			register_local(local_ptr.get());
 		}
 	}
+}
+
+void FunctionLowerer::collect_parameters() {
+	if (function_kind == FunctionKind::Function && hir_function) {
+		collect_function_parameters(*hir_function);
+	} else if (function_kind == FunctionKind::Method && hir_method) {
+		collect_method_parameters(*hir_method);
+	}
+}
+
+void FunctionLowerer::collect_function_parameters(const hir::Function& function) {
+	if (function.params.size() != function.param_type_annotations.size()) {
+		throw std::logic_error("Function parameter/type annotation mismatch during MIR lowering");
+	}
+	for (std::size_t i = 0; i < function.params.size(); ++i) {
+		const auto& param = function.params[i];
+		if (!param) {
+			continue;
+		}
+		const auto& annotation = function.param_type_annotations[i];
+		if (!annotation) {
+			throw std::logic_error("Function parameter missing resolved type during MIR lowering");
+		}
+		semantic::TypeId param_type = hir::helper::get_resolved_type(*annotation);
+		append_parameter(resolve_pattern_local(*param), param_type);
+	}
+}
+
+void FunctionLowerer::collect_method_parameters(const hir::Method& method) {
+	if (method.self_local) {
+		if (!method.self_local->type_annotation) {
+			throw std::logic_error("Method self parameter missing resolved type during MIR lowering");
+		}
+		semantic::TypeId self_type = hir::helper::get_resolved_type(*method.self_local->type_annotation);
+		append_parameter(method.self_local.get(), self_type);
+	}
+	if (method.params.size() != method.param_type_annotations.size()) {
+		throw std::logic_error("Method parameter/type annotation mismatch during MIR lowering");
+	}
+	for (std::size_t i = 0; i < method.params.size(); ++i) {
+		const auto& param = method.params[i];
+		if (!param) {
+			continue;
+		}
+		const auto& annotation = method.param_type_annotations[i];
+		if (!annotation) {
+			throw std::logic_error("Method parameter missing resolved type during MIR lowering");
+		}
+		semantic::TypeId param_type = hir::helper::get_resolved_type(*annotation);
+		append_parameter(resolve_pattern_local(*param), param_type);
+	}
+}
+
+void FunctionLowerer::append_parameter(const hir::Local* local, semantic::TypeId type) {
+	if (!local) {
+		throw std::logic_error("Parameter pattern did not resolve to a Local during MIR lowering");
+	}
+	LocalId local_id = require_local_id(local);
+	FunctionParameter param;
+	param.local = local_id;
+	param.type = type;
+	param.name = local->name.name;
+	mir_function.params.push_back(std::move(param));
+}
+
+const hir::Local* FunctionLowerer::resolve_pattern_local(const hir::Pattern& pattern) const {
+	if (const auto* binding = std::get_if<hir::BindingDef>(&pattern.value)) {
+		if (auto* local_ptr = std::get_if<hir::Local*>(&binding->local)) {
+			return *local_ptr;
+		}
+		throw std::logic_error("Binding definition missing resolved Local during MIR lowering");
+	}
+	if (const auto* reference = std::get_if<hir::ReferencePattern>(&pattern.value)) {
+		if (!reference->subpattern) {
+			throw std::logic_error("Reference pattern missing subpattern during MIR lowering");
+		}
+		return resolve_pattern_local(*reference->subpattern);
+	}
+	throw std::logic_error("Unsupported pattern variant in parameter lowering");
 }
 
 FunctionId FunctionLowerer::lookup_function_id(const void* key) const {

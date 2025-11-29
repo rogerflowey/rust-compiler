@@ -1,14 +1,26 @@
-#include "mir/lower_const.hpp"
+#include "mir/lower/lower_const.hpp"
 
 #include "semantic/const/const.hpp"
 #include "semantic/hir/helper.hpp"
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 namespace mir {
 namespace detail {
 namespace {
+
+StringConstant make_string_constant(const std::string& literal, bool is_cstyle_literal) {
+    StringConstant constant;
+    constant.length = literal.size();
+    constant.is_cstyle = is_cstyle_literal;
+    constant.data = literal;
+    if (constant.data.empty() || constant.data.back() != '\0') {
+        constant.data.push_back('\0');
+    }
+    return constant;
+}
 
 ConstantValue convert_literal_value(const bool& value) {
     return BoolConstant{value};
@@ -22,12 +34,12 @@ ConstantValue convert_literal_value(const hir::Literal::Integer& integer) {
     return constant;
 }
 
-ConstantValue convert_literal_value(const hir::Literal::String&) {
-    throw std::logic_error("String literals not supported in MIR yet");
+ConstantValue convert_literal_value(const hir::Literal::String& literal) {
+    return make_string_constant(literal.value, literal.is_cstyle);
 }
 
-ConstantValue convert_literal_value(const char&) {
-    throw std::logic_error("Char literals not supported in MIR yet");
+ConstantValue convert_literal_value(const char& value) {
+    return CharConstant{value};
 }
 
 ConstantValue convert_const_value(const semantic::UintConst& value) {
@@ -51,12 +63,12 @@ ConstantValue convert_const_value(const semantic::BoolConst& value) {
     return BoolConstant{value.value};
 }
 
-ConstantValue convert_const_value(const semantic::CharConst&) {
-    throw std::logic_error("Char constants not supported in MIR yet");
+ConstantValue convert_const_value(const semantic::CharConst& value) {
+    return CharConstant{value.value};
 }
 
-ConstantValue convert_const_value(const semantic::StringConst&) {
-    throw std::logic_error("String constants not supported in MIR yet");
+ConstantValue convert_const_value(const semantic::StringConst& value) {
+    return make_string_constant(value.value, false);
 }
 
 } // namespace
