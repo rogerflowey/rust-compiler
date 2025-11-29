@@ -14,7 +14,7 @@
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
 #include "src/semantic/pass/semantic_check/semantic_check.hpp"
 #include "src/semantic/query/semantic_context.hpp"
-#include "src/semantic/type/impl_table.hpp"
+#include "src/type/impl_table.hpp"
 
 namespace {
 

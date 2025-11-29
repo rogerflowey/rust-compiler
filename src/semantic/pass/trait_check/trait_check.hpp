@@ -3,7 +3,7 @@
 #include "semantic/hir/hir.hpp"
 #include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/hir/helper.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "semantic/query/semantic_context.hpp"
 #include "semantic/utils.hpp"
 #include "ast/common.hpp"

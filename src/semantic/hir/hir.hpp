@@ -3,7 +3,7 @@
 #include "ast/common.hpp"
 #include "semantic/common.hpp"
 #include "semantic/const/const.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "ast/ast.hpp"
 #include "span/span.hpp"
 

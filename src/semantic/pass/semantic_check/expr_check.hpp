@@ -3,7 +3,7 @@
 #include "expr_info.hpp"
 #include "semantic/hir/hir.hpp"
 #include "semantic/query/expectation.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "semantic/utils.hpp"
 #include "type/impl_table.hpp"
 #include <stdexcept>

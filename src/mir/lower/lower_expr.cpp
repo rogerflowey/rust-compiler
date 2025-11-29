@@ -1,12 +1,12 @@
 #include "mir/lower/lower_internal.hpp"
 
 #include "semantic/hir/helper.hpp"
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "semantic/utils.hpp"
 
 namespace mir::detail {
 
-Operand FunctionLowerer::load_place_value(Place place, semantic::TypeId type) {
+Operand FunctionLowerer::load_place_value(Place place, TypeId type) {
 	TempId temp = allocate_temp(type);
 	LoadStatement load{.dest = temp, .src = std::move(place)};
 	Statement stmt;
@@ -157,7 +157,7 @@ Operand FunctionLowerer::lower_expr_impl(const hir::ConstUse& const_use, const s
 	if (!const_use.def) {
 		throw std::logic_error("Const use missing definition during MIR lowering");
 	}
-	semantic::TypeId type = info.type;
+	TypeId type = info.type;
 	if (!type && const_use.def->type) {
 		type = hir::helper::get_resolved_type(*const_use.def->type);
 	}
@@ -172,7 +172,7 @@ Operand FunctionLowerer::lower_expr_impl(const hir::StructConst& struct_const, c
 	if (!struct_const.assoc_const) {
 		throw std::logic_error("Struct const missing associated const during MIR lowering");
 	}
-	semantic::TypeId type = info.type;
+	TypeId type = info.type;
 	if (!type && struct_const.assoc_const->type) {
 		type = hir::helper::get_resolved_type(*struct_const.assoc_const->type);
 	}
@@ -184,15 +184,16 @@ Operand FunctionLowerer::lower_expr_impl(const hir::StructConst& struct_const, c
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info) {
-	semantic::TypeId type = info.type;
-	if (!type) {
-		if (!enum_variant.enum_def) {
-			throw std::logic_error("Enum variant missing enum definition during MIR lowering");
-		}
-		type = semantic::get_typeID(semantic::Type{semantic::EnumType{enum_variant.enum_def}});
-	}
-	Constant constant = lower_enum_variant(enum_variant, type);
-	return make_constant_operand(constant);
+        TypeId type = info.type;
+        if (!type) {
+                if (!enum_variant.enum_def) {
+                        throw std::logic_error("Enum variant missing enum definition during MIR lowering");
+                }
+                auto enum_id = type::TypeContext::get_instance().get_or_register_enum(enum_variant.enum_def);
+                type = type::get_typeID(type::Type{type::EnumType{enum_id}});
+        }
+        Constant constant = lower_enum_variant(enum_variant, type);
+        return make_constant_operand(constant);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::FieldAccess& field_access, const semantic::ExprInfo& info) {
@@ -373,7 +374,7 @@ Operand FunctionLowerer::lower_expr_impl(const hir::MethodCall& method_call, con
 
 Operand FunctionLowerer::emit_unary_value(const hir::UnaryOperator& op,
                                           const hir::Expr& operand_expr,
-                                          semantic::TypeId result_type) {
+                                          TypeId result_type) {
         Operand operand = lower_expr(operand_expr);
         TempId dest = allocate_temp(result_type);
         UnaryOpRValue::Kind kind;
@@ -621,7 +622,7 @@ Operand FunctionLowerer::lower_break_expr(const hir::Break& break_expr) {
 	LoopContext& ctx = lookup_loop_context(key);
 	BasicBlockId from_block = current_block ? current_block_id() : ctx.break_block;
 	if (ctx.break_result) {
-		semantic::TypeId ty = ctx.break_type.value();
+		TypeId ty = ctx.break_type.value();
 		TempId temp = materialize_operand(break_value, ty);
 		ctx.break_incomings.push_back(PhiIncoming{from_block, temp});
 	}

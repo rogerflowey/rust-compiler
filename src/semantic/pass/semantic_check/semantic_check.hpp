@@ -5,8 +5,8 @@
 #include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/hir/helper.hpp"
 #include "semantic/query/semantic_context.hpp"
-#include "semantic/type/type.hpp"
-#include "semantic/type/impl_table.hpp"
+#include "type/type.hpp"
+#include "type/impl_table.hpp"
 #include "type_compatibility.hpp"
 #include <unordered_set>
 #include <string>
@@ -353,10 +353,12 @@ private:
                     return "<primitive>";
                 },
                 [](const StructType& st) -> std::string {
-                    return "struct " + hir::helper::get_name(*st.symbol).name;
+                    const auto& info = TypeContext::get_instance().get_struct(st.id);
+                    return "struct " + info.name;
                 },
                 [](const EnumType& en) -> std::string {
-                    return "enum " + hir::helper::get_name(*en.symbol).name;
+                    const auto& info = TypeContext::get_instance().get_enum(en.id);
+                    return "enum " + info.name;
                 },
                 [this](const ReferenceType& ref) -> std::string {
                     return std::string(ref.is_mutable ? "&mut " : "&") + describe_type(ref.referenced_type);
@@ -374,7 +376,7 @@ private:
                     return "_";
                 }
             },
-            type_id->value);
+            get_type_from_id(type_id).value);
     }
 
     std::string describe_impl_name(const hir::Impl& impl) const {

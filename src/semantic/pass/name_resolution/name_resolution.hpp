@@ -5,9 +5,9 @@
 #include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/symbol/predefined.hpp"
 #include "semantic/symbol/scope.hpp"
-#include "semantic/type/helper.hpp"
-#include "semantic/type/impl_table.hpp"
-#include "semantic/type/type.hpp"
+#include "type/helper.hpp"
+#include "type/impl_table.hpp"
+#include "type/type.hpp"
 #include "semantic/utils.hpp"
 #include "src/utils/error.hpp"
 #include <algorithm>
@@ -225,7 +225,7 @@ public:
     auto self_local = std::make_unique<hir::Local>(hir::Local{
       ast::Identifier{"self"},
       method.self_param.is_mutable,
-      get_typeID(Type{StructType{.symbol = *self_struct}})
+      get_typeID(Type{StructType{.id = TypeContext::get_instance().get_or_register_struct(*self_struct)}})
     });
     self_local->span = method.self_param.span.is_valid() ? method.self_param.span : method.span;
     

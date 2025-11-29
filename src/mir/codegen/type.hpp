@@ -1,18 +1,21 @@
 #pragma once
-#include "semantic/type/type.hpp"
+#include "type/type.hpp"
 #include "semantic/hir/hir.hpp"
 #include <unordered_map>
 #include <vector>
 #include <string>
 
 namespace codegen {
+
+using TypeId = type::TypeId;
+
 class TypeEmitter{
 public:
-    std::string emit_struct_definition(semantic::TypeId type);
-    std::string get_type_name(semantic::TypeId type);
+    std::string emit_struct_definition(TypeId type);
+    std::string get_type_name(TypeId type);
 
 private:
-    std::unordered_map<semantic::TypeId, std::string> emitted_types;
+    std::unordered_map<TypeId, std::string> emitted_types;
 };
 
 } // namespace codegen

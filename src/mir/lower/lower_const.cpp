@@ -75,7 +75,7 @@ ConstantValue convert_const_value(const semantic::StringConst& value) {
 
 } // namespace
 
-Constant lower_literal(const hir::Literal& literal, semantic::TypeId type) {
+Constant lower_literal(const hir::Literal& literal, TypeId type) {
     Constant constant;
     constant.type = canonicalize_type_for_mir(type);
     constant.value = std::visit([&](const auto& value) -> ConstantValue {
@@ -84,7 +84,7 @@ Constant lower_literal(const hir::Literal& literal, semantic::TypeId type) {
     return constant;
 }
 
-Constant lower_const_definition(const hir::ConstDef& const_def, semantic::TypeId type) {
+Constant lower_const_definition(const hir::ConstDef& const_def, TypeId type) {
     if (!type) {
         throw std::logic_error("Const definition missing resolved type during MIR lowering");
     }
@@ -97,7 +97,7 @@ Constant lower_const_definition(const hir::ConstDef& const_def, semantic::TypeId
     return constant;
 }
 
-Constant lower_enum_variant(const hir::EnumVariant& enum_variant, semantic::TypeId type) {
+Constant lower_enum_variant(const hir::EnumVariant& enum_variant, TypeId type) {
     if (!enum_variant.enum_def) {
         throw std::logic_error("Enum variant missing enum definition during MIR lowering");
     }

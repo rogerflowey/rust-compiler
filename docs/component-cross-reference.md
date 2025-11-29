@@ -8,7 +8,7 @@
 | **Parser** | [src/parser/](../src/parser/) | AST construction | Lexer, AST, Utils |
 | **AST** | [src/ast/](../src/ast/) | Syntax representation | Common Types |
 | **HIR** | [src/semantic/hir/](../src/semantic/hir/) | Semantic representation | AST, Type System |
-| **Type System** | [src/semantic/type/](../src/semantic/type/) | Type management | HIR, Utils |
+| **Type System** | [src/type/](../src/type/) | Type management | HIR, Utils |
 | **Name Resolution** | [src/semantic/pass/name_resolution/](../src/semantic/pass/name_resolution/) | Symbol resolution | HIR, Type System |
 | **Type Checking** | [src/semantic/pass/type&const/](../src/semantic/pass/type&const/) | Type validation | HIR, Type System, Name Resolution |
 | **Constant Evaluation** | [src/semantic/const/](../src/semantic/const/) | Compile-time evaluation | HIR, Type System |

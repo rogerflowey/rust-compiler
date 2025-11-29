@@ -5,9 +5,9 @@
 #include "src/semantic/pass/semantic_check/expr_info.hpp"
 #include "src/semantic/hir/hir.hpp"
 #include "src/semantic/query/semantic_context.hpp"
-#include "src/semantic/type/type.hpp"
-#include "src/semantic/type/helper.hpp"
-#include "src/semantic/type/impl_table.hpp"
+#include "src/type/type.hpp"
+#include "src/type/helper.hpp"
+#include "src/type/impl_table.hpp"
 #include "src/semantic/utils.hpp"
 #include <memory>
 #include <stdexcept>
@@ -102,9 +102,10 @@ protected:
         test_struct_def->fields.push_back(semantic::Field{.name = ast::Identifier{"field2"}, .type = bool_type});
         test_struct_def->field_type_annotations.push_back(i32_type);
         test_struct_def->field_type_annotations.push_back(bool_type);
-        
+
         // Create struct type for reference
-        struct_type = semantic::get_typeID(SemanticType{semantic::StructType{test_struct_def.get()}});
+        auto struct_id = semantic::TypeContext::get_instance().get_or_register_struct(test_struct_def.get());
+        struct_type = semantic::get_typeID(SemanticType{semantic::StructType{struct_id}});
         
         // Update reference type with actual struct type
         struct_ref_type = semantic::get_typeID(SemanticType{semantic::ReferenceType{struct_type, false}});

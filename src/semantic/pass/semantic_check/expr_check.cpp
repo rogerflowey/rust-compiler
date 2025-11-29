@@ -7,7 +7,7 @@
 #include <type_traits>
 #include "pass/semantic_check/other_check.hpp"
 #include "semantic/query/semantic_context.hpp"
-#include "semantic/type/helper.hpp"
+#include "type/helper.hpp"
 #include "type/type.hpp"
 #include "type_compatibility.hpp"
 #include "utils.hpp"
@@ -18,7 +18,7 @@
 #include <utility>
 #include <variant>
 
-using namespace semantic::helper::type_helper;
+using namespace type::helper::type_helper;
 using namespace hir::helper;
 
 namespace semantic {
@@ -249,22 +249,24 @@ ExprInfo ExprChecker::check(hir::FieldAccess &expr, TypeExpectation) {
     base_info = check(*expr.base, TypeExpectation::none());
   }
 
-  auto struct_type = std::get_if<StructType>(&base_info.type->value);
+  const auto& base_type = get_type_from_id(base_info.type);
+  auto struct_type = std::get_if<StructType>(&base_type.value);
   if (!struct_type) {
     throw_in_context("Field access base must be a struct", expr.span);
   }
 
-  auto &struct_def = mut_ptr(struct_type->symbol, "struct definition");
+  const auto& struct_info = TypeContext::get_instance().get_struct(struct_type->id);
+  auto* struct_def = TypeContext::get_instance().get_struct_def(struct_type->id);
 
   // resolve field
   std::size_t field_id = std::visit(Overloaded{
     [&](ast::Identifier &id) -> std::size_t {
-      auto field_id = struct_def.find_field(id);
-      if (!field_id) {
-        throw_in_context("Field '" + id.name + "' not found in struct '" +
-                         get_name(struct_def).name + "'", expr.span);
+      for (std::size_t i = 0; i < struct_info.fields.size(); ++i) {
+        if (struct_info.fields[i].name == id.name) {
+          return i;
+        }
       }
-      return *field_id;
+      throw_in_context("Field '" + id.name + "' not found in struct '" + struct_info.name + "'", expr.span);
     },
     [&](std::size_t &index) -> std::size_t {
       return index;
@@ -274,9 +276,11 @@ ExprInfo ExprChecker::check(hir::FieldAccess &expr, TypeExpectation) {
   );
 
   expr.field = field_id;
-  TypeId type =
-      context.type_query(struct_def.field_type_annotations[field_id]);
-  struct_def.fields[field_id].type = type;
+  TypeId type = struct_info.fields[field_id].type;
+  if (type == invalid_type_id && struct_def && field_id < struct_def->field_type_annotations.size()) {
+      auto& annotation = struct_def->field_type_annotations[field_id];
+      type = context.type_query(annotation);
+  }
   const bool is_place = base_info.is_place;
   return ExprInfo{.type = type,
                   .has_type = true,
@@ -298,7 +302,8 @@ ExprInfo ExprChecker::check(hir::Index &expr, TypeExpectation) {
         expr.span);
   }
 
-  auto array_type = std::get_if<ArrayType>(&base_info.type->value);
+  const auto& array_base_type = get_type_from_id(base_info.type);
+  auto array_type = std::get_if<ArrayType>(&array_base_type.value);
   if (!array_type) {
     throw_in_context("Index base must be an array (found " +
                          describe_type(base_info.type) + ")",
@@ -355,7 +360,8 @@ ExprInfo ExprChecker::check(hir::StructLiteral &expr, TypeExpectation) {
     field_infos.push_back(std::move(field_info));
   }
 
-  return ExprInfo{.type = get_typeID(Type{StructType{struct_def}}),
+  auto struct_id = TypeContext::get_instance().get_or_register_struct(struct_def);
+  return ExprInfo{.type = get_typeID(Type{StructType{struct_id}}),
                   .has_type = true,
                   .is_mut = false,
                   .is_place = false,
@@ -377,7 +383,7 @@ ExprInfo ExprChecker::check(hir::ArrayLiteral &expr, TypeExpectation exp) {
     if (!exp.has_expected) {
       return nullptr;
     }
-    return std::get_if<ArrayType>(&exp.expected->value);
+    return std::get_if<ArrayType>(&get_type_from_id(exp.expected).value);
   }();
 
   std::optional<TypeId> element_type;
@@ -445,7 +451,7 @@ ExprInfo ExprChecker::check(hir::ArrayLiteral &expr, TypeExpectation exp) {
 ExprInfo ExprChecker::check(hir::ArrayRepeat &expr, TypeExpectation exp) {
   const ArrayType *expected_array = nullptr;
   if (exp.has_expected) {
-    expected_array = std::get_if<ArrayType>(&exp.expected->value);
+    expected_array = std::get_if<ArrayType>(&get_type_from_id(exp.expected).value);
   }
 
   TypeExpectation value_expectation = TypeExpectation::none();
@@ -519,23 +525,23 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
                    }
                  },
                  [&](const hir::Dereference &) {
-                   if (exp.has_expected && is_reference_type(exp.expected)) {
-                     if (const auto *ref_type =
-                             std::get_if<ReferenceType>(&exp.expected->value)) {
-                       operand_expectation =
-                           TypeExpectation::exact(ref_type->referenced_type);
-                     }
+                 if (exp.has_expected && is_reference_type(exp.expected)) {
+                    if (const auto *ref_type =
+                            std::get_if<ReferenceType>(&get_type_from_id(exp.expected).value)) {
+                     operand_expectation =
+                         TypeExpectation::exact(ref_type->referenced_type);
                    }
-                 },
-                 [&](const hir::Reference &) {
-                   if (exp.has_expected) {
-                     if (const auto *ref_type =
-                             std::get_if<ReferenceType>(&exp.expected->value)) {
-                       operand_expectation =
-                           TypeExpectation::exact(ref_type->referenced_type);
-                     }
+                 }
+               },
+                [&](const hir::Reference &) {
+                 if (exp.has_expected) {
+                    if (const auto *ref_type =
+                            std::get_if<ReferenceType>(&get_type_from_id(exp.expected).value)) {
+                     operand_expectation =
+                         TypeExpectation::exact(ref_type->referenced_type);
                    }
-                 }},
+                 }
+               }},
              expr.op);
 
   ExprInfo operand_info = check(*expr.rhs, operand_expectation);
@@ -723,7 +729,8 @@ ExprInfo ExprChecker::check(hir::BinaryOp &expr, TypeExpectation exp) {
     if (is_bool_type(type)) {
       return std::optional<Kind>{Kind::Bool};
     }
-    if (auto prim = std::get_if<PrimitiveKind>(&type->value)) {
+    const auto& comparison_type = get_type_from_id(type);
+    if (auto prim = std::get_if<PrimitiveKind>(&comparison_type.value)) {
       if (*prim == PrimitiveKind::CHAR) {
         return std::optional<Kind>{Kind::Char};
       }
@@ -1515,7 +1522,8 @@ ExprInfo ExprChecker::check(hir::StructConst &expr, TypeExpectation) {
 }
 
 ExprInfo ExprChecker::check(hir::EnumVariant &expr, TypeExpectation) {
-  return ExprInfo{.type = get_typeID(Type{EnumType{expr.enum_def}}),
+  auto enum_id = TypeContext::get_instance().get_or_register_enum(expr.enum_def);
+  return ExprInfo{.type = get_typeID(Type{EnumType{enum_id}}),
                   .is_mut = false,
                   .is_place = false,
                   .endpoints = {NormalEndpoint{}}};

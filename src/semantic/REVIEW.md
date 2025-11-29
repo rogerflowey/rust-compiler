@@ -91,7 +91,7 @@ class PrettyPrinter {
 - Missing control flow analysis
 - Inconsistent handling of early returns
 
-### 3. Type System (`src/semantic/type/`)
+### 3. Type System (`src/type/`)
 
 #### Critical Memory Management Issues
 
@@ -144,7 +144,7 @@ public:
 
 ### Priority 1: Memory Safety Issues
 
-1. **TypeId Raw Pointer Management** (`src/semantic/type/type.hpp`)
+1. **TypeId Raw Pointer Management** (`src/type/type.hpp`)
    - **Risk**: Memory leaks, dangling pointers
    - **Solution**: Implement proper ownership with smart pointers
    - **Timeline**: Immediate
@@ -312,7 +312,7 @@ public:
 
 ### Components Requiring Complete Rewrite
 
-1. **TypeId System** (`src/semantic/type/type.hpp`)
+1. **TypeId System** (`src/type/type.hpp`)
    - **Current Issues**: Memory safety, ownership semantics
    - **Proposed Solution**: Value-based system with proper lifetime management
    - **Priority**: Immediate
@@ -334,7 +334,7 @@ public:
    - **Proposed Solution**: Phase-based conversion with clear separation
    - **Priority**: Medium
 
-2. **Type Resolution** (`src/semantic/type/resolver.hpp`)
+2. **Type Resolution** (`src/type/resolver.hpp`)
    - **Current Issues**: Complex logic, missing validation
    - **Proposed Solution**: Clearer resolution algorithm with cycle detection
    - **Priority**: Medium

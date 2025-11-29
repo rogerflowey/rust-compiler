@@ -16,15 +16,15 @@ std::string pointer_label(const char* prefix, const void* ptr) {
     return oss.str();
 }
 
-std::string primitive_kind_to_string(semantic::PrimitiveKind kind) {
+std::string primitive_kind_to_string(type::PrimitiveKind kind) {
     switch (kind) {
-        case semantic::PrimitiveKind::I32: return "i32";
-        case semantic::PrimitiveKind::U32: return "u32";
-        case semantic::PrimitiveKind::ISIZE: return "isize";
-        case semantic::PrimitiveKind::USIZE: return "usize";
-        case semantic::PrimitiveKind::BOOL: return "bool";
-        case semantic::PrimitiveKind::CHAR: return "char";
-        case semantic::PrimitiveKind::STRING: return "String";
+        case type::PrimitiveKind::I32: return "i32";
+        case type::PrimitiveKind::U32: return "u32";
+        case type::PrimitiveKind::ISIZE: return "isize";
+        case type::PrimitiveKind::USIZE: return "usize";
+        case type::PrimitiveKind::BOOL: return "bool";
+        case type::PrimitiveKind::CHAR: return "char";
+        case type::PrimitiveKind::STRING: return "String";
     }
     return "primitive";
 }
@@ -55,74 +55,77 @@ std::string safe_method_name(const hir::Method& method) {
     }
 }
 
-bool is_signed_integer_kind(semantic::PrimitiveKind kind) {
-    return kind == semantic::PrimitiveKind::I32 || kind == semantic::PrimitiveKind::ISIZE;
+bool is_signed_integer_kind(type::PrimitiveKind kind) {
+    return kind == type::PrimitiveKind::I32 || kind == type::PrimitiveKind::ISIZE;
 }
 
-bool is_unsigned_integer_kind(semantic::PrimitiveKind kind) {
-    return kind == semantic::PrimitiveKind::U32 || kind == semantic::PrimitiveKind::USIZE || kind == semantic::PrimitiveKind::CHAR;
+bool is_unsigned_integer_kind(type::PrimitiveKind kind) {
+    return kind == type::PrimitiveKind::U32 || kind == type::PrimitiveKind::USIZE || kind == type::PrimitiveKind::CHAR;
 }
 
-bool is_bool_kind(semantic::PrimitiveKind kind) {
-    return kind == semantic::PrimitiveKind::BOOL;
+bool is_bool_kind(type::PrimitiveKind kind) {
+    return kind == type::PrimitiveKind::BOOL;
 }
 
-semantic::TypeId enum_discriminant_type() {
-    static const semantic::TypeId usize_type = semantic::get_typeID(semantic::Type{semantic::PrimitiveKind::USIZE});
+TypeId enum_discriminant_type() {
+    static const TypeId usize_type = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
     return usize_type;
 }
 
-semantic::TypeId canonicalize_type_impl(semantic::TypeId type) {
-    if (!type) {
+TypeId canonicalize_type_impl(TypeId type) {
+    if (type == type::invalid_type_id) {
         return type;
     }
 
+    const auto& resolved = type::get_type_from_id(type);
     return std::visit(Overloaded{
-        [](const semantic::EnumType&) {
+        [](const type::EnumType&) {
             return enum_discriminant_type();
         },
-        [&](const semantic::ReferenceType& reference) {
-            semantic::TypeId normalized = canonicalize_type_impl(reference.referenced_type);
+        [&](const type::ReferenceType& reference) {
+            TypeId normalized = canonicalize_type_impl(reference.referenced_type);
             if (normalized == reference.referenced_type) {
                 return type;
             }
-            semantic::ReferenceType updated = reference;
+            type::ReferenceType updated = reference;
             updated.referenced_type = normalized;
-            return semantic::get_typeID(semantic::Type{updated});
+            return type::get_typeID(type::Type{updated});
         },
-        [&](const semantic::ArrayType& array) {
-            semantic::TypeId normalized = canonicalize_type_impl(array.element_type);
+        [&](const type::ArrayType& array) {
+            TypeId normalized = canonicalize_type_impl(array.element_type);
             if (normalized == array.element_type) {
                 return type;
             }
-            semantic::ArrayType updated = array;
+            type::ArrayType updated = array;
             updated.element_type = normalized;
-            return semantic::get_typeID(semantic::Type{updated});
+            return type::get_typeID(type::Type{updated});
         },
         [&](const auto&) {
             return type;
         }
-    }, type->value);
+    }, resolved.value);
 }
 
 } // namespace
 
-semantic::TypeId get_unit_type() {
-    static const semantic::TypeId unit = semantic::get_typeID(semantic::Type{semantic::UnitType{}});
+TypeId get_unit_type() {
+    static const TypeId unit = type::get_typeID(type::Type{type::UnitType{}});
     return unit;
 }
 
-semantic::TypeId get_bool_type() {
-    static const semantic::TypeId bool_type = semantic::get_typeID(semantic::Type{semantic::PrimitiveKind::BOOL});
+TypeId get_bool_type() {
+    static const TypeId bool_type = type::get_typeID(type::Type{type::PrimitiveKind::BOOL});
     return bool_type;
 }
 
-bool is_unit_type(semantic::TypeId type) {
-    return type && std::holds_alternative<semantic::UnitType>(type->value);
+bool is_unit_type(TypeId type) {
+    return type != type::invalid_type_id &&
+           std::holds_alternative<type::UnitType>(type::get_type_from_id(type).value);
 }
 
-bool is_never_type(semantic::TypeId type) {
-    return type && std::holds_alternative<semantic::NeverType>(type->value);
+bool is_never_type(TypeId type) {
+    return type != type::invalid_type_id &&
+           std::holds_alternative<type::NeverType>(type::get_type_from_id(type).value);
 }
 
 Constant make_bool_constant(bool value) {
@@ -139,7 +142,7 @@ Constant make_unit_constant() {
     return constant;
 }
 
-semantic::TypeId canonicalize_type_for_mir(semantic::TypeId type) {
+TypeId canonicalize_type_for_mir(TypeId type) {
     return canonicalize_type_impl(type);
 }
 
@@ -153,35 +156,35 @@ Operand make_unit_operand() {
     return make_constant_operand(make_unit_constant());
 }
 
-std::optional<semantic::PrimitiveKind> get_primitive_kind(semantic::TypeId type) {
-    if (!type) {
+std::optional<type::PrimitiveKind> get_primitive_kind(TypeId type) {
+    if (type == type::invalid_type_id) {
         return std::nullopt;
     }
-    if (auto primitive = std::get_if<semantic::PrimitiveKind>(&type->value)) {
+    if (auto primitive = std::get_if<type::PrimitiveKind>(&type::get_type_from_id(type).value)) {
         return *primitive;
     }
     return std::nullopt;
 }
 
-bool is_signed_integer_type(semantic::TypeId type) {
+bool is_signed_integer_type(TypeId type) {
     auto primitive = get_primitive_kind(type);
     return primitive && is_signed_integer_kind(*primitive);
 }
 
-bool is_unsigned_integer_type(semantic::TypeId type) {
+bool is_unsigned_integer_type(TypeId type) {
     auto primitive = get_primitive_kind(type);
     return primitive && is_unsigned_integer_kind(*primitive);
 }
 
-bool is_bool_type(semantic::TypeId type) {
+bool is_bool_type(TypeId type) {
     auto primitive = get_primitive_kind(type);
     return primitive && is_bool_kind(*primitive);
 }
 
 BinaryOpRValue::Kind classify_binary_kind(const hir::BinaryOp& binary,
-                                          semantic::TypeId lhs_type,
-                                          semantic::TypeId rhs_type,
-                                          semantic::TypeId result_type) {
+                                          TypeId lhs_type,
+                                          TypeId rhs_type,
+                                          TypeId result_type) {
     return std::visit(Overloaded{
         [&](const hir::Add &add) -> BinaryOpRValue::Kind {
             if (lhs_type != rhs_type || lhs_type != result_type) {
@@ -383,42 +386,39 @@ BinaryOpRValue::Kind classify_binary_kind(const hir::BinaryOp& binary,
     }, binary.op);
 }
 
-std::string type_name(semantic::TypeId type) {
-    if (!type) {
+std::string type_name(TypeId type) {
+    if (type == type::invalid_type_id) {
         return "<invalid>";
     }
-    if (auto primitive = std::get_if<semantic::PrimitiveKind>(&type->value)) {
+    const auto& resolved = type::get_type_from_id(type);
+    if (auto primitive = std::get_if<type::PrimitiveKind>(&resolved.value)) {
         return primitive_kind_to_string(*primitive);
     }
-    if (auto struct_type = std::get_if<semantic::StructType>(&type->value)) {
-        if (struct_type->symbol) {
-            try {
-                return hir::helper::get_name(*struct_type->symbol).name;
-            } catch (const std::logic_error&) {
-            }
+    if (auto struct_type = std::get_if<type::StructType>(&resolved.value)) {
+        const auto& info = type::TypeContext::get_instance().get_struct(struct_type->id);
+        if (!info.name.empty()) {
+            return info.name;
         }
-        return pointer_label("struct@", struct_type->symbol);
+        return "struct@" + std::to_string(struct_type->id);
     }
-    if (auto enum_type = std::get_if<semantic::EnumType>(&type->value)) {
-        if (enum_type->symbol) {
-            try {
-                return hir::helper::get_name(*enum_type->symbol).name;
-            } catch (const std::logic_error&) {
-            }
+    if (auto enum_type = std::get_if<type::EnumType>(&resolved.value)) {
+        const auto& info = type::TypeContext::get_instance().get_enum(enum_type->id);
+        if (!info.name.empty()) {
+            return info.name;
         }
-        return pointer_label("enum@", enum_type->symbol);
+        return "enum@" + std::to_string(enum_type->id);
     }
-    if (auto ref_type = std::get_if<semantic::ReferenceType>(&type->value)) {
+    if (auto ref_type = std::get_if<type::ReferenceType>(&resolved.value)) {
         std::string prefix = ref_type->is_mutable ? "&mut " : "&";
         return prefix + type_name(ref_type->referenced_type);
     }
-    if (auto array_type = std::get_if<semantic::ArrayType>(&type->value)) {
+    if (auto array_type = std::get_if<type::ArrayType>(&resolved.value)) {
         return "[" + type_name(array_type->element_type) + ";" + std::to_string(array_type->size) + "]";
     }
-    if (std::holds_alternative<semantic::UnitType>(type->value)) {
+    if (std::holds_alternative<type::UnitType>(resolved.value)) {
         return "unit";
     }
-    if (std::holds_alternative<semantic::NeverType>(type->value)) {
+    if (std::holds_alternative<type::NeverType>(resolved.value)) {
         return "!";
     }
     return "_";

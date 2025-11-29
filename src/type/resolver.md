@@ -1,6 +1,6 @@
 # Type Resolver
 
-## File: [`src/semantic/type/resolver.hpp`](resolver.hpp)
+## File: [`src/type/resolver.hpp`](resolver.hpp)
 
 ## Overview
 
@@ -67,10 +67,12 @@ Handles definition types (StructDef, EnumDef, Trait):
 ```cpp
 struct DefVisitor{
     TypeId operator()(const hir::StructDef* def){
-        return get_typeID(Type{StructType{.symbol = def}});
+        auto id = TypeContext::get_instance().get_or_register_struct(def);
+        return get_typeID(Type{StructType{.id = id}});
     }
     TypeId operator()(const hir::EnumDef* def){
-        return get_typeID(Type{EnumType{.symbol = def}});
+        auto id = TypeContext::get_instance().get_or_register_enum(def);
+        return get_typeID(Type{EnumType{.id = id}});
     }
     TypeId operator()(const hir::Trait* ){
         throw std::logic_error("Trait cannot be used as a concrete type");

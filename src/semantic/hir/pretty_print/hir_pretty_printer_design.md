@@ -209,7 +209,7 @@ This approach allows you to:
 - `src/semantic/pass/semantic_check/expr_info.hpp` - ExprInfo definitions
 
 ### Optional Dependencies
-- `src/semantic/type/type.hpp` - Type system details
+- `src/type/type.hpp` - Type system details
 - `src/ast/common.hpp` - AST node types
 
 ## Integration Points
