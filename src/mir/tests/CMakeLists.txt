@@ -4,6 +4,7 @@ endif()
 
 set(MIR_TEST_SOURCES
     test_mir_lower.cpp
+    test_type_codegen.cpp
 )
 
 foreach(test_source ${MIR_TEST_SOURCES})

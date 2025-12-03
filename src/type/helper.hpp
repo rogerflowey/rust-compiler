@@ -6,6 +6,8 @@
 #include "semantic/utils.hpp"
 #include <stdexcept>
 #include <optional>
+#include <unordered_set>
+#include <variant>
 
 namespace type {
 namespace helper {
@@ -32,6 +34,84 @@ inline Type to_type(const TypeDef& def) {
 
 // Type operation helper functions
 namespace type_helper {
+
+namespace detail {
+
+inline bool is_zero_sized_type_impl(TypeId type, std::unordered_set<TypeId>& visiting);
+
+struct ZeroSizedVisitor {
+    std::unordered_set<TypeId>& visiting;
+
+    bool operator()(const PrimitiveKind&) const {
+        return false;
+    }
+
+    bool operator()(const StructType& st) const {
+        const auto& info = TypeContext::get_instance().get_struct(st.id);
+        if (info.fields.empty()) {
+            return true;
+        }
+        for (const auto& field : info.fields) {
+            if (field.type == invalid_type_id) {
+                return false;
+            }
+            if (!is_zero_sized_type_impl(field.type, visiting)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool operator()(const EnumType&) const {
+        return false;
+    }
+
+    bool operator()(const ReferenceType&) const {
+        return false;
+    }
+
+    bool operator()(const ArrayType& array) const {
+        if (array.size == 0) {
+            return true;
+        }
+        if (array.element_type == invalid_type_id) {
+            return false;
+        }
+        return is_zero_sized_type_impl(array.element_type, visiting);
+    }
+
+    bool operator()(const UnitType&) const {
+        return true;
+    }
+
+    bool operator()(const NeverType&) const {
+        return true;
+    }
+
+    bool operator()(const UnderscoreType&) const {
+        return false;
+    }
+};
+
+inline bool is_zero_sized_type_impl(TypeId type, std::unordered_set<TypeId>& visiting) {
+    if (type == invalid_type_id) {
+        return false;
+    }
+    if (!visiting.insert(type).second) {
+        return false;
+    }
+    const auto& resolved = get_type_from_id(type);
+    bool result = std::visit(ZeroSizedVisitor{visiting}, resolved.value);
+    visiting.erase(type);
+    return result;
+}
+
+} // namespace detail
+
+inline bool is_zero_sized_type(TypeId type) {
+    std::unordered_set<TypeId> visiting;
+    return detail::is_zero_sized_type_impl(type, visiting);
+}
 
 /**
  * @brief Check if a type is a reference type
@@ -192,6 +272,12 @@ inline bool is_never_type(TypeId type) {
 
 inline bool is_underscore_type(TypeId type) {
     return std::holds_alternative<UnderscoreType>(get_type_from_id(type).value);
+}
+
+
+inline bool is_dyn_type(TypeId type){
+    return std::holds_alternative<type::PrimitiveKind>(get_type_from_id(type).value) &&
+           std::get<type::PrimitiveKind>(get_type_from_id(type).value) == type::PrimitiveKind::STRING;
 }
 
 } // namespace type_helper

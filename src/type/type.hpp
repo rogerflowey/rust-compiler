@@ -159,6 +159,8 @@ public:
         return id < enum_defs.size() ? const_cast<hir::EnumDef*>(enum_defs[id]) : nullptr;
     }
 
+    const std::vector<StructInfo>& get_all_structs() const { return structs; };
+
     const Type& get_type(TypeId id) const;
     Type get_type_copy(TypeId id) const;
 
@@ -189,8 +191,11 @@ inline TypeId get_typeID(const Type& t) {
 inline const Type& get_type_from_id(TypeId id) {
     return TypeContext::get_instance().get_type(id);
 }
-inline Type get_type_copy_from_id(TypeId id) {
-    return TypeContext::get_instance().get_type_copy(id);
+inline const StructInfo& get_struct(StructId id) {
+    return TypeContext::get_instance().get_struct(id);
+}
+inline const EnumInfo& get_enum(EnumId id) {
+    return TypeContext::get_instance().get_enum(id);
 }
 
 } // namespace type
@@ -217,7 +222,6 @@ using type::UnitType;
 using type::NeverType;
 using type::UnderscoreType;
 using type::get_type_from_id;
-using type::get_type_copy_from_id;
 using type::get_typeID;
 inline constexpr auto invalid_type_id = type::invalid_type_id;
 } // namespace semantic

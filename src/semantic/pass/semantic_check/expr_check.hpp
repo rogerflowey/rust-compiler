@@ -101,6 +101,7 @@ private:
     friend class SemanticContext;
 
     ExprInfo evaluate(hir::Expr& expr, TypeExpectation exp);
+    void guard_sized_type(TypeId type, span::Span span);
 
 };
 

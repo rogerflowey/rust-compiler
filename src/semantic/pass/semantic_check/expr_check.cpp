@@ -41,6 +41,7 @@ std::string get_const_display_name(const hir::ConstDef &def) {
   return def.name.name.empty() ? std::string{"<const>"} : def.name.name;
 }
 
+
 } // namespace
 
 ExprInfo ExprChecker::check(hir::Expr& expr) {
@@ -62,6 +63,12 @@ ExprChecker::ContextGuard ExprChecker::enter_context(std::string kind,
 
 std::string ExprChecker::format_error(const std::string &message) const {
   return debug::format_with_context(message);
+}
+
+void ExprChecker::guard_sized_type(TypeId type, span::Span span) {
+  if (type::helper::type_helper::is_dyn_type(type)) {
+    throw_in_context("Type is not sized", span);
+  }
 }
 
 [[noreturn]] void
@@ -623,6 +630,7 @@ ExprInfo ExprChecker::check(hir::UnaryOp &expr, TypeExpectation exp) {
               throw_in_context("DEREFERENCE operand must be reference", expr.span);
             }
             TypeId referenced_type = get_referenced_type(operand_info.type);
+            guard_sized_type(referenced_type, expr.span);
             return ExprInfo{.type = referenced_type,
                             .has_type = true,
                             .is_mut = get_reference_mutability(operand_info.type),
