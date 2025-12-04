@@ -83,6 +83,20 @@ std::unique_ptr<hir::Expr> make_string_literal_expr(std::string value, TypeId ty
     return expr;
 }
 
+std::unique_ptr<hir::Expr> make_underscore_expr() {
+    hir::Underscore underscore;
+    auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(underscore)});
+    semantic::ExprInfo info;
+    info.type = type::get_typeID(type::Type{type::UnderscoreType{}});
+    info.has_type = true;
+    info.is_mut = true;
+    info.is_place = true;
+    info.endpoints.clear();
+    info.endpoints.insert(semantic::NormalEndpoint{});
+    expr->expr_info = info;
+    return expr;
+}
+
 TypeId make_string_ref_type() {
     TypeId string_type = make_type(type::PrimitiveKind::STRING);
     return type::get_typeID(type::Type{type::ReferenceType{string_type, false}});
@@ -175,22 +189,65 @@ TEST(MirLowerTest, LowersStringLiteralWithNullTerminator) {
     body->final_expr = make_string_literal_expr("hello", string_ref_type);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    hir::Program program;
+    program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
+
+    mir::MirModule module = mir::lower_program(program);
+    ASSERT_EQ(module.functions.size(), 1u);
+    ASSERT_EQ(module.globals.size(), 1u);
+    const auto& lowered = module.functions.front();
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
+    ASSERT_EQ(block.statements.size(), 1u);
+    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define_stmt.rvalue.value));
+    const auto& ref_rvalue = std::get<mir::RefRValue>(define_stmt.rvalue.value);
+    ASSERT_TRUE(std::holds_alternative<mir::GlobalPlace>(ref_rvalue.place.base));
+    const auto& global_place = std::get<mir::GlobalPlace>(ref_rvalue.place.base);
+
+    const auto& string_global = std::get<mir::StringLiteralGlobal>(module.globals[0].value);
+    EXPECT_EQ(global_place.global, 0u);
+    EXPECT_EQ(string_global.value.length, 5u);
+    ASSERT_FALSE(string_global.value.data.empty());
+    EXPECT_EQ(string_global.value.data.back(), '\0');
+    EXPECT_EQ(std::string(string_global.value.data.c_str()), "hello");
+    EXPECT_FALSE(string_global.value.is_cstyle);
+
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
     ASSERT_TRUE(ret.value.has_value());
     const auto& operand = ret.value.value();
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
-    const auto& constant = std::get<mir::Constant>(operand.value);
-    ASSERT_TRUE(std::holds_alternative<mir::StringConstant>(constant.value));
-    const auto& string_const = std::get<mir::StringConstant>(constant.value);
-    EXPECT_EQ(string_const.length, 5u);
-    ASSERT_FALSE(string_const.data.empty());
-    EXPECT_EQ(string_const.data.back(), '\0');
-    EXPECT_EQ(std::string(string_const.data.c_str()), "hello");
-    EXPECT_FALSE(string_const.is_cstyle);
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(operand.value));
+    EXPECT_EQ(std::get<mir::TempId>(operand.value), define_stmt.dest);
+}
+
+TEST(MirLowerTest, DeduplicatesIdenticalStringLiteralsAcrossFunctions) {
+    TypeId string_ref_type = make_string_ref_type();
+
+    auto make_function_item = [&](const char* literal_value) {
+        hir::Function function;
+        function.return_type = hir::TypeAnnotation(string_ref_type);
+        function.body = make_block_with_expr(make_string_literal_expr(literal_value, string_ref_type));
+        return std::make_unique<hir::Item>(std::move(function));
+    };
+
+    hir::Program program;
+    program.items.push_back(make_function_item("shared"));
+    program.items.push_back(make_function_item("shared"));
+
+    mir::MirModule module = mir::lower_program(program);
+    ASSERT_EQ(module.globals.size(), 1u);
+    ASSERT_EQ(module.functions.size(), 2u);
+    for (const auto& lowered : module.functions) {
+        ASSERT_FALSE(lowered.basic_blocks.empty());
+        const auto& block = lowered.basic_blocks.front();
+        ASSERT_EQ(block.statements.size(), 1u);
+        const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
+        ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define_stmt.rvalue.value));
+        const auto& ref_rvalue = std::get<mir::RefRValue>(define_stmt.rvalue.value);
+        ASSERT_TRUE(std::holds_alternative<mir::GlobalPlace>(ref_rvalue.place.base));
+        EXPECT_EQ(std::get<mir::GlobalPlace>(ref_rvalue.place.base).global, 0u);
+    }
 }
 
 TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
@@ -1479,4 +1536,110 @@ TEST(MirLowerTest, LowersAssignmentToFieldPlace) {
     ASSERT_EQ(field_assign->dest.projections.size(), 1u);
     ASSERT_TRUE(std::holds_alternative<mir::FieldProjection>(field_assign->dest.projections[0]));
     EXPECT_EQ(std::get<mir::FieldProjection>(field_assign->dest.projections[0]).index, 0u);
+}
+
+TEST(MirLowerTest, DesugarsAssignmentToUnderscore) {
+    TypeId unit_type = make_unit_type();
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+
+    auto lhs_expr = make_underscore_expr();
+
+    hir::Assignment assignment;
+    assignment.lhs = std::move(lhs_expr);
+    assignment.rhs = make_int_literal_expr(7, int_type);
+    auto assignment_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(assignment)});
+    assignment_expr->expr_info = make_value_info(unit_type, false);
+
+    hir::ExprStmt expr_stmt;
+    expr_stmt.expr = std::move(assignment_expr);
+    auto stmt = std::make_unique<hir::Stmt>(hir::StmtVariant{std::move(expr_stmt)});
+
+    hir::Function function;
+    function.return_type = hir::TypeAnnotation(unit_type);
+    auto body = std::make_unique<hir::Block>();
+    body->stmts.push_back(std::move(stmt));
+    function.body = std::move(body);
+
+    mir::MirFunction lowered = mir::lower_function(function);
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+    EXPECT_TRUE(block.statements.empty());
+    ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
+    const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
+    EXPECT_FALSE(ret.value.has_value());
+}
+
+TEST(MirLowerTest, DesugarsLetUnderscorePattern) {
+    TypeId unit_type = make_unit_type();
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+
+    auto local = std::make_unique<hir::Local>();
+    local->name = ast::Identifier{"_"};
+    local->is_mutable = false;
+    local->type_annotation = hir::TypeAnnotation(int_type);
+    hir::Local* local_ptr = local.get();
+
+    hir::BindingDef binding;
+    binding.local = local_ptr;
+    auto pattern = std::make_unique<hir::Pattern>(hir::PatternVariant{std::move(binding)});
+
+    hir::LetStmt let_stmt;
+    let_stmt.pattern = std::move(pattern);
+    let_stmt.type_annotation = hir::TypeAnnotation(int_type);
+    let_stmt.initializer = make_int_literal_expr(5, int_type);
+
+    auto stmt = std::make_unique<hir::Stmt>(hir::StmtVariant{std::move(let_stmt)});
+
+    hir::Function function;
+    function.return_type = hir::TypeAnnotation(unit_type);
+    function.locals.push_back(std::move(local));
+    auto body = std::make_unique<hir::Block>();
+    body->stmts.push_back(std::move(stmt));
+    function.body = std::move(body);
+
+    mir::MirFunction lowered = mir::lower_function(function);
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+    EXPECT_TRUE(block.statements.empty());
+    ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
+    const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
+    EXPECT_FALSE(ret.value.has_value());
+}
+
+TEST(MirLowerTest, DesugarsCompoundAssignmentToUnderscore) {
+    TypeId unit_type = make_unit_type();
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+
+    auto compound_lhs = make_underscore_expr();
+    auto compound_rhs_lhs = make_underscore_expr();
+    hir::BinaryOp binary;
+    binary.op = hir::Add{.kind = hir::Add::Kind::SignedInt};
+    binary.lhs = std::move(compound_rhs_lhs);
+    binary.rhs = make_int_literal_expr(9, int_type);
+    auto rhs_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(binary)});
+    rhs_expr->expr_info = make_value_info(int_type, false);
+
+    hir::Assignment assignment;
+    assignment.lhs = std::move(compound_lhs);
+    assignment.rhs = std::move(rhs_expr);
+    auto assignment_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(assignment)});
+    assignment_expr->expr_info = make_value_info(unit_type, false);
+
+    hir::ExprStmt expr_stmt;
+    expr_stmt.expr = std::move(assignment_expr);
+    auto stmt = std::make_unique<hir::Stmt>(hir::StmtVariant{std::move(expr_stmt)});
+
+    hir::Function function;
+    function.return_type = hir::TypeAnnotation(unit_type);
+    auto body = std::make_unique<hir::Block>();
+    body->stmts.push_back(std::move(stmt));
+    function.body = std::move(body);
+
+    mir::MirFunction lowered = mir::lower_function(function);
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+    EXPECT_TRUE(block.statements.empty());
+    ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
+    const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
+    EXPECT_FALSE(ret.value.has_value());
 }

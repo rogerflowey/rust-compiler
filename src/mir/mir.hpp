@@ -16,6 +16,7 @@ using LocalId = std::uint32_t;
 using BasicBlockId = std::uint32_t;
 using FunctionId = std::uint32_t;
 using TypeId = type::TypeId;
+using GlobalId = std::uint32_t;
 inline constexpr TypeId invalid_type_id = type::invalid_type_id;
 
 struct LocalInfo {
@@ -51,6 +52,16 @@ struct StringConstant {
 
 struct UnitConstant {};
 
+struct StringLiteralGlobal {
+    StringConstant value;
+};
+
+using GlobalValue = std::variant<StringLiteralGlobal>;
+
+struct MirGlobal {
+    GlobalValue value;
+};
+
 using ConstantValue = std::variant<BoolConstant, IntConstant, UnitConstant, CharConstant, StringConstant>;
 
 struct Constant {
@@ -67,7 +78,7 @@ struct LocalPlace {
 };
 
 struct GlobalPlace {
-    std::string symbol;
+    GlobalId global = 0;
 };
 
 struct PointerPlace {
@@ -279,6 +290,7 @@ struct MirFunction {
 };
 
 struct MirModule {
+    std::vector<MirGlobal> globals;
     std::vector<MirFunction> functions;
 };
 

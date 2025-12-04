@@ -11,8 +11,6 @@
 
 namespace mir {
 namespace detail {
-namespace {
-
 StringConstant make_string_constant(const std::string& literal, bool is_cstyle_literal) {
     StringConstant constant;
     constant.length = literal.size();
@@ -23,6 +21,8 @@ StringConstant make_string_constant(const std::string& literal, bool is_cstyle_l
     }
     return constant;
 }
+
+namespace {
 
 ConstantValue convert_literal_value(const bool& value) {
     return BoolConstant{value};

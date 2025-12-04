@@ -109,8 +109,33 @@ Place FunctionLowerer::ensure_reference_operand_place(const hir::Expr& operand,
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info) {
+	if (std::holds_alternative<hir::Literal::String>(literal.value)) {
+		if (!info.has_type || info.type == invalid_type_id) {
+			throw std::logic_error("String literal missing resolved type during MIR lowering");
+		}
+		return lower_string_literal(std::get<hir::Literal::String>(literal.value), info.type);
+	}
 	Constant constant = lower_literal(literal, info.type);
 	return make_constant_operand(constant);
+}
+
+Operand FunctionLowerer::lower_string_literal(const hir::Literal::String& literal, TypeId result_type) {
+	if (!global_context) {
+		throw std::logic_error("Global context missing while lowering string literal");
+	}
+	if (result_type == invalid_type_id) {
+		throw std::logic_error("String literal missing resolved type during MIR lowering");
+	}
+	Place place = global_context->make_string_literal_place(literal);
+	TempId dest = allocate_temp(result_type);
+	RefRValue ref_rvalue{.place = std::move(place)};
+	RValue rvalue;
+	rvalue.value = std::move(ref_rvalue);
+	DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};
+	Statement stmt;
+	stmt.value = std::move(define);
+	append_statement(std::move(stmt));
+	return make_temp_operand(dest);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info) {
@@ -296,6 +321,25 @@ Operand FunctionLowerer::lower_expr_impl(const hir::BinaryOp& binary, const sema
 Operand FunctionLowerer::lower_expr_impl(const hir::Assignment& assignment, const semantic::ExprInfo&) {
 	if (!assignment.lhs || !assignment.rhs) {
 		throw std::logic_error("Assignment missing operands during MIR lowering");
+	}
+	if (std::holds_alternative<hir::Underscore>(assignment.lhs->value)) {
+		const hir::Expr* rhs_expr = assignment.rhs.get();
+		if (rhs_expr) {
+			if (const auto* binary = std::get_if<hir::BinaryOp>(&rhs_expr->value)) {
+				const hir::Expr* compound_rhs = nullptr;
+				if (binary->lhs && std::holds_alternative<hir::Underscore>(binary->lhs->value)) {
+					compound_rhs = binary->rhs.get();
+				}
+				if (compound_rhs) {
+					(void)lower_expr(*compound_rhs);
+				} else {
+					(void)lower_expr(*assignment.rhs);
+				}
+			} else {
+				(void)lower_expr(*assignment.rhs);
+			}
+		}
+		return make_unit_operand();
 	}
 	Place dest = lower_expr_place(*assignment.lhs);
 	Operand value = lower_expr(*assignment.rhs);
