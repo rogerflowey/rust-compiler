@@ -488,44 +488,6 @@ TEST(MirLowerTest, LowersConstUseExpression) {
     EXPECT_EQ(std::get<mir::IntConstant>(constant.value).value, 42u);
 }
 
-TEST(MirLowerTest, LowersStringConstUseExpression) {
-    TypeId string_ref_type = make_string_ref_type();
-
-    auto const_owner = std::make_unique<hir::ConstDef>();
-    const_owner->type = hir::TypeAnnotation(string_ref_type);
-    semantic::StringConst string_const;
-    string_const.value = "hi";
-    const_owner->const_value = semantic::ConstVariant{string_const};
-
-    hir::Function function;
-    function.return_type = hir::TypeAnnotation(string_ref_type);
-
-    hir::ConstUse const_use;
-    const_use.def = const_owner.get();
-    auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(const_use)});
-    expr->expr_info = make_value_info(string_ref_type, false);
-
-    auto body = std::make_unique<hir::Block>();
-    body->final_expr = std::move(expr);
-    function.body = std::move(body);
-
-    mir::MirFunction lowered = mir::lower_function(function);
-    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
-    const auto& block = lowered.basic_blocks.front();
-    ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
-    const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
-    ASSERT_TRUE(ret.value.has_value());
-    const auto& operand = ret.value.value();
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
-    const auto& constant = std::get<mir::Constant>(operand.value);
-    ASSERT_TRUE(std::holds_alternative<mir::StringConstant>(constant.value));
-    const auto& string_constant = std::get<mir::StringConstant>(constant.value);
-    EXPECT_EQ(string_constant.length, 2u);
-    ASSERT_FALSE(string_constant.data.empty());
-    EXPECT_EQ(string_constant.data.back(), '\0');
-    EXPECT_EQ(std::string(string_constant.data.c_str()), "hi");
-}
-
 TEST(MirLowerTest, LowersStructConstExpression) {
     TypeId int_type = make_type(type::PrimitiveKind::I32);
 

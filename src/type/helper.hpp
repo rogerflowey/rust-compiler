@@ -4,9 +4,13 @@
 #include "type/type.hpp"
 #include "semantic/hir/hir.hpp"
 #include "semantic/utils.hpp"
-#include <stdexcept>
+#include <functional>
 #include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 
 namespace type {
@@ -278,6 +282,84 @@ inline bool is_underscore_type(TypeId type) {
 inline bool is_dyn_type(TypeId type){
     return std::holds_alternative<type::PrimitiveKind>(get_type_from_id(type).value) &&
            std::get<type::PrimitiveKind>(get_type_from_id(type).value) == type::PrimitiveKind::STRING;
+}
+
+// Helpers for composing/decomposing compound place types (e.g. *foo.bar[0]).
+inline std::optional<TypeId> deref(TypeId type) {
+    auto ref = std::get_if<ReferenceType>(&get_type_from_id(type).value);
+    if (!ref || ref->referenced_type == invalid_type_id) {
+        return std::nullopt;
+    }
+    return ref->referenced_type;
+}
+
+inline std::optional<TypeId> field(TypeId type, size_t field_index) {
+    auto st = std::get_if<StructType>(&get_type_from_id(type).value);
+    if (!st) {
+        return std::nullopt;
+    }
+    const auto& info = TypeContext::get_instance().get_struct(st->id);
+    if (field_index >= info.fields.size()) {
+        return std::nullopt;
+    }
+    TypeId field_type = info.fields[field_index].type;
+    if (field_type == invalid_type_id) {
+        return std::nullopt;
+    }
+    return field_type;
+}
+
+inline std::optional<TypeId> field(TypeId type, std::string_view field_name) {
+    auto st = std::get_if<StructType>(&get_type_from_id(type).value);
+    if (!st) {
+        return std::nullopt;
+    }
+    const auto& info = TypeContext::get_instance().get_struct(st->id);
+    for (const auto& field_info : info.fields) {
+        if (field_info.name == field_name) {
+            if (field_info.type == invalid_type_id) {
+                return std::nullopt;
+            }
+            return field_info.type;
+        }
+    }
+    return std::nullopt;
+}
+
+inline std::optional<TypeId> array_element(TypeId type) {
+    auto array = std::get_if<ArrayType>(&get_type_from_id(type).value);
+    if (!array || array->element_type == invalid_type_id) {
+        return std::nullopt;
+    }
+    return array->element_type;
+}
+
+template <typename... StepFns>
+inline std::optional<TypeId> decompose(TypeId base, StepFns&&... steps) {
+    std::optional<TypeId> current = base;
+    if constexpr (sizeof...(steps) > 0) {
+        ((current = current ? std::invoke(std::forward<StepFns>(steps), *current)
+                            : std::nullopt), ...);
+    }
+    return current;
+}
+
+inline auto deref_op() {
+    return [](TypeId type) { return deref(type); };
+}
+
+inline auto field_op(size_t field_index) {
+    return [field_index](TypeId type) { return field(type, field_index); };
+}
+
+inline auto field_op(std::string field_name) {
+    return [field_name = std::move(field_name)](TypeId type) {
+        return field(type, std::string_view{field_name});
+    };
+}
+
+inline auto array_element_op() {
+    return [](TypeId type) { return array_element(type); };
 }
 
 } // namespace type_helper

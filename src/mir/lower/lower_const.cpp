@@ -36,8 +36,8 @@ ConstantValue convert_literal_value(const hir::Literal::Integer& integer) {
     return constant;
 }
 
-ConstantValue convert_literal_value(const hir::Literal::String& literal) {
-    return make_string_constant(literal.value, literal.is_cstyle);
+ConstantValue convert_literal_value(const hir::Literal::String&) {
+    throw std::logic_error("String literals should be lowered through globals, not as constants");
 }
 
 ConstantValue convert_literal_value(const char& value) {
@@ -69,8 +69,8 @@ ConstantValue convert_const_value(const semantic::CharConst& value) {
     return CharConstant{value.value};
 }
 
-ConstantValue convert_const_value(const semantic::StringConst& value) {
-    return make_string_constant(value.value, false);
+ConstantValue convert_const_value(const semantic::StringConst&) {
+    throw std::logic_error("String constants should be lowered through globals, not as constants");
 }
 
 } // namespace

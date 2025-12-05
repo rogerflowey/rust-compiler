@@ -21,6 +21,7 @@ public:
 private:
     std::string primitive_type_to_llvm(type::PrimitiveKind kind) const;
     std::string format_struct_body(const type::StructInfo& info);
+    std::string emit_special_struct(TypeId type, const std::string& symbol, const std::string& body);
 
     std::unordered_map<TypeId, std::string> emitted_types;
     std::unordered_map<TypeId, std::size_t> struct_definition_lookup;

@@ -35,6 +35,18 @@ TEST(TypeEmitterTest, ResolvesPrimitiveReferenceAndArrayTypes) {
     EXPECT_EQ(emitter.get_type_name(array_type), "[4 x i32]");
 }
 
+TEST(TypeEmitterTest, EmitsUnitTypeAsEmptyStruct) {
+    codegen::TypeEmitter emitter;
+
+    type::TypeId unit_type = type::get_typeID(type::Type{type::UnitType{}});
+    EXPECT_EQ(emitter.get_type_name(unit_type), "%__rc_unit");
+    const auto& defs = emitter.struct_definitions();
+    ASSERT_EQ(defs.size(), 1u);
+    EXPECT_EQ(defs.front().first, "__rc_unit");
+    EXPECT_EQ(defs.front().second, "{}");
+    EXPECT_EQ(emitter.get_type_name(unit_type), "%__rc_unit");
+}
+
 TEST(TypeEmitterTest, EmitsNamedStructDefinitionOnce) {
     type::TypeId int_type = type::get_typeID(type::Type{type::PrimitiveKind::I32});
     type::TypeId bool_type = type::get_typeID(type::Type{type::PrimitiveKind::BOOL});

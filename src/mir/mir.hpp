@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -62,7 +63,7 @@ struct MirGlobal {
     GlobalValue value;
 };
 
-using ConstantValue = std::variant<BoolConstant, IntConstant, UnitConstant, CharConstant, StringConstant>;
+using ConstantValue = std::variant<BoolConstant, IntConstant, UnitConstant, CharConstant>;
 
 struct Constant {
     TypeId type = invalid_type_id;
@@ -287,6 +288,27 @@ struct MirFunction {
     std::vector<BasicBlock> basic_blocks;
     BasicBlockId start_block = 0;
     TypeId return_type = invalid_type_id;
+
+    [[nodiscard]] TypeId get_temp_type(TempId temp) const {
+        if (temp >= temp_types.size()) {
+            throw std::out_of_range("Invalid TempId");
+        }
+        return temp_types[temp];
+    }
+    [[nodiscard]] const LocalInfo& get_local_info(LocalId local) const {
+        if (local >= locals.size()) {
+            throw std::out_of_range("Invalid LocalId");
+        }
+        return locals[local];
+    }
+    [[nodiscard]] const BasicBlock& get_basic_block(BasicBlockId bb) const {
+        if (bb >= basic_blocks.size()) {
+            throw std::out_of_range("Invalid BasicBlockId");
+        }
+        return basic_blocks[bb];
+    }
+
+
 };
 
 struct MirModule {

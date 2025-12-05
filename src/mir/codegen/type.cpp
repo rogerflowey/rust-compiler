@@ -16,6 +16,22 @@ std::string make_anonymous_struct_name(std::size_t ordinal) {
 
 namespace codegen {
 
+std::string TypeEmitter::emit_special_struct(TypeId type, const std::string& symbol, const std::string& body) {
+	auto [entry, inserted] = emitted_types.emplace(type, "%" + symbol);
+	if (!inserted) {
+		return entry->second;
+	}
+
+	auto [lookup, added] = struct_definition_lookup.emplace(type, struct_definition_order.size());
+	if (added) {
+		struct_definition_order.emplace_back(symbol, body);
+	} else {
+		struct_definition_order[lookup->second] = std::make_pair(symbol, body);
+	}
+
+	return entry->second;
+}
+
 std::string TypeEmitter::emit_struct_definition(TypeId type) {
 	auto cached = emitted_types.find(type);
 	if (cached != emitted_types.end()) {
@@ -70,7 +86,7 @@ std::string TypeEmitter::get_type_name(TypeId type) {
 		return name;
 	}
 	if (std::holds_alternative<type::UnitType>(resolved.value)) {
-		throw std::logic_error("Unit type should not reach codegen");
+		return emit_special_struct(type, "__rc_unit", "{}");
 	}
 	if (std::holds_alternative<type::NeverType>(resolved.value)) {
 		throw std::logic_error("Never type should not reach codegen");
