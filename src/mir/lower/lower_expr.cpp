@@ -108,6 +108,20 @@ Place FunctionLowerer::ensure_reference_operand_place(const hir::Expr& operand,
 	return make_local_place(temp_local);
 }
 
+TempId FunctionLowerer::materialize_place_base(const hir::Expr& base_expr,
+					 const semantic::ExprInfo& base_info) {
+	if (!base_info.has_type || base_info.type == invalid_type_id) {
+		throw std::logic_error("Expression base missing resolved type during MIR lowering");
+	}
+	Operand base_operand;
+	if (base_info.is_place) {
+		base_operand = load_place_value(lower_expr_place(base_expr), base_info.type);
+	} else {
+		base_operand = lower_expr(base_expr);
+	}
+	return materialize_operand(base_operand, base_info.type);
+}
+
 Operand FunctionLowerer::lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info) {
 	if (std::holds_alternative<hir::Literal::String>(literal.value)) {
 		if (!info.has_type || info.type == invalid_type_id) {
@@ -127,15 +141,8 @@ Operand FunctionLowerer::lower_string_literal(const hir::Literal::String& litera
 		throw std::logic_error("String literal missing resolved type during MIR lowering");
 	}
 	Place place = global_context->make_string_literal_place(literal);
-	TempId dest = allocate_temp(result_type);
 	RefRValue ref_rvalue{.place = std::move(place)};
-	RValue rvalue;
-	rvalue.value = std::move(ref_rvalue);
-	DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};
-	Statement stmt;
-	stmt.value = std::move(define);
-	append_statement(std::move(stmt));
-	return make_temp_operand(dest);
+	return emit_rvalue(std::move(ref_rvalue), result_type);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info) {
@@ -229,17 +236,9 @@ Operand FunctionLowerer::lower_expr_impl(const hir::FieldAccess& field_access, c
 		throw std::logic_error("Field access missing base during MIR lowering");
 	}
 	semantic::ExprInfo base_info = hir::helper::get_expr_info(*field_access.base);
-	Operand base_operand = lower_expr(*field_access.base);
-	TempId base_temp = materialize_operand(base_operand, base_info.type);
-	TempId dest = allocate_temp(info.type);
+	TempId base_temp = materialize_place_base(*field_access.base, base_info);
 	FieldAccessRValue field_rvalue{.base = base_temp, .index = hir::helper::get_field_index(field_access)};
-	RValue rvalue;
-	rvalue.value = std::move(field_rvalue);
-	DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};
-	Statement stmt;
-	stmt.value = std::move(define);
-	append_statement(std::move(stmt));
-	return make_temp_operand(dest);
+	return emit_rvalue(std::move(field_rvalue), info.type);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::Index& index_expr, const semantic::ExprInfo& info) {
@@ -250,20 +249,12 @@ Operand FunctionLowerer::lower_expr_impl(const hir::Index& index_expr, const sem
 		throw std::logic_error("Index expression missing base or index during MIR lowering");
 	}
 	semantic::ExprInfo base_info = hir::helper::get_expr_info(*index_expr.base);
-	Operand base_operand = lower_expr(*index_expr.base);
-	TempId base_temp = materialize_operand(base_operand, base_info.type);
+	TempId base_temp = materialize_place_base(*index_expr.base, base_info);
 	semantic::ExprInfo idx_info = hir::helper::get_expr_info(*index_expr.index);
 	Operand idx_operand = lower_expr(*index_expr.index);
 	TempId index_temp = materialize_operand(idx_operand, idx_info.type);
-	TempId dest = allocate_temp(info.type);
 	IndexAccessRValue index_rvalue{.base = base_temp, .index = index_temp};
-	RValue rvalue;
-	rvalue.value = std::move(index_rvalue);
-	DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};
-	Statement stmt;
-	stmt.value = std::move(define);
-	append_statement(std::move(stmt));
-	return make_temp_operand(dest);
+	return emit_rvalue(std::move(index_rvalue), info.type);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::Cast& cast_expr, const semantic::ExprInfo& info) {
@@ -274,15 +265,8 @@ Operand FunctionLowerer::lower_expr_impl(const hir::Cast& cast_expr, const seman
 		throw std::logic_error("Cast expression missing resolved type during MIR lowering");
 	}
 	Operand operand = lower_expr(*cast_expr.expr);
-	TempId dest = allocate_temp(info.type);
 	CastRValue cast_rvalue{.value = operand, .target_type = info.type};
-	RValue rvalue;
-	rvalue.value = std::move(cast_rvalue);
-	DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};
-	Statement stmt;
-	stmt.value = std::move(define);
-	append_statement(std::move(stmt));
-	return make_temp_operand(dest);
+	return emit_rvalue(std::move(cast_rvalue), info.type);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::BinaryOp& binary, const semantic::ExprInfo& info) {
@@ -305,17 +289,8 @@ Operand FunctionLowerer::lower_expr_impl(const hir::BinaryOp& binary, const sema
 
 	BinaryOpRValue::Kind kind = classify_binary_kind(binary, lhs_info.type, rhs_info.type, info.type);
 
-	TempId dest = allocate_temp(info.type);
 	BinaryOpRValue binary_value{.kind = kind, .lhs = lhs, .rhs = rhs};
-	RValue rvalue;
-	rvalue.value = std::move(binary_value);
-	DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};
-
-	Statement stmt;
-	stmt.value = std::move(define);
-	append_statement(std::move(stmt));
-
-	return make_temp_operand(dest);
+	return emit_rvalue(std::move(binary_value), info.type);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::Assignment& assignment, const semantic::ExprInfo&) {
@@ -416,58 +391,31 @@ Operand FunctionLowerer::lower_expr_impl(const hir::MethodCall& method_call, con
 	return emit_call(target, info.type, std::move(args));
 }
 
-Operand FunctionLowerer::emit_unary_value(const hir::UnaryOperator& op,
-                                          const hir::Expr& operand_expr,
-                                          TypeId result_type) {
-        Operand operand = lower_expr(operand_expr);
-        TempId dest = allocate_temp(result_type);
-        UnaryOpRValue::Kind kind;
-        kind = std::visit(Overloaded{
-                [](const hir::UnaryNot&) { return UnaryOpRValue::Kind::Not; },
-                [](const hir::UnaryNegate&) { return UnaryOpRValue::Kind::Neg; },
-                [](const auto&) -> UnaryOpRValue::Kind {
-                        throw std::logic_error("Unsupported unary op kind for value lowering");
-                }
-        }, op);
-        UnaryOpRValue unary_rvalue{.kind = kind, .operand = std::move(operand)};
-        RValue rvalue;
-        rvalue.value = std::move(unary_rvalue);
-	DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};
-	Statement stmt;
-	stmt.value = std::move(define);
-	append_statement(std::move(stmt));
-	return make_temp_operand(dest);
-}
-
 Operand FunctionLowerer::lower_expr_impl(const hir::UnaryOp& unary, const semantic::ExprInfo& info) {
         if (!unary.rhs) {
                 throw std::logic_error("Unary expression missing operand during MIR lowering");
         }
-        return std::visit(Overloaded{
-                [&](const hir::UnaryNot&) {
-                        return emit_unary_value(unary.op, *unary.rhs, info.type);
-                },
-                [&](const hir::UnaryNegate&) {
-                        return emit_unary_value(unary.op, *unary.rhs, info.type);
-                },
-                [&](const hir::Reference&) {
-                        semantic::ExprInfo operand_info = hir::helper::get_expr_info(*unary.rhs);
-                        const auto &reference = std::get<hir::Reference>(unary.op);
-                        Place place = ensure_reference_operand_place(*unary.rhs, operand_info, reference.is_mutable);
-                        TempId dest = allocate_temp(info.type);
-                        RefRValue ref_rvalue{.place = std::move(place)};
-                        RValue rvalue;
-                        rvalue.value = std::move(ref_rvalue);
-                        DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};
-                        Statement stmt;
-                        stmt.value = std::move(define);
-                        append_statement(std::move(stmt));
-                        return make_temp_operand(dest);
-                },
-                [&](const hir::Dereference&) {
-                        return load_place_value(lower_place_impl(unary, info), info.type);
-                }
-        }, unary.op);
+	return std::visit(Overloaded{
+		[&](const hir::UnaryNot&) {
+			UnaryOpRValue unary_rvalue{.kind = UnaryOpRValue::Kind::Not,
+					      .operand = lower_expr(*unary.rhs)};
+			return emit_rvalue(std::move(unary_rvalue), info.type);
+		},
+		[&](const hir::UnaryNegate&) {
+			UnaryOpRValue unary_rvalue{.kind = UnaryOpRValue::Kind::Neg,
+					      .operand = lower_expr(*unary.rhs)};
+			return emit_rvalue(std::move(unary_rvalue), info.type);
+		},
+		[&](const hir::Reference& reference) {
+			semantic::ExprInfo operand_info = hir::helper::get_expr_info(*unary.rhs);
+			Place place = ensure_reference_operand_place(*unary.rhs, operand_info, reference.is_mutable);
+			RefRValue ref_rvalue{.place = std::move(place)};
+			return emit_rvalue(std::move(ref_rvalue), info.type);
+		},
+		[&](const hir::Dereference&) {
+			return load_place_value(lower_place_impl(unary, info), info.type);
+		}
+	}, unary.op);
 }
 
 Operand FunctionLowerer::lower_if_expr(const hir::If& if_expr, const semantic::ExprInfo& info) {

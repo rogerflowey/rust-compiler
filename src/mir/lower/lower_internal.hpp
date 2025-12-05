@@ -96,6 +96,8 @@ private:
 	Operand emit_call(FunctionId target, TypeId result_type, std::vector<Operand>&& args);
 	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
 	Operand emit_array_repeat(Operand value, std::size_t count, TypeId result_type);
+	template <typename RValueT>
+	Operand emit_rvalue(RValueT rvalue_kind, TypeId result_type);
 	BasicBlockId create_block();
 	bool block_is_terminated(BasicBlockId id) const;
 	BasicBlockId current_block_id() const;
@@ -110,10 +112,13 @@ private:
 	Operand make_temp_operand(TempId temp);
 	void emit_return(std::optional<Operand> value);
 	void collect_parameters();
-	void collect_function_parameters(const hir::Function& function);
-	void collect_method_parameters(const hir::Method& method);
+	void append_self_parameter();
+	void append_explicit_parameters(const std::vector<std::unique_ptr<hir::Pattern>>& params,
+	                           const std::vector<std::optional<hir::TypeAnnotation>>& annotations);
 	void append_parameter(const hir::Local* local, TypeId type);
 	const hir::Local* resolve_pattern_local(const hir::Pattern& pattern) const;
+	bool is_reachable() const;
+	void require_reachable(const char* context) const;
 
 	LoopContext& push_loop_context(const void* key,
 				   BasicBlockId continue_block,
@@ -123,6 +128,7 @@ private:
 	LoopContext pop_loop_context(const void* key);
 	void finalize_loop_context(const LoopContext& ctx);
 
+	bool lower_block_statements(const hir::Block& block);
 	void lower_block(const hir::Block& hir_block);
 	Operand lower_block_expr(const hir::Block& block, TypeId expected_type);
 	void lower_statement(const hir::Stmt& stmt);
@@ -141,7 +147,9 @@ private:
 	Place lower_expr_place(const hir::Expr& expr);
 	Place ensure_reference_operand_place(const hir::Expr& operand,
 					  const semantic::ExprInfo& operand_info,
-					  bool mutable_reference);
+				  bool mutable_reference);
+	TempId materialize_place_base(const hir::Expr& base_expr,
+				 const semantic::ExprInfo& base_info);
 
 	template <typename T>
 	Place lower_place_impl(const T& node, const semantic::ExprInfo& info);
@@ -179,10 +187,6 @@ private:
 	template <typename T>
 	Operand lower_expr_impl(const T& unsupported, const semantic::ExprInfo& info);
 
-    Operand emit_unary_value(const hir::UnaryOperator& op,
-                             const hir::Expr& operand_expr,
-                             TypeId result_type);
-
 	Operand lower_if_expr(const hir::If& if_expr, const semantic::ExprInfo& info);
 	Operand lower_short_circuit(const hir::BinaryOp& binary,
 				 const semantic::ExprInfo& info,
@@ -202,6 +206,18 @@ Place FunctionLowerer::lower_place_impl(const T&, const semantic::ExprInfo&) {
 template <typename T>
 Operand FunctionLowerer::lower_expr_impl(const T&, const semantic::ExprInfo&) {
 	throw std::logic_error("Expression kind not supported yet in MIR lowering");
+}
+
+template <typename RValueT>
+Operand FunctionLowerer::emit_rvalue(RValueT rvalue_kind, TypeId result_type) {
+	TempId dest = allocate_temp(result_type);
+	RValue rvalue;
+	rvalue.value = std::move(rvalue_kind);
+	DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};
+	Statement stmt;
+	stmt.value = std::move(define);
+	append_statement(std::move(stmt));
+	return make_temp_operand(dest);
 }
 
 } // namespace mir::detail

@@ -79,6 +79,17 @@ std::vector<FunctionDescriptor> collect_function_descriptors(const hir::Program&
 	return descriptors;
 }
 
+MirFunction lower_descriptor(const FunctionDescriptor& descriptor,
+			       const std::unordered_map<const void*, FunctionId>& ids,
+			       GlobalContext* global_context) {
+	if (descriptor.kind == FunctionDescriptor::Kind::Function) {
+		FunctionLowerer lowerer(*descriptor.function, ids, descriptor.id, descriptor.name, global_context);
+		return lowerer.lower();
+	}
+	FunctionLowerer lowerer(*descriptor.method, ids, descriptor.id, descriptor.name, global_context);
+	return lowerer.lower();
+}
+
 // FunctionLowerer declarations are provided in mir/lower/lower_internal.hpp.
 
 } // namespace
@@ -222,50 +233,43 @@ void FunctionLowerer::init_locals() {
 }
 
 void FunctionLowerer::collect_parameters() {
+	if (function_kind == FunctionKind::Method && hir_method) {
+		append_self_parameter();
+		append_explicit_parameters(hir_method->params, hir_method->param_type_annotations);
+		return;
+	}
 	if (function_kind == FunctionKind::Function && hir_function) {
-		collect_function_parameters(*hir_function);
-	} else if (function_kind == FunctionKind::Method && hir_method) {
-		collect_method_parameters(*hir_method);
+		append_explicit_parameters(hir_function->params, hir_function->param_type_annotations);
 	}
 }
 
-void FunctionLowerer::collect_function_parameters(const hir::Function& function) {
-	if (function.params.size() != function.param_type_annotations.size()) {
-		throw std::logic_error("Function parameter/type annotation mismatch during MIR lowering");
+void FunctionLowerer::append_self_parameter() {
+	if (!hir_method) {
+		throw std::logic_error("Method context missing during MIR lowering");
 	}
-	for (std::size_t i = 0; i < function.params.size(); ++i) {
-		const auto& param = function.params[i];
-		if (!param) {
-			continue;
-		}
-		const auto& annotation = function.param_type_annotations[i];
-		if (!annotation) {
-			throw std::logic_error("Function parameter missing resolved type during MIR lowering");
-		}
-		TypeId param_type = hir::helper::get_resolved_type(*annotation);
-		append_parameter(resolve_pattern_local(*param), param_type);
+	if (!hir_method->self_local) {
+		return;
 	}
+	if (!hir_method->self_local->type_annotation) {
+		throw std::logic_error("Method self parameter missing resolved type during MIR lowering");
+	}
+	TypeId self_type = hir::helper::get_resolved_type(*hir_method->self_local->type_annotation);
+	append_parameter(hir_method->self_local.get(), self_type);
 }
 
-void FunctionLowerer::collect_method_parameters(const hir::Method& method) {
-	if (method.self_local) {
-		if (!method.self_local->type_annotation) {
-			throw std::logic_error("Method self parameter missing resolved type during MIR lowering");
-		}
-		TypeId self_type = hir::helper::get_resolved_type(*method.self_local->type_annotation);
-		append_parameter(method.self_local.get(), self_type);
+void FunctionLowerer::append_explicit_parameters(const std::vector<std::unique_ptr<hir::Pattern>>& params,
+			   const std::vector<std::optional<hir::TypeAnnotation>>& annotations) {
+	if (params.size() != annotations.size()) {
+		throw std::logic_error("Parameter/type annotation mismatch during MIR lowering");
 	}
-	if (method.params.size() != method.param_type_annotations.size()) {
-		throw std::logic_error("Method parameter/type annotation mismatch during MIR lowering");
-	}
-	for (std::size_t i = 0; i < method.params.size(); ++i) {
-		const auto& param = method.params[i];
+	for (std::size_t i = 0; i < params.size(); ++i) {
+		const auto& param = params[i];
 		if (!param) {
 			continue;
 		}
-		const auto& annotation = method.param_type_annotations[i];
+		const auto& annotation = annotations[i];
 		if (!annotation) {
-			throw std::logic_error("Method parameter missing resolved type during MIR lowering");
+			throw std::logic_error("Parameter missing resolved type during MIR lowering");
 		}
 		TypeId param_type = hir::helper::get_resolved_type(*annotation);
 		append_parameter(resolve_pattern_local(*param), param_type);
@@ -304,6 +308,16 @@ const hir::Local* FunctionLowerer::resolve_pattern_local(const hir::Pattern& pat
 	throw std::logic_error("Unsupported pattern variant in parameter lowering");
 }
 
+bool FunctionLowerer::is_reachable() const {
+	return current_block.has_value();
+}
+
+void FunctionLowerer::require_reachable(const char* context) const {
+	if (!is_reachable()) {
+		throw std::logic_error(std::string("Unreachable code encountered in ") + context);
+	}
+}
+
 FunctionId FunctionLowerer::lookup_function_id(const void* key) const {
 	auto it = function_ids.find(key);
 	if (it == function_ids.end()) {
@@ -335,30 +349,16 @@ Operand FunctionLowerer::emit_call(FunctionId target,
 }
 
 Operand FunctionLowerer::emit_aggregate(AggregateRValue aggregate, TypeId result_type) {
-	TempId temp = allocate_temp(result_type);
-	RValue rvalue;
-	rvalue.value = std::move(aggregate);
-	DefineStatement define{.dest = temp, .rvalue = std::move(rvalue)};
-	Statement stmt;
-	stmt.value = std::move(define);
-	append_statement(std::move(stmt));
-	return make_temp_operand(temp);
+	return emit_rvalue(std::move(aggregate), result_type);
 }
 
 Operand FunctionLowerer::emit_array_repeat(Operand value,
 	                                   std::size_t count,
 	                                   TypeId result_type) {
-	TempId temp = allocate_temp(result_type);
 	ArrayRepeatRValue repeat;
 	repeat.value = std::move(value);
 	repeat.count = count;
-	RValue rvalue;
-	rvalue.value = std::move(repeat);
-	DefineStatement define{.dest = temp, .rvalue = std::move(rvalue)};
-	Statement stmt;
-	stmt.value = std::move(define);
-	append_statement(std::move(stmt));
-	return make_temp_operand(temp);
+	return emit_rvalue(std::move(repeat), result_type);
 }
 
 BasicBlockId FunctionLowerer::create_block() {
@@ -532,17 +532,20 @@ void FunctionLowerer::finalize_loop_context(const LoopContext& ctx) {
 	}
 }
 
-void FunctionLowerer::lower_block(const hir::Block& hir_block) {
-	for (const auto& stmt : hir_block.stmts) {
-		if (!current_block) {
-			break;
+bool FunctionLowerer::lower_block_statements(const hir::Block& block) {
+	for (const auto& stmt : block.stmts) {
+		if (!is_reachable()) {
+			return false;
 		}
 		if (stmt) {
 			lower_statement(*stmt);
 		}
 	}
+	return is_reachable();
+}
 
-	if (!current_block) {
+void FunctionLowerer::lower_block(const hir::Block& hir_block) {
+	if (!lower_block_statements(hir_block)) {
 		return;
 	}
 
@@ -565,16 +568,7 @@ void FunctionLowerer::lower_block(const hir::Block& hir_block) {
 }
 
 Operand FunctionLowerer::lower_block_expr(const hir::Block& block, TypeId expected_type) {
-	for (const auto& stmt : block.stmts) {
-		if (!current_block) {
-			break;
-		}
-		if (stmt) {
-			lower_statement(*stmt);
-		}
-	}
-
-	if (!current_block) {
+	if (!lower_block_statements(block)) {
 		return make_unit_operand();
 	}
 
@@ -594,14 +588,14 @@ Operand FunctionLowerer::lower_block_expr(const hir::Block& block, TypeId expect
 }
 
 void FunctionLowerer::lower_statement(const hir::Stmt& stmt) {
-	if (!current_block) {
+	if (!is_reachable()) {
 		return;
 	}
 	std::visit([this](const auto& node) { lower_statement_impl(node); }, stmt.value);
 }
 
 void FunctionLowerer::lower_statement_impl(const hir::LetStmt& let_stmt) {
-	if (!current_block) {
+	if (!is_reachable()) {
 		return;
 	}
 	if (!let_stmt.pattern) {
@@ -615,7 +609,7 @@ void FunctionLowerer::lower_statement_impl(const hir::LetStmt& let_stmt) {
 }
 
 void FunctionLowerer::lower_statement_impl(const hir::ExprStmt& expr_stmt) {
-	if (!current_block) {
+	if (!is_reachable()) {
 		return;
 	}
 	if (expr_stmt.expr) {
@@ -708,13 +702,7 @@ MirModule lower_program(const hir::Program& program) {
 	module.functions.reserve(descriptors.size());
 	GlobalContext global_context;
 	for (const auto& descriptor : descriptors) {
-		if (descriptor.kind == FunctionDescriptor::Kind::Function) {
-			FunctionLowerer lowerer(*descriptor.function, ids, descriptor.id, descriptor.name, &global_context);
-			module.functions.push_back(lowerer.lower());
-		} else {
-			FunctionLowerer lowerer(*descriptor.method, ids, descriptor.id, descriptor.name, &global_context);
-			module.functions.push_back(lowerer.lower());
-		}
+		module.functions.push_back(lower_descriptor(descriptor, ids, &global_context));
 	}
 	module.globals = global_context.take_globals();
 	return module;
