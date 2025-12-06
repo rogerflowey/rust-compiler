@@ -29,10 +29,11 @@ src/
 │   ├── test_type_const.cpp
 │   └── helpers/common.hpp
 ├── mir/tests/
-│   └── test_mir_lower.cpp
+│   ├── test_llvmbuilder.cpp
+│   ├── test_mir_emitter.cpp
+│   ├── test_mir_lower.cpp
+│   └── test_type_codegen.cpp
 lib/
-├── llvmbuilder/tests/
-│   └── test_builder.cpp
 └── parsecpp/tests/
   ├── test_parsec_basic.cpp
   ├── test_pratt.cpp
@@ -93,7 +94,7 @@ Other areas rely directly on production helpers (e.g., parser tests use the real
 - **Semantic ➜ Const/Type Interaction (`test_const_type_check.cpp`, `test_type_const.cpp`)**: Ensure query-evaluated constants, array sizes, and type annotations are resolved or rejected consistently after the const/type refactor.
 - **Semantic ➜ Structural Passes (`test_hir_converter.cpp`, `test_control_flow_linking.cpp`, `test_trait_check.cpp`, `test_temp_ref_desugaring.cpp`)**: Guard transformations that build or mutate HIR prior to MIR lowering.
 - **MIR (`test/mir/test_mir_lower.cpp`)**: Ensures the MIR builder materializes storage and translates HIR expressions as expected.
-- **LLVM Builder (`test/llvmbuilder/test_builder.cpp`)**: Regression tests for the LLVM IR emission helpers.
+- **LLVM Builder (`src/mir/tests/test_llvmbuilder.cpp`)**: Regression tests for the LLVM IR emission helpers.
 
 ## Running Tests Locally
 

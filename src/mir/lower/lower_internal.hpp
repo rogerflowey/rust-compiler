@@ -19,49 +19,18 @@
 
 namespace mir::detail {
 
-struct GlobalContext {
-	Place make_string_literal_place(const hir::Literal::String& literal);
-	std::vector<MirGlobal> take_globals();
-
-private:
-	struct StringLiteralKey {
-		std::string value;
-		bool is_cstyle = false;
-
-		bool operator==(const StringLiteralKey& other) const {
-			return is_cstyle == other.is_cstyle && value == other.value;
-		}
-	};
-
-	struct StringLiteralKeyHasher {
-		std::size_t operator()(const StringLiteralKey& key) const noexcept {
-			std::size_t hash = std::hash<std::string>{}(key.value);
-			std::size_t flag = key.is_cstyle ? 0x9e3779b97f4a7c15ull : 0x7f4a7c159e3779b9ull;
-			hash ^= flag + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-			return hash;
-		}
-	};
-
-	std::vector<MirGlobal> globals;
-	std::unordered_map<StringLiteralKey, std::size_t, StringLiteralKeyHasher> string_literal_lookup;
-
-	std::size_t intern_string_literal(const hir::Literal::String& literal);
-};
-
 struct FunctionLowerer {
 	enum class FunctionKind { Function, Method };
 
 	FunctionLowerer(const hir::Function& function,
-			   const std::unordered_map<const void*, FunctionId>& id_map,
-		   FunctionId id,
-		   std::string name,
-		   GlobalContext* global_ctx);
+		   const std::unordered_map<const void*, FunctionId>& id_map,
+	   FunctionId id,
+	   std::string name);
 
 	FunctionLowerer(const hir::Method& method,
 			 const std::unordered_map<const void*, FunctionId>& id_map,
 			 FunctionId id,
-			 std::string name,
-			 GlobalContext* global_ctx);
+			 std::string name);
 
 	MirFunction lower();
 
@@ -79,7 +48,6 @@ private:
 	const hir::Function* hir_function = nullptr;
 	const hir::Method* hir_method = nullptr;
 	const std::unordered_map<const void*, FunctionId>& function_ids;
-	GlobalContext* global_context = nullptr;
 	MirFunction mir_function;
 	std::optional<BasicBlockId> current_block;
 	std::vector<bool> block_terminated;
@@ -161,7 +129,6 @@ private:
 	Place lower_place_impl(const hir::UnaryOp& unary, const semantic::ExprInfo& info);
 
 	Operand lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info);
-	Operand lower_string_literal(const hir::Literal::String& literal, TypeId result_type);
 	Operand lower_expr_impl(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info);
 	Operand lower_expr_impl(const hir::ArrayLiteral& array_literal, const semantic::ExprInfo& info);
 	Operand lower_expr_impl(const hir::ArrayRepeat& array_repeat, const semantic::ExprInfo& info);

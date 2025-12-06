@@ -1,10 +1,9 @@
 #pragma once
-#include "codegen/code.hpp"
-#include "mir/codegen/type.hpp"
 #include "mir/mir.hpp"
-#include "mir/codegen/code.hpp"
+#include "mir/codegen/llvmbuilder/builder.hpp"
 #include <cstddef>
-#include <sstream>
+#include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -25,23 +24,27 @@ struct TypedOperand {
 
 class Emitter {
 public:
-  explicit Emitter(mir::MirModule &module) : module(module) {}
+  explicit Emitter(mir::MirModule &module,
+                   std::string target_triple = {},
+                   std::string data_layout = {});
 
-  ProgramCode emit();
-  const ProgramCode &program_code() const { return program_code_; }
+  std::string emit();
+  const llvmbuilder::ModuleBuilder &module() const { return module_; }
 
   Emitter(const Emitter &) = delete;
   Emitter &operator=(const Emitter &) = delete;
 
 private:
-  mir::MirModule &module;
-  TypeEmitter type_emitter_;
-  ProgramCode program_code_;
-
-  FunctionCode current_function_code_;
-  BlockCode current_block_code_;
+  mir::MirModule &mir_module_;
   const mir::MirFunction *current_function_ = nullptr;
+  llvmbuilder::ModuleBuilder module_;
+  llvmbuilder::FunctionBuilder *current_function_builder_ = nullptr;
+  llvmbuilder::BasicBlockBuilder *current_block_builder_ = nullptr;
 
+  std::unordered_map<mir::BasicBlockId, llvmbuilder::BasicBlockBuilder *> block_builders_;
+
+  std::string target_triple_;
+  std::string data_layout_;
 
   // emit helpers
   void emit_function(const mir::MirFunction &function);
@@ -55,57 +58,53 @@ private:
   void emit_load(const mir::LoadStatement &statement);
   void emit_assign(const mir::AssignStatement &statement);
   void emit_call(const mir::CallStatement &statement);
-  void emit_struct_definitions();
 
   // translation helpers: both emit and get_*
   TranslatedPlace translate_place(const mir::Place &place);
-  void translate_rvalue(const std::string &dest_name, mir::TypeId dest_type,
-                        const mir::RValue &rvalue);
-  void emit_constant_rvalue(const std::string &dest_name, mir::TypeId dest_type,
-                            const mir::ConstantRValue &value);
-  void emit_binary_rvalue(const std::string &dest_name,
-                          const mir::BinaryOpRValue &value);
-  void emit_unary_rvalue(const std::string &dest_name, mir::TypeId dest_type,
-                         const mir::UnaryOpRValue &value);
-  void emit_ref_rvalue(const std::string &dest_name, mir::TypeId dest_type,
-                       const mir::RefRValue &value);
-  void emit_aggregate_rvalue(const std::string &dest_name, mir::TypeId dest_type,
-                             const mir::AggregateRValue &value);
-  void emit_array_repeat_rvalue(const std::string &dest_name,
-                                mir::TypeId dest_type,
-                                const mir::ArrayRepeatRValue &value);
-  void emit_cast_rvalue(const std::string &dest_name, mir::TypeId dest_type,
-                        const mir::CastRValue &value);
-  void emit_field_access_rvalue(const std::string &dest_name,
-                                const mir::FieldAccessRValue &value);
+  void emit_rvalue_into(mir::TempId dest, mir::TypeId dest_type, const mir::RValue &rvalue);
+  void emit_constant_rvalue_into(mir::TempId dest,
+                                 mir::TypeId dest_type,
+                                 const mir::ConstantRValue &value);
+  TypedOperand materialize_constant_operand(mir::TypeId fallback_type,
+                                            const mir::Constant &constant,
+                                            std::optional<mir::TempId> target_temp = std::nullopt);
+  void emit_binary_rvalue_into(mir::TempId dest, const mir::BinaryOpRValue &value);
+  void emit_unary_rvalue_into(mir::TempId dest,
+                              mir::TypeId dest_type,
+                              const mir::UnaryOpRValue &value);
+  void emit_ref_rvalue_into(mir::TempId dest,
+                            mir::TypeId dest_type,
+                            const mir::RefRValue &value);
+  void emit_aggregate_rvalue_into(mir::TempId dest,
+                                  mir::TypeId dest_type,
+                                  const mir::AggregateRValue &value);
+  void emit_array_repeat_rvalue_into(mir::TempId dest,
+                                     mir::TypeId dest_type,
+                                     const mir::ArrayRepeatRValue &value);
+  void emit_cast_rvalue_into(mir::TempId dest,
+                             mir::TypeId dest_type,
+                             const mir::CastRValue &value);
+  void emit_field_access_rvalue_into(mir::TempId dest,
+                                     const mir::FieldAccessRValue &value);
 
   // lookup helpers
   std::string get_temp(mir::TempId temp);
   std::string get_local_ptr(mir::LocalId local);
-  std::string get_operand(const mir::Operand &operand);
-  std::string get_constant(const mir::Constant &constant);
-  std::string get_constant_ptr(const mir::Constant &constant);
+  std::string local_ptr_name(mir::LocalId local) const;
   TypedOperand get_typed_operand(const mir::Operand &operand);
   std::string get_block_label(mir::BasicBlockId block_id) const;
   std::string get_function_name(mir::FunctionId id) const;
   std::string get_global(mir::GlobalId id) const;
+  std::string pointer_type_name(mir::TypeId pointee_type);
 
   // helpers
-  void finish_block(){
-      current_function_code_.blocks.emplace_back(std::move(current_block_code_));
-      current_block_code_ = BlockCode{};
-  }
-  void finish_function(){
-      program_code_.functions.emplace_back(std::move(current_function_code_));
-      current_function_code_ = FunctionCode{};
-  }
   std::string format_constant_literal(const mir::Constant &constant);
-  std::string make_internal_value_name(const std::string &base,
-                                       std::string_view suffix);
-  void append_instruction(const std::string &line);
-  std::string format_typed_operand(const TypedOperand &operand) const;
-
-  std::size_t internal_name_counter_ = 0;
+  TypedOperand emit_string_constant_operand(mir::TypeId type,
+                                            const mir::StringConstant &constant,
+                                            std::optional<mir::TempId> target_temp = std::nullopt);
+  void materialize_constant_into_temp(mir::TempId dest,
+                                      const std::string &type_name,
+                                      const std::string &literal);
 };
 
 } // namespace codegen
