@@ -80,13 +80,12 @@ std::vector<FunctionDescriptor> collect_function_descriptors(const hir::Program&
 }
 
 MirFunction lower_descriptor(const FunctionDescriptor& descriptor,
-			       const std::unordered_map<const void*, FunctionId>& ids,
-			       GlobalContext* global_context) {
+	       const std::unordered_map<const void*, FunctionId>& ids) {
 	if (descriptor.kind == FunctionDescriptor::Kind::Function) {
-		FunctionLowerer lowerer(*descriptor.function, ids, descriptor.id, descriptor.name, global_context);
+		FunctionLowerer lowerer(*descriptor.function, ids, descriptor.id, descriptor.name);
 		return lowerer.lower();
 	}
-	FunctionLowerer lowerer(*descriptor.method, ids, descriptor.id, descriptor.name, global_context);
+	FunctionLowerer lowerer(*descriptor.method, ids, descriptor.id, descriptor.name);
 	return lowerer.lower();
 }
 
@@ -96,59 +95,23 @@ MirFunction lower_descriptor(const FunctionDescriptor& descriptor,
 
 namespace detail {
 
-std::size_t GlobalContext::intern_string_literal(const hir::Literal::String& literal) {
-	StringLiteralKey key;
-	key.value = literal.value;
-	key.is_cstyle = literal.is_cstyle;
-	auto it = string_literal_lookup.find(key);
-	if (it != string_literal_lookup.end()) {
-		return it->second;
-	}
-	std::size_t index = globals.size();
-	StringLiteralGlobal string_global;
-	string_global.value = make_string_constant(literal.value, literal.is_cstyle);
-	MirGlobal global;
-	global.value = std::move(string_global);
-	globals.push_back(std::move(global));
-	string_literal_lookup.emplace(std::move(key), index);
-	return index;
-}
-
-Place GlobalContext::make_string_literal_place(const hir::Literal::String& literal) {
-	std::size_t index = intern_string_literal(literal);
-	Place place;
-	place.base = GlobalPlace{static_cast<GlobalId>(index)};
-	return place;
-}
-
-std::vector<MirGlobal> GlobalContext::take_globals() {
-	std::vector<MirGlobal> exported = std::move(globals);
-	globals.clear();
-	string_literal_lookup.clear();
-	return exported;
-}
-
 FunctionLowerer::FunctionLowerer(const hir::Function& function,
 			       const std::unordered_map<const void*, FunctionId>& id_map,
 		       FunctionId id,
-		       std::string name,
-		       GlobalContext* global_ctx)
+	       std::string name)
 	: function_kind(FunctionKind::Function),
 	  hir_function(&function),
-	  function_ids(id_map),
-	  global_context(global_ctx) {
+	  function_ids(id_map) {
 	initialize(id, std::move(name));
 }
 
 FunctionLowerer::FunctionLowerer(const hir::Method& method,
 			       const std::unordered_map<const void*, FunctionId>& id_map,
 	       FunctionId id,
-	       std::string name,
-	       GlobalContext* global_ctx)
+	       std::string name)
 	: function_kind(FunctionKind::Method),
 	  hir_method(&method),
-	  function_ids(id_map),
-	  global_context(global_ctx) {
+	  function_ids(id_map) {
 	initialize(id, std::move(name));
 }
 
@@ -676,10 +639,9 @@ LocalId FunctionLowerer::create_synthetic_local(TypeId type,
 } // namespace detail
 
 MirFunction lower_function(const hir::Function& function,
-			   const std::unordered_map<const void*, FunctionId>& id_map,
-			   FunctionId id) {
-	GlobalContext global_context;
-	FunctionLowerer lowerer(function, id_map, id, derive_function_name(function, std::string{}), &global_context);
+	       const std::unordered_map<const void*, FunctionId>& id_map,
+	       FunctionId id) {
+	FunctionLowerer lowerer(function, id_map, id, derive_function_name(function, std::string{}));
 	return lowerer.lower();
 }
 
@@ -700,11 +662,9 @@ MirModule lower_program(const hir::Program& program) {
 
 	MirModule module;
 	module.functions.reserve(descriptors.size());
-	GlobalContext global_context;
 	for (const auto& descriptor : descriptors) {
-		module.functions.push_back(lower_descriptor(descriptor, ids, &global_context));
+		module.functions.push_back(lower_descriptor(descriptor, ids));
 	}
-	module.globals = global_context.take_globals();
 	return module;
 }
 

@@ -8,6 +8,7 @@
 
 #include "tests/catch_gtest_compat.hpp"
 #include <unordered_map>
+#include <vector>
 
 namespace {
 
@@ -194,31 +195,27 @@ TEST(MirLowerTest, LowersStringLiteralWithNullTerminator) {
 
     mir::MirModule module = mir::lower_program(program);
     ASSERT_EQ(module.functions.size(), 1u);
-    ASSERT_EQ(module.globals.size(), 1u);
+    EXPECT_TRUE(module.globals.empty());
     const auto& lowered = module.functions.front();
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    ASSERT_EQ(block.statements.size(), 1u);
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define_stmt.rvalue.value));
-    const auto& ref_rvalue = std::get<mir::RefRValue>(define_stmt.rvalue.value);
-    ASSERT_TRUE(std::holds_alternative<mir::GlobalPlace>(ref_rvalue.place.base));
-    const auto& global_place = std::get<mir::GlobalPlace>(ref_rvalue.place.base);
-
-    const auto& string_global = std::get<mir::StringLiteralGlobal>(module.globals[0].value);
-    EXPECT_EQ(global_place.global, 0u);
-    EXPECT_EQ(string_global.value.length, 5u);
-    ASSERT_FALSE(string_global.value.data.empty());
-    EXPECT_EQ(string_global.value.data.back(), '\0');
-    EXPECT_EQ(std::string(string_global.value.data.c_str()), "hello");
-    EXPECT_FALSE(string_global.value.is_cstyle);
+    EXPECT_TRUE(block.statements.empty());
 
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
     ASSERT_TRUE(ret.value.has_value());
     const auto& operand = ret.value.value();
-    ASSERT_TRUE(std::holds_alternative<mir::TempId>(operand.value));
-    EXPECT_EQ(std::get<mir::TempId>(operand.value), define_stmt.dest);
+    ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
+    const auto& constant = std::get<mir::Constant>(operand.value);
+    EXPECT_EQ(constant.type, string_ref_type);
+    ASSERT_TRUE(std::holds_alternative<mir::StringConstant>(constant.value));
+    const auto& string_constant = std::get<mir::StringConstant>(constant.value);
+    EXPECT_EQ(string_constant.length, 5u);
+    ASSERT_FALSE(string_constant.data.empty());
+    EXPECT_EQ(string_constant.data.back(), '\0');
+    EXPECT_EQ(string_constant.data.size(), 6u);
+    EXPECT_FALSE(string_constant.is_cstyle);
+    EXPECT_EQ(std::string(string_constant.data.c_str()), "hello");
 }
 
 TEST(MirLowerTest, DeduplicatesIdenticalStringLiteralsAcrossFunctions) {
@@ -236,18 +233,25 @@ TEST(MirLowerTest, DeduplicatesIdenticalStringLiteralsAcrossFunctions) {
     program.items.push_back(make_function_item("shared"));
 
     mir::MirModule module = mir::lower_program(program);
-    ASSERT_EQ(module.globals.size(), 1u);
+    EXPECT_TRUE(module.globals.empty());
     ASSERT_EQ(module.functions.size(), 2u);
+    std::vector<mir::StringConstant> lowered_literals;
     for (const auto& lowered : module.functions) {
         ASSERT_FALSE(lowered.basic_blocks.empty());
         const auto& block = lowered.basic_blocks.front();
-        ASSERT_EQ(block.statements.size(), 1u);
-        const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-        ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define_stmt.rvalue.value));
-        const auto& ref_rvalue = std::get<mir::RefRValue>(define_stmt.rvalue.value);
-        ASSERT_TRUE(std::holds_alternative<mir::GlobalPlace>(ref_rvalue.place.base));
-        EXPECT_EQ(std::get<mir::GlobalPlace>(ref_rvalue.place.base).global, 0u);
+        ASSERT_TRUE(block.statements.empty());
+        ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
+        const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
+        ASSERT_TRUE(ret.value.has_value());
+        const auto& operand = ret.value.value();
+        ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
+        const auto& constant = std::get<mir::Constant>(operand.value);
+        ASSERT_TRUE(std::holds_alternative<mir::StringConstant>(constant.value));
+        lowered_literals.push_back(std::get<mir::StringConstant>(constant.value));
     }
+    ASSERT_EQ(lowered_literals.size(), 2u);
+    EXPECT_EQ(lowered_literals[0].data, lowered_literals[1].data);
+    EXPECT_EQ(lowered_literals[0].length, lowered_literals[1].length);
 }
 
 TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {

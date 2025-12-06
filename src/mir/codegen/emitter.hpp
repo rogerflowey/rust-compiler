@@ -3,6 +3,7 @@
 #include "mir/mir.hpp"
 #include "llvmbuilder/builder.hpp"
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -34,7 +35,7 @@ public:
   Emitter &operator=(const Emitter &) = delete;
 
 private:
-  mir::MirModule &module;
+  mir::MirModule &mir_module_;
   TypeEmitter type_emitter_;
   const mir::MirFunction *current_function_ = nullptr;
   llvmbuilder::ModuleBuilder module_;
@@ -69,6 +70,9 @@ private:
   TypedOperand emit_constant_rvalue(mir::TypeId dest_type,
                                     const mir::ConstantRValue &value,
                                     std::string_view hint);
+  TypedOperand materialize_constant_operand(mir::TypeId fallback_type,
+                                            const mir::Constant &constant,
+                                            std::string_view hint);
   TypedOperand emit_binary_rvalue(const mir::BinaryOpRValue &value,
                                   std::string_view hint);
   TypedOperand emit_unary_rvalue(mir::TypeId dest_type,
@@ -98,6 +102,33 @@ private:
 
   // helpers
   std::string format_constant_literal(const mir::Constant &constant);
+  TypedOperand emit_string_constant_operand(mir::TypeId type,
+                                            const mir::StringConstant &constant,
+                                            std::string_view hint);
+  std::string ensure_string_global(const mir::StringConstant &constant);
+
+  struct StringLiteralKey {
+    std::string data;
+    bool is_cstyle = false;
+
+    bool operator==(const StringLiteralKey &other) const {
+      return is_cstyle == other.is_cstyle && data == other.data;
+    }
+  };
+
+  struct StringLiteralHasher {
+    std::size_t operator()(const StringLiteralKey &key) const noexcept {
+      std::size_t hash = std::hash<std::string>{}(key.data);
+      std::size_t flag = key.is_cstyle ? 0x9e3779b97f4a7c15ull
+                                       : 0x7f4a7c159e3779b9ull;
+      hash ^= flag + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+      return hash;
+    }
+  };
+
+  std::unordered_map<StringLiteralKey, std::string, StringLiteralHasher>
+      string_literal_globals_;
+  std::size_t next_string_global_id_ = 0;
 };
 
 } // namespace codegen

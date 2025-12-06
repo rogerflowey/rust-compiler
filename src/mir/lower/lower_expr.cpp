@@ -136,22 +136,9 @@ Operand FunctionLowerer::lower_expr_impl(const hir::Literal& literal, const sema
 		if (!info.has_type || info.type == invalid_type_id) {
 			throw std::logic_error("String literal missing resolved type during MIR lowering");
 		}
-		return lower_string_literal(std::get<hir::Literal::String>(literal.value), info.type);
 	}
 	Constant constant = lower_literal(literal, info.type);
 	return make_constant_operand(constant);
-}
-
-Operand FunctionLowerer::lower_string_literal(const hir::Literal::String& literal, TypeId result_type) {
-	if (!global_context) {
-		throw std::logic_error("Global context missing while lowering string literal");
-	}
-	if (result_type == invalid_type_id) {
-		throw std::logic_error("String literal missing resolved type during MIR lowering");
-	}
-	Place place = global_context->make_string_literal_place(literal);
-	RefRValue ref_rvalue{.place = std::move(place)};
-	return emit_rvalue(std::move(ref_rvalue), result_type);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info) {

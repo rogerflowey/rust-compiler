@@ -63,7 +63,7 @@ struct MirGlobal {
     GlobalValue value;
 };
 
-using ConstantValue = std::variant<BoolConstant, IntConstant, UnitConstant, CharConstant>;
+using ConstantValue = std::variant<BoolConstant, IntConstant, UnitConstant, CharConstant, StringConstant>;
 
 struct Constant {
     TypeId type = invalid_type_id;

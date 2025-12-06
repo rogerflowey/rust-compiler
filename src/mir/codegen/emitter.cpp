@@ -54,7 +54,7 @@ namespace codegen {
 
 Emitter::Emitter(mir::MirModule &module, std::string target_triple,
                  std::string data_layout)
-    : module(module), module_("rcompiler"),
+    : mir_module_(module), module_("rcompiler"),
       target_triple_(std::move(target_triple)),
       data_layout_(std::move(data_layout)) {
   if (!target_triple_.empty()) {
@@ -67,7 +67,7 @@ Emitter::Emitter(mir::MirModule &module, std::string target_triple,
 
 std::string Emitter::emit() {
   emit_globals();
-  for (const auto &function : module.functions) {
+  for (const auto &function : mir_module_.functions) {
     emit_function(function);
   }
   emit_struct_definitions();
@@ -81,8 +81,8 @@ void Emitter::emit_struct_definitions() {
 }
 
 void Emitter::emit_globals() {
-  for (std::size_t index = 0; index < module.globals.size(); ++index) {
-    const auto &global = module.globals[index];
+  for (std::size_t index = 0; index < mir_module_.globals.size(); ++index) {
+    const auto &global = mir_module_.globals[index];
     std::visit(Overloaded{[&](const mir::StringLiteralGlobal &literal) {
                std::string type_name =
                    type_emitter_.get_type_name(type::get_typeID(type::Type{
@@ -226,7 +226,7 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
     args.emplace_back(operand.type_name, operand.value_name);
   }
 
-  const auto &callee = module.functions.at(statement.function);
+  const auto &callee = mir_module_.functions.at(statement.function);
   std::string ret_type = type_emitter_.get_type_name(callee.return_type);
   auto result = current_block_builder_->emit_call(
       ret_type, get_function_name(statement.function), args,
@@ -292,7 +292,7 @@ TranslatedPlace Emitter::translate_place(const mir::Place &place) {
              },
              [&](const mir::GlobalPlace &global_place) {
                base_pointer = get_global(global_place.global);
-               const auto &global = module.globals[global_place.global];
+               const auto &global = mir_module_.globals[global_place.global];
                base_type = std::visit(
                    Overloaded{[&](const mir::StringLiteralGlobal &literal) {
                      auto char_type =
@@ -378,19 +378,31 @@ TypedOperand Emitter::translate_rvalue(mir::TypeId dest_type,
 TypedOperand Emitter::emit_constant_rvalue(mir::TypeId dest_type,
                                            const mir::ConstantRValue &value,
                                            std::string_view hint) {
+  return materialize_constant_operand(dest_type, value.constant, hint);
+}
+
+TypedOperand Emitter::materialize_constant_operand(mir::TypeId fallback_type,
+                                                   const mir::Constant &constant,
+                                                   std::string_view hint) {
   mir::TypeId const_type =
-      value.constant.type == mir::invalid_type_id ? dest_type : value.constant.type;
+      constant.type == mir::invalid_type_id ? fallback_type : constant.type;
   if (const_type == mir::invalid_type_id) {
-    throw std::logic_error("Constant rvalue missing resolved type during codegen");
+    throw std::logic_error("Constant operand missing resolved type during codegen");
+  }
+  if (std::holds_alternative<mir::StringConstant>(constant.value)) {
+    return emit_string_constant_operand(const_type,
+                                        std::get<mir::StringConstant>(constant.value),
+                                        hint);
   }
   std::string type_name = type_emitter_.get_type_name(const_type);
-  if (std::holds_alternative<mir::UnitConstant>(value.constant.value)) {
+  if (std::holds_alternative<mir::UnitConstant>(constant.value)) {
     return TypedOperand{.type_name = std::move(type_name),
                        .value_name = "undef",
                        .type = const_type};
   }
+  std::string literal = format_constant_literal(constant);
   std::string name = current_block_builder_->emit_binary(
-      "add", type_name, "0", format_constant_literal(value.constant), hint);
+      "add", type_name, "0", literal, hint);
   return TypedOperand{.type_name = std::move(type_name),
                       .value_name = std::move(name),
                       .type = const_type};
@@ -615,14 +627,8 @@ TypedOperand Emitter::get_typed_operand(const mir::Operand &operand) {
                                        .type = type};
                  },
                  [&](const mir::Constant &constant) -> TypedOperand {
-                   if (constant.type == mir::invalid_type_id) {
-                     throw std::logic_error(
-                         "Constant operand missing resolved type during codegen");
-                   }
-                   std::string type_name = type_emitter_.get_type_name(constant.type);
-                   return TypedOperand{.type_name = std::move(type_name),
-                                       .value_name = format_constant_literal(constant),
-                                       .type = constant.type};
+                   return materialize_constant_operand(mir::invalid_type_id, constant,
+                                                       {});
                  }},
       operand.value);
 }
@@ -632,10 +638,10 @@ std::string Emitter::get_block_label(mir::BasicBlockId block_id) const {
 }
 
 std::string Emitter::get_function_name(mir::FunctionId id) const {
-  if (id >= module.functions.size()) {
+  if (id >= mir_module_.functions.size()) {
     throw std::out_of_range("Invalid FunctionId");
   }
-  return module.functions[id].name;
+  return mir_module_.functions[id].name;
 }
 
 std::string Emitter::get_global(mir::GlobalId id) const {
@@ -662,8 +668,74 @@ std::string Emitter::format_constant_literal(const mir::Constant &constant) {
                    [](mir::CharConstant val) -> std::string {
                      return std::to_string(static_cast<unsigned int>(
                          static_cast<unsigned char>(val.value)));
+                   },
+                   [](const mir::StringConstant &) -> std::string {
+                     throw std::logic_error(
+                         "String constants cannot be inlined as immediates");
                    }},
                    constant.value);
+}
+
+TypedOperand Emitter::emit_string_constant_operand(mir::TypeId type,
+                                                   const mir::StringConstant &constant,
+                                                   std::string_view hint) {
+  std::string global_name = ensure_string_global(constant);
+
+  type::ArrayType array_type{};
+  array_type.element_type = type::get_typeID(type::Type{type::PrimitiveKind::CHAR});
+  array_type.size = constant.data.size();
+  mir::TypeId array_type_id = type::get_typeID(type::Type{array_type});
+  std::string array_type_name = type_emitter_.get_type_name(array_type_id);
+
+  std::vector<std::pair<std::string, std::string>> indices;
+  indices.emplace_back("i32", "0");
+  indices.emplace_back("i32", "0");
+
+  std::string element_pointer = current_block_builder_->emit_getelementptr(
+      array_type_name, array_type_name + "*", global_name, indices, true,
+      hint);
+
+  std::string dest_type_name = type_emitter_.get_type_name(type);
+  std::string char_pointer_type =
+      type_emitter_.get_type_name(type::get_typeID(
+          type::Type{type::PrimitiveKind::CHAR})) + "*";
+
+  if (dest_type_name != char_pointer_type) {
+    element_pointer = current_block_builder_->emit_cast(
+        "bitcast", char_pointer_type, element_pointer, dest_type_name, hint);
+  }
+
+  return TypedOperand{.type_name = std::move(dest_type_name),
+                      .value_name = std::move(element_pointer),
+                      .type = type};
+}
+
+std::string Emitter::ensure_string_global(const mir::StringConstant &constant) {
+  StringLiteralKey key;
+  key.data = constant.data;
+  key.is_cstyle = constant.is_cstyle;
+
+  auto it = string_literal_globals_.find(key);
+  if (it != string_literal_globals_.end()) {
+    return it->second;
+  }
+
+  std::string name = "@str." + std::to_string(next_string_global_id_++);
+
+  type::ArrayType array_type{};
+  array_type.element_type = type::get_typeID(type::Type{type::PrimitiveKind::CHAR});
+  array_type.size = constant.data.size();
+  mir::TypeId array_type_id = type::get_typeID(type::Type{array_type});
+  std::string array_type_name = type_emitter_.get_type_name(array_type_id);
+
+  std::ostringstream decl;
+  decl << name << " = private unnamed_addr constant " << array_type_name << " c\""
+       << escape_string_literal(constant.data) << "\"";
+  module_.add_global(decl.str());
+
+  auto [inserted, _] =
+      string_literal_globals_.emplace(std::move(key), name);
+  return inserted->second;
 }
 
 } // namespace codegen
