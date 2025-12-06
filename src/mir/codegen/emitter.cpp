@@ -201,6 +201,10 @@ TypedOperand Emitter::get_typed_operand(const mir::Operand &operand) {
                                        .type = type};
                  },
                  [&](const mir::Constant &constant) -> TypedOperand {
+                   if (constant.type == mir::invalid_type_id) {
+                     throw std::logic_error(
+                         "Constant operand missing resolved type during codegen");
+                   }
                    std::string type_name = type_emitter_.get_type_name(constant.type);
                    return TypedOperand{.type_name = std::move(type_name),
                                        .value_name = format_constant_literal(constant),
@@ -307,15 +311,9 @@ void Emitter::emit_ref_rvalue(const std::string &dest_name, mir::TypeId dest_typ
     throw std::logic_error("Reference place missing pointee type during codegen");
   }
   std::string pointee_type = type_emitter_.get_type_name(place.pointee_type);
-  std::string pointer_type = pointee_type + "*";
   std::string dest_type_name = type_emitter_.get_type_name(dest_type);
-  if (dest_type_name == pointer_type) {
-    append_instruction(dest_name + " = getelementptr inbounds " + pointee_type +
-                       ", " + pointer_type + " " + place.pointer + ", i32 0");
-    return;
-  }
-  append_instruction(dest_name + " = bitcast " + pointer_type + " " + place.pointer +
-                     " to " + dest_type_name);
+  append_instruction(dest_name + " = getelementptr inbounds " + pointee_type +
+                     ", " + dest_type_name + " " + place.pointer + ", i32 0");
 }
 
 void Emitter::emit_aggregate_rvalue(const std::string &dest_name, mir::TypeId dest_type,
@@ -406,20 +404,6 @@ void Emitter::emit_cast_rvalue(const std::string &dest_name, mir::TypeId dest_ty
     }
     append_instruction(dest_name + " = add " + target_type_name + " 0, " +
                        operand.value_name);
-    return;
-  }
-
-  if (from_category == detail::ValueCategory::Pointer &&
-      detail::is_integer_category(to_category)) {
-    append_instruction(dest_name + " = ptrtoint " + operand.type_name + " " +
-                       operand.value_name + " to " + target_type_name);
-    return;
-  }
-
-  if (detail::is_integer_category(from_category) &&
-      to_category == detail::ValueCategory::Pointer) {
-    append_instruction(dest_name + " = inttoptr " + operand.type_name + " " +
-                       operand.value_name + " to " + target_type_name);
     return;
   }
 

@@ -116,7 +116,7 @@ ValueCategory classify_type(mir::TypeId type_id) {
 		case type::PrimitiveKind::CHAR:
 			return ValueCategory::UnsignedInt;
 		case type::PrimitiveKind::STRING:
-			return ValueCategory::Pointer;
+			return ValueCategory::Other;
 		}
 	}
 	if (std::holds_alternative<type::ReferenceType>(resolved.value)) {
