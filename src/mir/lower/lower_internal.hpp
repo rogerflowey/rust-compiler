@@ -150,6 +150,7 @@ private:
 				  bool mutable_reference);
 	TempId materialize_place_base(const hir::Expr& base_expr,
 				 const semantic::ExprInfo& base_info);
+	Place make_index_place(const hir::Index& index_expr, bool allow_temporary_base);
 
 	template <typename T>
 	Place lower_place_impl(const T& node, const semantic::ExprInfo& info);

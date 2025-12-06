@@ -184,11 +184,6 @@ struct FieldAccessRValue {
     std::size_t index = 0;
 };
 
-struct IndexAccessRValue {
-    TempId base = 0;
-    TempId index = 0;
-};
-
 struct ConstantRValue {
     Constant constant;
 };
@@ -201,8 +196,7 @@ using RValueVariant = std::variant<
     AggregateRValue,
     ArrayRepeatRValue,
     CastRValue,
-    FieldAccessRValue,
-    IndexAccessRValue
+    FieldAccessRValue
 >;
 
 struct RValue {

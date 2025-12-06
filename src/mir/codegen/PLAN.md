@@ -308,10 +308,10 @@ void emit_define(const mir::DefineStatement &s) {
     * `zext`, `sext`, `trunc`, `bitcast`, `sitofp`, `fptosi`, `ptrtoint`, `inttoptr`, etc.
 * `FieldAccessRValue`:
 
-  * base is `TempId` of some aggregate value: emit 
-* `IndexAccessRValue`:
+  * base is `TempId` of some aggregate value: emit `extractvalue` from that SSA value.
+* Indexed access expressions:
 
-  * similar, but indexing arrays.
+  * lowered through `Place`/`LoadStatement` instead of an rvalue. Non-place bases spill to locals before indexing so codegen only deals with pointers.
 
 I’d strongly recommend **start small**:
 
@@ -520,9 +520,9 @@ Once basic scalar stuff works and you can run simple programs, add:
 
    * same pattern using `[N x T]` and loops if needed.
 
-3. **FieldAccessRValue** / **IndexAccessRValue** on value types:
+3. **FieldAccessRValue** on value types (indexed reads continue to use places):
 
-   * also go through a temporary alloca pattern for correctness first.
+  * also go through a temporary alloca pattern for correctness first.
 
 Later you can optimize with `insertvalue` / `extractvalue` once everything is stable.
 

@@ -53,20 +53,29 @@ Place FunctionLowerer::lower_place_impl(const hir::FieldAccess& field_access, co
 	return place;
 }
 
-Place FunctionLowerer::lower_place_impl(const hir::Index& index_expr, const semantic::ExprInfo&) {
+Place FunctionLowerer::make_index_place(const hir::Index& index_expr, bool allow_temporary_base) {
 	if (!index_expr.base || !index_expr.index) {
 		throw std::logic_error("Index expression missing base or index during MIR place lowering");
 	}
 	semantic::ExprInfo base_info = hir::helper::get_expr_info(*index_expr.base);
-	if (!base_info.is_place) {
-		throw std::logic_error("Index base is not a place during MIR place lowering");
+	Place place;
+	if (base_info.is_place) {
+		place = lower_expr_place(*index_expr.base);
+	} else {
+		if (!allow_temporary_base) {
+			throw std::logic_error("Index base is not a place during MIR place lowering");
+		}
+		place = ensure_reference_operand_place(*index_expr.base, base_info, false);
 	}
-	Place place = lower_expr_place(*index_expr.base);
 	semantic::ExprInfo idx_info = hir::helper::get_expr_info(*index_expr.index);
 	Operand idx_operand = lower_expr(*index_expr.index);
 	TempId index_temp = materialize_operand(idx_operand, idx_info.type);
 	place.projections.push_back(IndexProjection{index_temp});
 	return place;
+}
+
+Place FunctionLowerer::lower_place_impl(const hir::Index& index_expr, const semantic::ExprInfo&) {
+	return make_index_place(index_expr, false);
 }
 
 Place FunctionLowerer::lower_place_impl(const hir::UnaryOp& unary, const semantic::ExprInfo&) {
@@ -245,16 +254,8 @@ Operand FunctionLowerer::lower_expr_impl(const hir::Index& index_expr, const sem
 	if (info.is_place) {
 		return load_place_value(lower_place_impl(index_expr, info), info.type);
 	}
-	if (!index_expr.base || !index_expr.index) {
-		throw std::logic_error("Index expression missing base or index during MIR lowering");
-	}
-	semantic::ExprInfo base_info = hir::helper::get_expr_info(*index_expr.base);
-	TempId base_temp = materialize_place_base(*index_expr.base, base_info);
-	semantic::ExprInfo idx_info = hir::helper::get_expr_info(*index_expr.index);
-	Operand idx_operand = lower_expr(*index_expr.index);
-	TempId index_temp = materialize_operand(idx_operand, idx_info.type);
-	IndexAccessRValue index_rvalue{.base = base_temp, .index = index_temp};
-	return emit_rvalue(std::move(index_rvalue), info.type);
+	Place place = make_index_place(index_expr, true);
+	return load_place_value(std::move(place), info.type);
 }
 
 Operand FunctionLowerer::lower_expr_impl(const hir::Cast& cast_expr, const semantic::ExprInfo& info) {
