@@ -6,6 +6,8 @@ set(MIR_TEST_SOURCES
     test_mir_lower.cpp
     test_type_codegen.cpp
     test_mir_emitter.cpp
+    test_llvmbuilder.cpp
+    test_mir_codegen_switch.cpp
 )
 
 foreach(test_source ${MIR_TEST_SOURCES})
