@@ -13,9 +13,8 @@ src/
 ├── lexer/tests/      # Lexer component tests
 ├── parser/tests/     # Parser component tests
 ├── semantic/tests/   # Semantic analysis tests
-├── mir/tests/        # MIR lowering tests
+├── mir/tests/        # MIR lowering & LLVM builder tests
 lib/
-├── llvmbuilder/tests/ # Backend helpers
 ├── parsecpp/tests/    # Parsec combinator library
 ```
 

@@ -14,7 +14,7 @@ The LLVM builder is a tiny textual IR emission helper used by the compiler durin
 | Functions | `add_function(name, return_type, params)` automatically creates an entry block and normalizes `%`/`@` prefixes |
 | Block management | `entry_block()`, `create_block(label)` ensure unique labels and block ordering |
 | Arithmetic & logic | `emit_binary`, `emit_icmp` (supports optional flags such as `nsw`) |
-| SSA utilities | Automatic value naming with optional hints (e.g. `emit_binary(..., "sum")` → `%sum`) |
+| SSA utilities | Automatic value naming, plus deterministic `%tN` helpers for MIR temps |
 | Memory | `emit_alloca`, `emit_load`, `emit_store`, `emit_getelementptr` (with optional `align` and `inbounds`) |
 | Aggregate ops | `emit_phi`, `emit_extractvalue`, `emit_insertvalue` |
 | Casting | `emit_cast` for any LLVM cast opcode |
@@ -63,7 +63,7 @@ See `tests/test_builder.cpp` for a richer branching + `phi` example. The builder
 When adding new IR primitives:
 - Prefer implementing them as thin wrappers over `emit_instruction` / `emit_void_instruction` / `emit_terminator` to reuse existing validation.
 - Follow the sanitization/naming patterns found in `builder.cpp` so the IR stays deterministic across compilers.
-- Add regression coverage under `lib/llvmbuilder/tests/` mirroring the expected textual IR (Catch2/GTest compatible).
+- Add regression coverage under `src/mir/tests/test_llvmbuilder.cpp`, mirroring the expected textual IR (Catch2/GTest compatible).
 
 ## Testing
 ```

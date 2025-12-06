@@ -6,6 +6,7 @@
 #include "type/type.hpp"
 
 #include <cctype>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <variant>
@@ -70,14 +71,7 @@ std::string Emitter::emit() {
   for (const auto &function : mir_module_.functions) {
     emit_function(function);
   }
-  emit_struct_definitions();
   return module_.str();
-}
-
-void Emitter::emit_struct_definitions() {
-  for (const auto &definition : type_emitter_.struct_definitions()) {
-    module_.add_type_definition(definition.first, definition.second);
-  }
 }
 
 void Emitter::emit_globals() {
@@ -85,7 +79,7 @@ void Emitter::emit_globals() {
     const auto &global = mir_module_.globals[index];
     std::visit(Overloaded{[&](const mir::StringLiteralGlobal &literal) {
                std::string type_name =
-                   type_emitter_.get_type_name(type::get_typeID(type::Type{
+                   module_.get_type_name(type::get_typeID(type::Type{
                        type::ArrayType{type::get_typeID(type::Type{type::PrimitiveKind::CHAR}),
                                         literal.value.length}}));
                std::ostringstream decl;
@@ -100,21 +94,19 @@ void Emitter::emit_globals() {
 
 void Emitter::emit_function(const mir::MirFunction &function) {
   current_function_ = &function;
-  temp_names_.clear();
-  local_ptrs_.clear();
   block_builders_.clear();
 
   std::vector<llvmbuilder::FunctionParameter> params;
   params.reserve(function.params.size());
   for (const auto &param : function.params) {
     params.push_back(
-        llvmbuilder::FunctionParameter{type_emitter_.get_type_name(param.type),
+        llvmbuilder::FunctionParameter{module_.get_type_name(param.type),
                                        param.name});
   }
 
   current_function_builder_ =
       &module_.add_function(get_function_name(function.id),
-                            type_emitter_.get_type_name(function.return_type),
+                  module_.get_type_name(function.return_type),
                             std::move(params));
 
   block_builders_.emplace(function.start_block,
@@ -161,21 +153,17 @@ void Emitter::emit_entry_block_prologue() {
   auto &entry = *current_block_builder_;
   for (std::size_t idx = 0; idx < current_function_->locals.size(); ++idx) {
     const auto &local = current_function_->locals[idx];
-    std::string llvm_type = type_emitter_.get_type_name(local.type);
-    std::string ptr =
-        entry.emit_alloca(llvm_type, std::nullopt, std::nullopt, "l" + std::to_string(idx));
-    local_ptrs_.emplace(static_cast<mir::LocalId>(idx), std::move(ptr));
+    std::string llvm_type = module_.get_type_name(local.type);
+    entry.emit_alloca_into(local_ptr_name(static_cast<mir::LocalId>(idx)),
+                           llvm_type, std::nullopt, std::nullopt);
   }
 
   const auto &params = current_function_builder_->parameters();
   for (std::size_t idx = 0; idx < current_function_->params.size(); ++idx) {
     const auto &param = current_function_->params[idx];
-    auto it = local_ptrs_.find(param.local);
-    if (it == local_ptrs_.end()) {
-      throw std::logic_error("Parameter local pointer missing during prologue");
-    }
-    std::string type_name = type_emitter_.get_type_name(param.type);
-    entry.emit_store(type_name, params[idx].name, type_name + "*", it->second);
+    std::string type_name = module_.get_type_name(param.type);
+    entry.emit_store(type_name, params[idx].name, type_name + "*",
+                    local_ptr_name(param.local));
   }
 }
 
@@ -191,8 +179,7 @@ void Emitter::emit_statement(const mir::Statement &statement) {
 
 void Emitter::emit_define(const mir::DefineStatement &statement) {
   mir::TypeId dest_type = current_function_->get_temp_type(statement.dest);
-  auto result = translate_rvalue(dest_type, statement.rvalue, temp_hint(statement.dest));
-  temp_names_[statement.dest] = std::move(result.value_name);
+  emit_rvalue_into(statement.dest, dest_type, statement.rvalue);
 }
 
 void Emitter::emit_load(const mir::LoadStatement &statement) {
@@ -200,11 +187,12 @@ void Emitter::emit_load(const mir::LoadStatement &statement) {
   if (place.pointee_type == mir::invalid_type_id) {
     throw std::logic_error("Load source missing pointee type during codegen");
   }
-  std::string value_type = type_emitter_.get_type_name(place.pointee_type);
-  std::string name = current_block_builder_->emit_load(
-      value_type, pointer_type_name(place.pointee_type), place.pointer,
-      std::nullopt, temp_hint(statement.dest));
-  temp_names_[statement.dest] = std::move(name);
+  std::string value_type = module_.get_type_name(place.pointee_type);
+  current_block_builder_->emit_load_into(llvmbuilder::temp_name(statement.dest),
+                                         value_type,
+                                         pointer_type_name(place.pointee_type),
+                                         place.pointer,
+                                         std::nullopt);
 }
 
 void Emitter::emit_assign(const mir::AssignStatement &statement) {
@@ -227,12 +215,14 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
   }
 
   const auto &callee = mir_module_.functions.at(statement.function);
-  std::string ret_type = type_emitter_.get_type_name(callee.return_type);
-  auto result = current_block_builder_->emit_call(
-      ret_type, get_function_name(statement.function), args,
-      statement.dest ? temp_hint(*statement.dest) : std::string_view{});
-  if (statement.dest && result) {
-    temp_names_[*statement.dest] = *result;
+  std::string ret_type = module_.get_type_name(callee.return_type);
+  if (statement.dest) {
+    current_block_builder_->emit_call_into(
+        llvmbuilder::temp_name(*statement.dest), ret_type,
+        get_function_name(statement.function), args);
+  } else {
+    current_block_builder_->emit_call(
+        ret_type, get_function_name(statement.function), args, {});
   }
 }
 
@@ -240,14 +230,13 @@ void Emitter::emit_phi_nodes(const mir::PhiNode &phi_node) {
   std::vector<std::pair<std::string, std::string>> incomings;
   incomings.reserve(phi_node.incoming.size());
   std::string type_name =
-      type_emitter_.get_type_name(current_function_->get_temp_type(phi_node.dest));
+      module_.get_type_name(current_function_->get_temp_type(phi_node.dest));
   for (const auto &incoming : phi_node.incoming) {
     auto value = get_temp(incoming.value);
     incomings.emplace_back(value, block_builders_.at(incoming.block)->label());
   }
-  std::string phi_name = current_block_builder_->emit_phi(
-      type_name, incomings, temp_hint(phi_node.dest));
-  temp_names_[phi_node.dest] = std::move(phi_name);
+  current_block_builder_->emit_phi_into(llvmbuilder::temp_name(phi_node.dest),
+                                        type_name, incomings);
 }
 
 void Emitter::emit_terminator(const mir::Terminator &terminator) {
@@ -337,53 +326,52 @@ TranslatedPlace Emitter::translate_place(const mir::Place &place) {
                projection);
   }
 
-  std::string result = current_block_builder_->emit_getelementptr(
-      type_emitter_.get_type_name(gep_base_type),
+    std::string result = current_block_builder_->emit_getelementptr(
+      module_.get_type_name(gep_base_type),
       pointer_type_name(gep_base_type), base_pointer, indices, true, "proj");
 
   return TranslatedPlace{.pointer = std::move(result), .pointee_type = current_type};
 }
 
-TypedOperand Emitter::translate_rvalue(mir::TypeId dest_type,
-                                       const mir::RValue &rvalue,
-                                       std::string_view hint) {
-  return std::visit(
-      Overloaded{[&](const mir::ConstantRValue &value) {
-                   return emit_constant_rvalue(dest_type, value, hint);
-                 },
-                 [&](const mir::BinaryOpRValue &value) {
-                   return emit_binary_rvalue(value, hint);
-                 },
-                 [&](const mir::UnaryOpRValue &value) {
-                   return emit_unary_rvalue(dest_type, value, hint);
-                 },
-                 [&](const mir::RefRValue &value) {
-                   return emit_ref_rvalue(dest_type, value);
-                 },
-                 [&](const mir::AggregateRValue &value) {
-                   return emit_aggregate_rvalue(dest_type, value, hint);
-                 },
-                 [&](const mir::ArrayRepeatRValue &value) {
-                   return emit_array_repeat_rvalue(dest_type, value, hint);
-                 },
-                 [&](const mir::CastRValue &value) {
-                   return emit_cast_rvalue(dest_type, value, hint);
-                 },
-                 [&](const mir::FieldAccessRValue &value) {
-                   return emit_field_access_rvalue(value, hint);
-                 }},
-      rvalue.value);
+void Emitter::emit_rvalue_into(mir::TempId dest,
+                               mir::TypeId dest_type,
+                               const mir::RValue &rvalue) {
+  std::visit(Overloaded{[&](const mir::ConstantRValue &value) {
+                          emit_constant_rvalue_into(dest, dest_type, value);
+                        },
+                        [&](const mir::BinaryOpRValue &value) {
+                          emit_binary_rvalue_into(dest, value);
+                        },
+                        [&](const mir::UnaryOpRValue &value) {
+                          emit_unary_rvalue_into(dest, dest_type, value);
+                        },
+                        [&](const mir::RefRValue &value) {
+                          emit_ref_rvalue_into(dest, dest_type, value);
+                        },
+                        [&](const mir::AggregateRValue &value) {
+                          emit_aggregate_rvalue_into(dest, dest_type, value);
+                        },
+                        [&](const mir::ArrayRepeatRValue &value) {
+                          emit_array_repeat_rvalue_into(dest, dest_type, value);
+                        },
+                        [&](const mir::CastRValue &value) {
+                          emit_cast_rvalue_into(dest, dest_type, value);
+                        },
+                        [&](const mir::FieldAccessRValue &value) {
+                          emit_field_access_rvalue_into(dest, value);
+                        }},
+             rvalue.value);
 }
 
-TypedOperand Emitter::emit_constant_rvalue(mir::TypeId dest_type,
-                                           const mir::ConstantRValue &value,
-                                           std::string_view hint) {
-  return materialize_constant_operand(dest_type, value.constant, hint);
+void Emitter::emit_constant_rvalue_into(mir::TempId dest,
+                                        mir::TypeId dest_type,
+                                        const mir::ConstantRValue &value) {
+  materialize_constant_operand(dest_type, value.constant, dest);
 }
 
 TypedOperand Emitter::materialize_constant_operand(mir::TypeId fallback_type,
                                                    const mir::Constant &constant,
-                                                   std::string_view hint) {
+                                                   std::optional<mir::TempId> target_temp) {
   mir::TypeId const_type =
       constant.type == mir::invalid_type_id ? fallback_type : constant.type;
   if (const_type == mir::invalid_type_id) {
@@ -392,113 +380,120 @@ TypedOperand Emitter::materialize_constant_operand(mir::TypeId fallback_type,
   if (std::holds_alternative<mir::StringConstant>(constant.value)) {
     return emit_string_constant_operand(const_type,
                                         std::get<mir::StringConstant>(constant.value),
-                                        hint);
+                                        target_temp);
   }
-  std::string type_name = type_emitter_.get_type_name(const_type);
+
+  std::string type_name = module_.get_type_name(const_type);
+  std::string value_name;
+
   if (std::holds_alternative<mir::UnitConstant>(constant.value)) {
+    if (target_temp) {
+      materialize_constant_into_temp(*target_temp, type_name, "zeroinitializer");
+      value_name = llvmbuilder::temp_name(*target_temp);
+    } else {
+      value_name = "undef";
+    }
     return TypedOperand{.type_name = std::move(type_name),
-                       .value_name = "undef",
-                       .type = const_type};
+                        .value_name = std::move(value_name),
+                        .type = const_type};
   }
+
   std::string literal = format_constant_literal(constant);
-  std::string name = current_block_builder_->emit_binary(
-      "add", type_name, "0", literal, hint);
+  if (target_temp) {
+    value_name = current_block_builder_->emit_binary_into(
+        llvmbuilder::temp_name(*target_temp), "add", type_name, "0", literal, {});
+  } else {
+    value_name = current_block_builder_->emit_binary(
+        "add", type_name, "0", literal, {});
+  }
   return TypedOperand{.type_name = std::move(type_name),
-                      .value_name = std::move(name),
+                      .value_name = std::move(value_name),
                       .type = const_type};
 }
 
-TypedOperand Emitter::emit_binary_rvalue(const mir::BinaryOpRValue &value,
-                                         std::string_view hint) {
+void Emitter::emit_binary_rvalue_into(mir::TempId dest,
+                                      const mir::BinaryOpRValue &value) {
   auto lhs = get_typed_operand(value.lhs);
   auto rhs = get_typed_operand(value.rhs);
   auto spec = detail::classify_binary_op(value.kind);
   if (spec.is_compare) {
-    std::string name = current_block_builder_->emit_icmp(spec.predicate, lhs.type_name,
-                                                         lhs.value_name, rhs.value_name,
-                                                         hint);
-    return TypedOperand{.type_name = "i1", .value_name = std::move(name),
-                        .type = type::get_typeID(type::Type{type::PrimitiveKind::BOOL})};
+    current_block_builder_->emit_icmp_into(llvmbuilder::temp_name(dest), spec.predicate,
+                                           lhs.type_name, lhs.value_name, rhs.value_name);
+    return;
   }
-  std::string name = current_block_builder_->emit_binary(
-      spec.opcode, lhs.type_name, lhs.value_name, rhs.value_name, hint);
-  return TypedOperand{.type_name = lhs.type_name, .value_name = std::move(name),
-                      .type = lhs.type};
+  current_block_builder_->emit_binary_into(llvmbuilder::temp_name(dest), spec.opcode,
+                                           lhs.type_name, lhs.value_name, rhs.value_name, {});
 }
 
-TypedOperand Emitter::emit_unary_rvalue(mir::TypeId dest_type,
-                                        const mir::UnaryOpRValue &value,
-                                        std::string_view hint) {
+void Emitter::emit_unary_rvalue_into(mir::TempId dest,
+                                     mir::TypeId dest_type,
+                                     const mir::UnaryOpRValue &value) {
   auto operand = get_typed_operand(value.operand);
   auto category = detail::classify_type(operand.type);
   switch (value.kind) {
   case mir::UnaryOpRValue::Kind::Not: {
     std::string rhs = category == detail::ValueCategory::Bool ? "1" : "-1";
-    std::string name = current_block_builder_->emit_binary(
-        "xor", operand.type_name, operand.value_name, rhs, hint);
-    return TypedOperand{.type_name = operand.type_name, .value_name = std::move(name),
-                        .type = operand.type};
+    current_block_builder_->emit_binary_into(llvmbuilder::temp_name(dest), "xor",
+                                             operand.type_name, operand.value_name, rhs, {});
+    return;
   }
   case mir::UnaryOpRValue::Kind::Neg: {
-    std::string name = current_block_builder_->emit_binary(
-        "sub", operand.type_name, "0", operand.value_name, hint);
-    return TypedOperand{.type_name = operand.type_name, .value_name = std::move(name),
-                        .type = operand.type};
+    current_block_builder_->emit_binary_into(llvmbuilder::temp_name(dest), "sub",
+                                             operand.type_name, "0", operand.value_name, {});
+    return;
   }
   case mir::UnaryOpRValue::Kind::Deref: {
-    std::string pointee_type = type_emitter_.get_type_name(dest_type);
-    std::string name = current_block_builder_->emit_load(
-        pointee_type, pointer_type_name(dest_type), operand.value_name, std::nullopt,
-        hint);
-    return TypedOperand{.type_name = std::move(pointee_type),
-                        .value_name = std::move(name),
-                        .type = dest_type};
+    std::string pointee_type = module_.get_type_name(dest_type);
+    current_block_builder_->emit_load_into(llvmbuilder::temp_name(dest), pointee_type,
+                                           pointer_type_name(dest_type), operand.value_name,
+                                           std::nullopt);
+    return;
   }
   }
   throw std::logic_error("Unhandled unary operation during codegen");
 }
 
-TypedOperand Emitter::emit_ref_rvalue(mir::TypeId dest_type,
-                                      const mir::RefRValue &value) {
+void Emitter::emit_ref_rvalue_into(mir::TempId dest,
+                                   mir::TypeId dest_type,
+                                   const mir::RefRValue &value) {
   TranslatedPlace place = translate_place(value.place);
   if (place.pointee_type == mir::invalid_type_id) {
     throw std::logic_error("Reference place missing pointee type during codegen");
   }
-  std::string dest_type_name = type_emitter_.get_type_name(dest_type);
-  return TypedOperand{.type_name = std::move(dest_type_name),
-                      .value_name = place.pointer,
-                      .type = dest_type};
+  std::string dest_type_name = module_.get_type_name(dest_type);
+  current_block_builder_->emit_cast_into(llvmbuilder::temp_name(dest), "bitcast",
+                                         pointer_type_name(place.pointee_type),
+                                         place.pointer, dest_type_name);
 }
 
-TypedOperand Emitter::emit_aggregate_rvalue(mir::TypeId dest_type,
-                                            const mir::AggregateRValue &value,
-                                            std::string_view hint) {
-  std::string aggregate_type = type_emitter_.get_type_name(dest_type);
+void Emitter::emit_aggregate_rvalue_into(mir::TempId dest,
+                                         mir::TypeId dest_type,
+                                         const mir::AggregateRValue &value) {
+  std::string aggregate_type = module_.get_type_name(dest_type);
   if (value.elements.empty()) {
-    return TypedOperand{.type_name = std::move(aggregate_type),
-                        .value_name = "undef",
-                        .type = dest_type};
+    materialize_constant_into_temp(dest, aggregate_type, "zeroinitializer");
+    return;
   }
 
   std::string current_value = "undef";
-  std::string last_name;
   for (std::size_t index = 0; index < value.elements.size(); ++index) {
     auto element = get_typed_operand(value.elements[index]);
-    last_name = current_block_builder_->emit_insertvalue(
-        aggregate_type, current_value, element.type_name, element.value_name,
-        {static_cast<unsigned>(index)}, index + 1 == value.elements.size() ? hint :
-                                                      std::string_view{});
-    current_value = last_name;
+    bool is_last = index + 1 == value.elements.size();
+    if (is_last) {
+      current_value = current_block_builder_->emit_insertvalue_into(
+          llvmbuilder::temp_name(dest), aggregate_type, current_value,
+          element.type_name, element.value_name, {static_cast<unsigned>(index)});
+    } else {
+      current_value = current_block_builder_->emit_insertvalue(
+          aggregate_type, current_value, element.type_name, element.value_name,
+          {static_cast<unsigned>(index)}, {});
+    }
   }
-
-  return TypedOperand{.type_name = std::move(aggregate_type),
-                      .value_name = std::move(last_name),
-                      .type = dest_type};
 }
 
-TypedOperand Emitter::emit_array_repeat_rvalue(
-    mir::TypeId dest_type, const mir::ArrayRepeatRValue &value,
-    std::string_view hint) {
+void Emitter::emit_array_repeat_rvalue_into(mir::TempId dest,
+                                            mir::TypeId dest_type,
+                                            const mir::ArrayRepeatRValue &value) {
   const auto &resolved = type::get_type_from_id(dest_type);
   const auto *array_type = std::get_if<type::ArrayType>(&resolved.value);
   if (!array_type) {
@@ -507,32 +502,32 @@ TypedOperand Emitter::emit_array_repeat_rvalue(
   if (array_type->size != value.count) {
     throw std::logic_error("Array repeat count mismatch during codegen");
   }
-  std::string aggregate_type = type_emitter_.get_type_name(dest_type);
+  std::string aggregate_type = module_.get_type_name(dest_type);
   if (value.count == 0) {
-    return TypedOperand{.type_name = std::move(aggregate_type),
-                        .value_name = "undef",
-                        .type = dest_type};
+    materialize_constant_into_temp(dest, aggregate_type, "zeroinitializer");
+    return;
   }
 
   auto element_operand = get_typed_operand(value.value);
   std::string current_value = "undef";
-  std::string last_name;
   for (std::size_t index = 0; index < value.count; ++index) {
-    last_name = current_block_builder_->emit_insertvalue(
-        aggregate_type, current_value, element_operand.type_name,
-        element_operand.value_name, {static_cast<unsigned>(index)},
-        index + 1 == value.count ? hint : std::string_view{});
-    current_value = last_name;
+    bool is_last = index + 1 == value.count;
+    if (is_last) {
+      current_value = current_block_builder_->emit_insertvalue_into(
+          llvmbuilder::temp_name(dest), aggregate_type, current_value,
+          element_operand.type_name, element_operand.value_name,
+          {static_cast<unsigned>(index)});
+    } else {
+      current_value = current_block_builder_->emit_insertvalue(
+          aggregate_type, current_value, element_operand.type_name,
+          element_operand.value_name, {static_cast<unsigned>(index)}, {});
+    }
   }
-
-  return TypedOperand{.type_name = std::move(aggregate_type),
-                      .value_name = std::move(last_name),
-                      .type = dest_type};
 }
 
-TypedOperand Emitter::emit_cast_rvalue(mir::TypeId dest_type,
-                                       const mir::CastRValue &value,
-                                       std::string_view hint) {
+void Emitter::emit_cast_rvalue_into(mir::TempId dest,
+                                    mir::TypeId dest_type,
+                                    const mir::CastRValue &value) {
   mir::TypeId target_type = value.target_type == mir::invalid_type_id
                                 ? dest_type
                                 : value.target_type;
@@ -540,11 +535,11 @@ TypedOperand Emitter::emit_cast_rvalue(mir::TypeId dest_type,
     throw std::logic_error("Cast rvalue missing target type during codegen");
   }
   auto operand = get_typed_operand(value.value);
-  std::string target_type_name = type_emitter_.get_type_name(target_type);
+  std::string target_type_name = module_.get_type_name(target_type);
   if (operand.type == target_type) {
-    return TypedOperand{.type_name = std::move(target_type_name),
-                        .value_name = operand.value_name,
-                        .type = target_type};
+    current_block_builder_->emit_binary_into(llvmbuilder::temp_name(dest), "add",
+                                             target_type_name, operand.value_name, "0", {});
+    return;
   }
   auto from_category = detail::classify_type(operand.type);
   auto to_category = detail::classify_type(target_type);
@@ -556,72 +551,62 @@ TypedOperand Emitter::emit_cast_rvalue(mir::TypeId dest_type,
     if (to_bits > from_bits) {
       const char *op = from_category == detail::ValueCategory::SignedInt ? "sext"
                                                                          : "zext";
-      std::string name = current_block_builder_->emit_cast(
-          op, operand.type_name, operand.value_name, target_type_name, hint);
-      return TypedOperand{.type_name = std::move(target_type_name),
-                          .value_name = std::move(name),
-                          .type = target_type};
+      current_block_builder_->emit_cast_into(llvmbuilder::temp_name(dest), op,
+                                             operand.type_name, operand.value_name,
+                                             target_type_name);
+      return;
     }
     if (to_bits < from_bits) {
-      std::string name = current_block_builder_->emit_cast(
-          "trunc", operand.type_name, operand.value_name, target_type_name, hint);
-      return TypedOperand{.type_name = std::move(target_type_name),
-                          .value_name = std::move(name),
-                          .type = target_type};
+      current_block_builder_->emit_cast_into(llvmbuilder::temp_name(dest), "trunc",
+                                             operand.type_name, operand.value_name,
+                                             target_type_name);
+      return;
     }
-    return TypedOperand{.type_name = std::move(target_type_name),
-                        .value_name = operand.value_name,
-                        .type = target_type};
+    current_block_builder_->emit_binary_into(llvmbuilder::temp_name(dest), "add",
+                                             target_type_name, operand.value_name, "0", {});
+    return;
   }
 
   if (from_category == detail::ValueCategory::Pointer &&
       to_category == detail::ValueCategory::Pointer) {
-    std::string name = current_block_builder_->emit_cast(
-        "bitcast", operand.type_name, operand.value_name, target_type_name, hint);
-    return TypedOperand{.type_name = std::move(target_type_name),
-                        .value_name = std::move(name),
-                        .type = target_type};
+    current_block_builder_->emit_cast_into(llvmbuilder::temp_name(dest), "bitcast",
+                                           operand.type_name, operand.value_name,
+                                           target_type_name);
+    return;
   }
 
   throw std::logic_error("Unsupported cast combination during codegen");
 }
 
-TypedOperand Emitter::emit_field_access_rvalue(
-    const mir::FieldAccessRValue &value, std::string_view hint) {
+void Emitter::emit_field_access_rvalue_into(
+    mir::TempId dest, const mir::FieldAccessRValue &value) {
   auto base_type = current_function_->get_temp_type(value.base);
-  std::string base_type_name = type_emitter_.get_type_name(base_type);
-  std::string name = current_block_builder_->emit_extractvalue(
-      base_type_name, get_temp(value.base), {static_cast<unsigned>(value.index)},
-      hint);
-  auto result_type =
-      type::helper::type_helper::field(base_type, value.index).value_or(base_type);
-  std::string result_type_name = type_emitter_.get_type_name(result_type);
-  return TypedOperand{.type_name = std::move(result_type_name),
-                      .value_name = std::move(name),
-                      .type = result_type};
+  std::string base_type_name = module_.get_type_name(base_type);
+    current_block_builder_->emit_extractvalue_into(
+      llvmbuilder::temp_name(dest), base_type_name, get_temp(value.base),
+      {static_cast<unsigned>(value.index)});
 }
 
 std::string Emitter::get_temp(mir::TempId temp) {
-  auto it = temp_names_.find(temp);
-  if (it == temp_names_.end()) {
-    throw std::logic_error("Temp used before definition during codegen");
-  }
-  return it->second;
+  return llvmbuilder::temp_name(temp);
 }
 
 std::string Emitter::get_local_ptr(mir::LocalId local) {
-  auto it = local_ptrs_.find(local);
-  if (it == local_ptrs_.end()) {
+  if (local >= current_function_->locals.size()) {
     throw std::out_of_range("Invalid LocalId");
   }
-  return it->second;
+  return local_ptr_name(local);
+}
+
+std::string Emitter::local_ptr_name(mir::LocalId local) const {
+  return "%local_" + std::to_string(local);
 }
 
 TypedOperand Emitter::get_typed_operand(const mir::Operand &operand) {
   return std::visit(
       Overloaded{[&](const mir::TempId &temp) -> TypedOperand {
                    auto type = current_function_->get_temp_type(temp);
-                   std::string type_name = type_emitter_.get_type_name(type);
+             std::string type_name = module_.get_type_name(type);
                    return TypedOperand{.type_name = std::move(type_name),
                                        .value_name = get_temp(temp),
                                        .type = type};
@@ -649,11 +634,7 @@ std::string Emitter::get_global(mir::GlobalId id) const {
 }
 
 std::string Emitter::pointer_type_name(mir::TypeId pointee_type) {
-  return type_emitter_.get_type_name(pointee_type) + "*";
-}
-
-std::string Emitter::temp_hint(mir::TempId temp) const {
-  return "t" + std::to_string(temp);
+  return module_.pointer_type_name(pointee_type);
 }
 
 std::string Emitter::format_constant_literal(const mir::Constant &constant) {
@@ -676,66 +657,29 @@ std::string Emitter::format_constant_literal(const mir::Constant &constant) {
                    constant.value);
 }
 
-TypedOperand Emitter::emit_string_constant_operand(mir::TypeId type,
-                                                   const mir::StringConstant &constant,
-                                                   std::string_view hint) {
-  std::string global_name = ensure_string_global(constant);
-
-  type::ArrayType array_type{};
-  array_type.element_type = type::get_typeID(type::Type{type::PrimitiveKind::CHAR});
-  array_type.size = constant.data.size();
-  mir::TypeId array_type_id = type::get_typeID(type::Type{array_type});
-  std::string array_type_name = type_emitter_.get_type_name(array_type_id);
-
-  std::vector<std::pair<std::string, std::string>> indices;
-  indices.emplace_back("i32", "0");
-  indices.emplace_back("i32", "0");
-
-  std::string element_pointer = current_block_builder_->emit_getelementptr(
-      array_type_name, array_type_name + "*", global_name, indices, true,
-      hint);
-
-  std::string dest_type_name = type_emitter_.get_type_name(type);
-  std::string char_pointer_type =
-      type_emitter_.get_type_name(type::get_typeID(
-          type::Type{type::PrimitiveKind::CHAR})) + "*";
-
-  if (dest_type_name != char_pointer_type) {
-    element_pointer = current_block_builder_->emit_cast(
-        "bitcast", char_pointer_type, element_pointer, dest_type_name, hint);
-  }
-
-  return TypedOperand{.type_name = std::move(dest_type_name),
-                      .value_name = std::move(element_pointer),
-                      .type = type};
+void Emitter::materialize_constant_into_temp(mir::TempId dest,
+                                             const std::string &type_name,
+                                             const std::string &literal) {
+  auto &entry = current_function_builder_->entry_block();
+  std::string scratch = entry.emit_alloca(type_name, std::nullopt, std::nullopt, "const.tmp");
+  entry.emit_store(type_name, literal, type_name + "*", scratch);
+  current_block_builder_->emit_load_into(llvmbuilder::temp_name(dest), type_name,
+                                         type_name + "*", scratch, std::nullopt);
 }
 
-std::string Emitter::ensure_string_global(const mir::StringConstant &constant) {
-  StringLiteralKey key;
-  key.data = constant.data;
-  key.is_cstyle = constant.is_cstyle;
-
-  auto it = string_literal_globals_.find(key);
-  if (it != string_literal_globals_.end()) {
-    return it->second;
+TypedOperand Emitter::emit_string_constant_operand(mir::TypeId type,
+                                                   const mir::StringConstant &constant,
+                                                   std::optional<mir::TempId> target_temp) {
+  std::optional<std::string> forced_name;
+  if (target_temp) {
+    forced_name = llvmbuilder::temp_name(*target_temp);
   }
-
-  std::string name = "@str." + std::to_string(next_string_global_id_++);
-
-  type::ArrayType array_type{};
-  array_type.element_type = type::get_typeID(type::Type{type::PrimitiveKind::CHAR});
-  array_type.size = constant.data.size();
-  mir::TypeId array_type_id = type::get_typeID(type::Type{array_type});
-  std::string array_type_name = type_emitter_.get_type_name(array_type_id);
-
-  std::ostringstream decl;
-  decl << name << " = private unnamed_addr constant " << array_type_name << " c\""
-       << escape_string_literal(constant.data) << "\"";
-  module_.add_global(decl.str());
-
-  auto [inserted, _] =
-      string_literal_globals_.emplace(std::move(key), name);
-  return inserted->second;
+  std::string value_name = module_.emit_string_literal(
+      *current_block_builder_, constant, type, forced_name, {});
+  std::string dest_type_name = module_.get_type_name(type);
+  return TypedOperand{.type_name = std::move(dest_type_name),
+                      .value_name = forced_name ? *forced_name : std::move(value_name),
+                      .type = type};
 }
 
 } // namespace codegen

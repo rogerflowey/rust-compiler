@@ -1,9 +1,9 @@
 #pragma once
-#include "mir/codegen/type.hpp"
 #include "mir/mir.hpp"
-#include "llvmbuilder/builder.hpp"
+#include "mir/codegen/llvmbuilder/builder.hpp"
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -36,14 +36,11 @@ public:
 
 private:
   mir::MirModule &mir_module_;
-  TypeEmitter type_emitter_;
   const mir::MirFunction *current_function_ = nullptr;
   llvmbuilder::ModuleBuilder module_;
   llvmbuilder::FunctionBuilder *current_function_builder_ = nullptr;
   llvmbuilder::BasicBlockBuilder *current_block_builder_ = nullptr;
 
-  std::unordered_map<mir::TempId, std::string> temp_names_;
-  std::unordered_map<mir::LocalId, std::string> local_ptrs_;
   std::unordered_map<mir::BasicBlockId, llvmbuilder::BasicBlockBuilder *> block_builders_;
 
   std::string target_triple_;
@@ -61,74 +58,53 @@ private:
   void emit_load(const mir::LoadStatement &statement);
   void emit_assign(const mir::AssignStatement &statement);
   void emit_call(const mir::CallStatement &statement);
-  void emit_struct_definitions();
 
   // translation helpers: both emit and get_*
   TranslatedPlace translate_place(const mir::Place &place);
-  TypedOperand translate_rvalue(mir::TypeId dest_type, const mir::RValue &rvalue,
-                                std::string_view hint = {});
-  TypedOperand emit_constant_rvalue(mir::TypeId dest_type,
-                                    const mir::ConstantRValue &value,
-                                    std::string_view hint);
+  void emit_rvalue_into(mir::TempId dest, mir::TypeId dest_type, const mir::RValue &rvalue);
+  void emit_constant_rvalue_into(mir::TempId dest,
+                                 mir::TypeId dest_type,
+                                 const mir::ConstantRValue &value);
   TypedOperand materialize_constant_operand(mir::TypeId fallback_type,
                                             const mir::Constant &constant,
-                                            std::string_view hint);
-  TypedOperand emit_binary_rvalue(const mir::BinaryOpRValue &value,
-                                  std::string_view hint);
-  TypedOperand emit_unary_rvalue(mir::TypeId dest_type,
-                                 const mir::UnaryOpRValue &value,
-                                 std::string_view hint);
-  TypedOperand emit_ref_rvalue(mir::TypeId dest_type, const mir::RefRValue &value);
-  TypedOperand emit_aggregate_rvalue(mir::TypeId dest_type,
-                                     const mir::AggregateRValue &value,
-                                     std::string_view hint);
-  TypedOperand emit_array_repeat_rvalue(mir::TypeId dest_type,
-                                        const mir::ArrayRepeatRValue &value,
-                                        std::string_view hint);
-  TypedOperand emit_cast_rvalue(mir::TypeId dest_type, const mir::CastRValue &value,
-                                std::string_view hint);
-  TypedOperand emit_field_access_rvalue(const mir::FieldAccessRValue &value,
-                                        std::string_view hint);
+                                            std::optional<mir::TempId> target_temp = std::nullopt);
+  void emit_binary_rvalue_into(mir::TempId dest, const mir::BinaryOpRValue &value);
+  void emit_unary_rvalue_into(mir::TempId dest,
+                              mir::TypeId dest_type,
+                              const mir::UnaryOpRValue &value);
+  void emit_ref_rvalue_into(mir::TempId dest,
+                            mir::TypeId dest_type,
+                            const mir::RefRValue &value);
+  void emit_aggregate_rvalue_into(mir::TempId dest,
+                                  mir::TypeId dest_type,
+                                  const mir::AggregateRValue &value);
+  void emit_array_repeat_rvalue_into(mir::TempId dest,
+                                     mir::TypeId dest_type,
+                                     const mir::ArrayRepeatRValue &value);
+  void emit_cast_rvalue_into(mir::TempId dest,
+                             mir::TypeId dest_type,
+                             const mir::CastRValue &value);
+  void emit_field_access_rvalue_into(mir::TempId dest,
+                                     const mir::FieldAccessRValue &value);
 
   // lookup helpers
   std::string get_temp(mir::TempId temp);
   std::string get_local_ptr(mir::LocalId local);
+  std::string local_ptr_name(mir::LocalId local) const;
   TypedOperand get_typed_operand(const mir::Operand &operand);
   std::string get_block_label(mir::BasicBlockId block_id) const;
   std::string get_function_name(mir::FunctionId id) const;
   std::string get_global(mir::GlobalId id) const;
   std::string pointer_type_name(mir::TypeId pointee_type);
-  std::string temp_hint(mir::TempId temp) const;
 
   // helpers
   std::string format_constant_literal(const mir::Constant &constant);
   TypedOperand emit_string_constant_operand(mir::TypeId type,
                                             const mir::StringConstant &constant,
-                                            std::string_view hint);
-  std::string ensure_string_global(const mir::StringConstant &constant);
-
-  struct StringLiteralKey {
-    std::string data;
-    bool is_cstyle = false;
-
-    bool operator==(const StringLiteralKey &other) const {
-      return is_cstyle == other.is_cstyle && data == other.data;
-    }
-  };
-
-  struct StringLiteralHasher {
-    std::size_t operator()(const StringLiteralKey &key) const noexcept {
-      std::size_t hash = std::hash<std::string>{}(key.data);
-      std::size_t flag = key.is_cstyle ? 0x9e3779b97f4a7c15ull
-                                       : 0x7f4a7c159e3779b9ull;
-      hash ^= flag + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-      return hash;
-    }
-  };
-
-  std::unordered_map<StringLiteralKey, std::string, StringLiteralHasher>
-      string_literal_globals_;
-  std::size_t next_string_global_id_ = 0;
+                                            std::optional<mir::TempId> target_temp = std::nullopt);
+  void materialize_constant_into_temp(mir::TempId dest,
+                                      const std::string &type_name,
+                                      const std::string &literal);
 };
 
 } // namespace codegen

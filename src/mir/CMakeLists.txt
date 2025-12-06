@@ -13,7 +13,6 @@ target_include_directories(mir
 
 target_link_libraries(mir
         PUBLIC
-                llvmbuilder
                 type
 )
 
