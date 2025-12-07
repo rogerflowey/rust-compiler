@@ -224,8 +224,11 @@ std::optional<Operand> FunctionLowerer::lower_expr_impl(const hir::EnumVariant& 
                 if (!enum_variant.enum_def) {
                         throw std::logic_error("Enum variant missing enum definition during MIR lowering");
                 }
-                auto enum_id = type::TypeContext::get_instance().get_or_register_enum(enum_variant.enum_def);
-                type = type::get_typeID(type::Type{type::EnumType{enum_id}});
+                auto enum_id_opt = type::TypeContext::get_instance().try_get_enum_id(enum_variant.enum_def);
+                if (!enum_id_opt) {
+                    throw std::logic_error("Enum not registered during MIR lowering. Enum registration passes must complete before lowering.");
+                }
+                type = type::get_typeID(type::Type{type::EnumType{*enum_id_opt}});
         }
         Constant constant = lower_enum_variant(enum_variant, type);
         return make_constant_operand(constant);

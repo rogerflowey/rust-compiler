@@ -52,26 +52,6 @@ EnumInfo TypeContext::make_enum_info(const hir::EnumDef& def) {
     return info;
 }
 
-StructId TypeContext::get_or_register_struct(const hir::StructDef* def) {
-    auto it = struct_ids.find(def);
-    if (it != struct_ids.end()) {
-        return it->second;
-    }
-    StructId id = register_struct(make_struct_info(*def), def);
-    struct_ids.emplace(def, id);
-    return id;
-}
-
-EnumId TypeContext::get_or_register_enum(const hir::EnumDef* def) {
-    auto it = enum_ids.find(def);
-    if (it != enum_ids.end()) {
-        return it->second;
-    }
-    EnumId id = register_enum(make_enum_info(*def), def);
-    enum_ids.emplace(def, id);
-    return id;
-}
-
 const Type& TypeContext::get_type(TypeId id) const {
     if (id == invalid_type_id) {
         throw std::out_of_range("Attempted to access invalid TypeId");

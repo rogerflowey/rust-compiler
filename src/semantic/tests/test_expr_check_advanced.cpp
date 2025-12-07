@@ -26,10 +26,22 @@ protected:
         string_array_3_type = semantic::get_typeID(test::helpers::SemanticType{semantic::ArrayType{string_type, 3}});
         struct_ref_type = semantic::get_typeID(test::helpers::SemanticType{semantic::ReferenceType{struct_type, false}});
         
-        // Create test enum
+        // Create and register test enum
         test_enum_def = std::make_unique<hir::EnumDef>();
         test_enum_def->variants.push_back(semantic::EnumVariant{.name = ast::Identifier{"Variant1"}});
         test_enum_def->variants.push_back(semantic::EnumVariant{.name = ast::Identifier{"Variant2"}});
+        
+        // Register the enum (skeleton registration)
+        semantic::TypeContext::get_instance().register_enum(
+            type::EnumInfo{
+                .name = "TestEnum",
+                .variants = {
+                    type::EnumVariantInfo{.name = "Variant1"},
+                    type::EnumVariantInfo{.name = "Variant2"}
+                }
+            },
+            test_enum_def.get()
+        );
     }
     
     // Additional types for advanced tests
@@ -193,8 +205,9 @@ TEST_F(ExprCheckAdvancedTest, EnumVariantExpression) {
     
     auto expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(*enum_variant)});
     auto info = expr_checker->check(*expr);
-    auto enum_id = semantic::TypeContext::get_instance().get_or_register_enum(test_enum_def.get());
-    EXPECT_EQ(info.type, semantic::get_typeID(test::helpers::SemanticType{semantic::EnumType{enum_id}}));
+    auto enum_id_opt = semantic::TypeContext::get_instance().try_get_enum_id(test_enum_def.get());
+    ASSERT_TRUE(enum_id_opt);
+    EXPECT_EQ(info.type, semantic::get_typeID(test::helpers::SemanticType{semantic::EnumType{*enum_id_opt}}));
     EXPECT_FALSE(info.is_mut);
     EXPECT_FALSE(info.is_place);
     EXPECT_TRUE(info.has_normal_endpoint());

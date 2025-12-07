@@ -88,8 +88,24 @@ inline TypeId primitive_string_type() {
 }
 
 inline TypeId string_struct_type() {
-    static const StructId struct_id = TypeContext::get_instance().get_or_register_struct(&struct_String);
-    static const TypeId id = get_typeID(Type{StructType{.id = struct_id}});
+    static bool initialized = false;
+    static TypeId id;
+    
+    if (!initialized) {
+        // Lazy registration of predefined String struct
+        // This happens on first call to ensure TypeContext singleton is ready
+        type::StructInfo string_info;
+        string_info.name = "String";
+        // String struct has no fields in this compiler's design
+        TypeContext::get_instance().register_struct(std::move(string_info), &struct_String);
+        
+        auto struct_id_opt = TypeContext::get_instance().try_get_struct_id(&struct_String);
+        if (!struct_id_opt) {
+            throw std::logic_error("Failed to register predefined String struct");
+        }
+        id = get_typeID(Type{StructType{.id = *struct_id_opt}});
+        initialized = true;
+    }
     return id;
 }
 

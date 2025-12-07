@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <limits>
@@ -137,6 +138,9 @@ public:
         StructId id = static_cast<StructId>(structs.size());
         structs.push_back(std::move(info));
         struct_defs.push_back(def);
+        if (def) {
+            struct_ids.emplace(def, id);
+        }
         return id;
     }
 
@@ -144,11 +148,40 @@ public:
         EnumId id = static_cast<EnumId>(enums.size());
         enums.push_back(std::move(info));
         enum_defs.push_back(def);
+        if (def) {
+            enum_ids.emplace(def, id);
+        }
         return id;
     }
 
-    StructId get_or_register_struct(const hir::StructDef* def);
-    EnumId get_or_register_enum(const hir::EnumDef* def);
+    // Lookup methods: get the ID for an already-registered struct/enum
+    // Returns invalid_struct_id (std::numeric_limits<StructId>::max()) if not found
+    StructId get_struct_id(const hir::StructDef* def) const {
+        auto it = struct_ids.find(def);
+        return it != struct_ids.end() ? it->second : std::numeric_limits<StructId>::max();
+    }
+    
+    // Returns invalid_enum_id (std::numeric_limits<EnumId>::max()) if not found
+    EnumId get_enum_id(const hir::EnumDef* def) const {
+        auto it = enum_ids.find(def);
+        return it != enum_ids.end() ? it->second : std::numeric_limits<EnumId>::max();
+    }
+
+    // Safer lookup: returns std::optional, forcing explicit handling of missing IDs
+    // Preferred over get_struct_id() for new code
+    std::optional<StructId> try_get_struct_id(const hir::StructDef* def) const {
+        if (!def) return std::nullopt;
+        auto it = struct_ids.find(def);
+        if (it != struct_ids.end()) return it->second;
+        return std::nullopt;
+    }
+    
+    std::optional<EnumId> try_get_enum_id(const hir::EnumDef* def) const {
+        if (!def) return std::nullopt;
+        auto it = enum_ids.find(def);
+        if (it != enum_ids.end()) return it->second;
+        return std::nullopt;
+    }
 
     const StructInfo& get_struct(StructId id) const { return structs.at(id); }
     const EnumInfo& get_enum(EnumId id) const { return enums.at(id); }

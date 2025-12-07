@@ -263,7 +263,6 @@ ExprInfo ExprChecker::check(hir::FieldAccess &expr, TypeExpectation) {
   }
 
   const auto& struct_info = TypeContext::get_instance().get_struct(struct_type->id);
-  auto* struct_def = TypeContext::get_instance().get_struct_def(struct_type->id);
 
   // resolve field
   std::size_t field_id = std::visit(Overloaded{
@@ -284,9 +283,14 @@ ExprInfo ExprChecker::check(hir::FieldAccess &expr, TypeExpectation) {
 
   expr.field = field_id;
   TypeId type = struct_info.fields[field_id].type;
-  if (type == invalid_type_id && struct_def && field_id < struct_def->field_type_annotations.size()) {
-      auto& annotation = struct_def->field_type_annotations[field_id];
-      type = context.type_query(annotation);
+  
+  // Type must be resolved by StructEnumRegistrationPass
+  // If it's still invalid, that's an internal error in semantic pass ordering
+  if (type == invalid_type_id) {
+    throw std::logic_error(
+      "Internal error: struct field type not resolved by registration pass. "
+      "StructEnumRegistrationPass must run before semantic checking."
+    );
   }
   const bool is_place = base_info.is_place;
   return ExprInfo{.type = type,
@@ -340,8 +344,17 @@ ExprInfo ExprChecker::check(hir::StructLiteral &expr, TypeExpectation) {
   auto struct_def = get_struct_def(expr);
   const auto &fields = get_canonical_fields(expr).initializers;
 
-  if (fields.size() != struct_def->fields.size()) {
-    throw_in_context("Struct literal for '" + get_name(*struct_def).name +
+  // Get the struct ID from TypeContext using the definition pointer
+  // Must use try_get_struct_id since registration already happened in StructEnumRegistrationPass
+  auto struct_id_opt = TypeContext::get_instance().try_get_struct_id(struct_def);
+  if (!struct_id_opt) {
+    throw_in_context("Internal error: struct not registered. StructEnumRegistrationPass must run before semantic checking.", expr.span);
+  }
+  auto struct_id = *struct_id_opt;
+  const auto& struct_info = TypeContext::get_instance().get_struct(struct_id);
+
+  if (fields.size() != struct_info.fields.size()) {
+    throw_in_context("Struct literal for '" + struct_info.name +
                      "' field count mismatch", expr.span);
   }
 
@@ -349,25 +362,30 @@ ExprInfo ExprChecker::check(hir::StructLiteral &expr, TypeExpectation) {
   field_infos.reserve(fields.size());
 
   for (size_t i = 0; i < fields.size(); ++i) {
-    TypeId expected_type =
-        context.type_query(struct_def->field_type_annotations[i]);
-    struct_def->fields[i].type = expected_type;
+    // Use StructInfo for field type, which was resolved by StructEnumRegistrationPass
+    TypeId expected_type = struct_info.fields[i].type;
+    
+    if (expected_type == invalid_type_id) {
+      throw std::logic_error(
+        "Internal error: struct field type not resolved by registration pass. "
+        "StructEnumRegistrationPass must run before semantic checking."
+      );
+    }
+    
     ExprInfo field_info =
         check(*fields[i], TypeExpectation::exact(expected_type));
     if (!field_info.has_type) {
-      const auto &field_name = struct_def->fields[i].name.name;
-      throw_in_context("Cannot infer type for field '" + field_name +
-                       "' in struct '" + get_name(*struct_def).name + "'", expr.span);
+      throw_in_context("Cannot infer type for field '" + struct_info.fields[i].name +
+                       "' in struct '" + struct_info.name + "'", expr.span);
     }
 
     if (!is_assignable_to(field_info.type, expected_type)) {
       throw_in_context("Struct literal field type mismatch for '" +
-                       get_name(*struct_def).name + "'", expr.span);
+                       struct_info.name + "'", expr.span);
     }
     field_infos.push_back(std::move(field_info));
   }
 
-  auto struct_id = TypeContext::get_instance().get_or_register_struct(struct_def);
   return ExprInfo{.type = get_typeID(Type{StructType{struct_id}}),
                   .has_type = true,
                   .is_mut = false,
@@ -1552,7 +1570,12 @@ ExprInfo ExprChecker::check(hir::StructConst &expr, TypeExpectation) {
 }
 
 ExprInfo ExprChecker::check(hir::EnumVariant &expr, TypeExpectation) {
-  auto enum_id = TypeContext::get_instance().get_or_register_enum(expr.enum_def);
+  // Must use try_get_enum_id since registration already happened in StructEnumRegistrationPass
+  auto enum_id_opt = TypeContext::get_instance().try_get_enum_id(expr.enum_def);
+  if (!enum_id_opt) {
+    throw std::logic_error("Internal error: enum not registered. StructEnumRegistrationPass must run before semantic checking.");
+  }
+  auto enum_id = *enum_id_opt;
   return ExprInfo{.type = get_typeID(Type{EnumType{enum_id}}),
                   .is_mut = false,
                   .is_place = false,

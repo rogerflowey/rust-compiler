@@ -151,11 +151,23 @@ TypeId SemanticContext::resolve_type_node(const hir::TypeNode& node) {
             }
             struct DefVisitor {
                 TypeId operator()(const hir::StructDef* def) {
-                    auto id = TypeContext::get_instance().get_or_register_struct(def);
+                    // Look up struct ID that should have been registered by StructEnumRegistrationPass
+                    auto id = TypeContext::get_instance().get_struct_id(def);
+                    if (id == std::numeric_limits<StructId>::max()) {
+                        throw std::logic_error(
+                            "Struct not registered. StructEnumRegistrationPass must run before type resolution."
+                        );
+                    }
                     return get_typeID(Type{StructType{.id = id}});
                 }
                 TypeId operator()(const hir::EnumDef* def) {
-                    auto id = TypeContext::get_instance().get_or_register_enum(def);
+                    // Look up enum ID that should have been registered by StructEnumRegistrationPass
+                    auto id = TypeContext::get_instance().get_enum_id(def);
+                    if (id == std::numeric_limits<EnumId>::max()) {
+                        throw std::logic_error(
+                            "Enum not registered. StructEnumRegistrationPass must run before type resolution."
+                        );
+                    }
                     return get_typeID(Type{EnumType{.id = id}});
                 }
                 TypeId operator()(const hir::Trait*) {

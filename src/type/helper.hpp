@@ -23,12 +23,18 @@ namespace helper {
 inline Type to_type(const TypeDef& def) {
     return std::visit(Overloaded{
         [](hir::StructDef* sd) -> Type {
-            auto id = TypeContext::get_instance().get_or_register_struct(sd);
-            return Type{StructType{.id = id}};
+            auto id_opt = TypeContext::get_instance().try_get_struct_id(sd);
+            if (!id_opt) {
+                throw std::logic_error("Struct not registered when converting to Type. Skeleton registration must run before this point.");
+            }
+            return Type{StructType{.id = *id_opt}};
         },
         [](hir::EnumDef* ed) -> Type {
-            auto id = TypeContext::get_instance().get_or_register_enum(ed);
-            return Type{EnumType{.id = id}};
+            auto id_opt = TypeContext::get_instance().try_get_enum_id(ed);
+            if (!id_opt) {
+                throw std::logic_error("Enum not registered when converting to Type. Skeleton registration must run before this point.");
+            }
+            return Type{EnumType{.id = *id_opt}};
         },
         [](hir::Trait*) -> Type {
             throw std::logic_error("Cannot convert Trait to Type");

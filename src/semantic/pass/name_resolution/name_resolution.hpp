@@ -222,10 +222,15 @@ public:
     }
 
     // create Local for self
+    auto self_struct_id_opt = TypeContext::get_instance().try_get_struct_id(*self_struct);
+    if (!self_struct_id_opt) {
+      throw_semantic_error("Self struct not registered when processing method",
+                           method.span);
+    }
     auto self_local = std::make_unique<hir::Local>(hir::Local{
       ast::Identifier{"self"},
       method.self_param.is_mutable,
-      get_typeID(Type{StructType{.id = TypeContext::get_instance().get_or_register_struct(*self_struct)}})
+      get_typeID(Type{StructType{.id = *self_struct_id_opt}})
     });
     self_local->span = method.self_param.span.is_valid() ? method.self_param.span : method.span;
     

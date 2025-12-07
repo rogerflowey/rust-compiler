@@ -6,6 +6,7 @@
 
 #include "src/ast/ast.hpp"
 #include "src/semantic/hir/hir.hpp"
+#include "src/semantic/pass/struct_enum_skeleton_registration.hpp"
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
 #include "src/type/helper.hpp"
 #include "src/type/impl_table.hpp"
@@ -186,6 +187,10 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
       std::make_unique<hir::Item>(hir::Impl(std::move(impl))));
   auto *impl_ptr = &std::get<hir::Impl>(program->items.back()->value);
   impl_ptr->items.push_back(std::move(assoc_item));
+
+  // Register struct and enum skeleton (needed before name resolution)
+  semantic::StructEnumSkeletonRegistrationPass skeleton_pass;
+  skeleton_pass.register_program(*program);
 
   ImplTable impl_table;
   NameResolver resolver{impl_table};
@@ -387,6 +392,10 @@ TEST(NameResolutionTest, ResolvesMethodLocals) {
   impl_ptr->items.push_back(std::move(method_item));
   auto *method_ptr = &std::get<hir::Method>(impl_ptr->items.back()->value);
   program->items.push_back(std::move(impl));
+
+  // Register struct skeleton (needed before name resolution)
+  semantic::StructEnumSkeletonRegistrationPass skeleton_pass;
+  skeleton_pass.register_program(*program);
 
   ImplTable impl_table;
   NameResolver resolver{impl_table};

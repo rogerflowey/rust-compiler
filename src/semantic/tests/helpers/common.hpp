@@ -103,9 +103,19 @@ protected:
         test_struct_def->field_type_annotations.push_back(i32_type);
         test_struct_def->field_type_annotations.push_back(bool_type);
 
-        // Create struct type for reference
-        auto struct_id = semantic::TypeContext::get_instance().get_or_register_struct(test_struct_def.get());
-        struct_type = semantic::get_typeID(SemanticType{semantic::StructType{struct_id}});
+        // Register struct skeleton (must happen before using struct ID)
+        semantic::StructInfo struct_info;
+        struct_info.name = "TestStruct";
+        struct_info.fields.push_back(semantic::StructFieldInfo{.name = "field1", .type = i32_type});
+        struct_info.fields.push_back(semantic::StructFieldInfo{.name = "field2", .type = bool_type});
+        semantic::TypeContext::get_instance().register_struct(std::move(struct_info), test_struct_def.get());
+
+        // Look up the registered struct ID
+        auto struct_id_opt = semantic::TypeContext::get_instance().try_get_struct_id(test_struct_def.get());
+        if (!struct_id_opt) {
+            throw std::logic_error("Failed to register test struct");
+        }
+        struct_type = semantic::get_typeID(SemanticType{semantic::StructType{*struct_id_opt}});
         
         // Update reference type with actual struct type
         struct_ref_type = semantic::get_typeID(SemanticType{semantic::ReferenceType{struct_type, false}});
