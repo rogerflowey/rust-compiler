@@ -36,7 +36,7 @@ std::string make_scoped_name(const std::string& scope, const std::string& base) 
     if (base.empty()) {
         return scope;
     }
-    return scope + "::" + base;
+    return scope + "_" + base;
 }
 bool is_signed_integer_kind(type::PrimitiveKind kind) {
     return kind == type::PrimitiveKind::I32 || kind == type::PrimitiveKind::ISIZE;

@@ -77,3 +77,11 @@ docs/README.md                    # Project entry point
 When working on a specific component, keep both the high-level overview and implementation documentation open for context.
 
 **Remember**: The documentation system is designed to be discovered through exploration rather than memorization. Always start by checking the README.md in the relevant directory.
+
+
+## Code style
+
+The project follows modern C++ best practices. Include but not limited to:
+- use std::visit + Overloaded helper for std::variant visitation
+- use unique_ptr & raw pointer for ownership semantics
+- use optional for optional values even if it is a pointer type

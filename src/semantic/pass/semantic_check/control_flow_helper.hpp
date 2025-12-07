@@ -8,6 +8,10 @@
 
 namespace semantic {
 
+// Overloaded helper for std::visit
+template<class... Ts> struct Overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
+
 // Helper functions for control flow analysis
 namespace control_flow_helper {
 
@@ -52,17 +56,21 @@ inline EndpointSet normal_endpoint() {
 inline EndpointSet break_endpoint(std::variant<hir::Loop*, hir::While*, std::monostate> current_loop, 
                                   std::optional<semantic::TypeId> value_type = std::nullopt) {
     EndpointSet endpoints;
-    if (std::holds_alternative<hir::Loop*>(current_loop)) {
-        BreakEndpoint ep;
-        ep.target = std::get<hir::Loop*>(current_loop);
-        ep.value_type = value_type;
-        endpoints.insert(std::move(ep));
-    } else if (std::holds_alternative<hir::While*>(current_loop)) {
-        BreakEndpoint ep;
-        ep.target = std::get<hir::While*>(current_loop);
-        ep.value_type = value_type;
-        endpoints.insert(std::move(ep));
-    }
+    std::visit(Overloaded{
+        [&endpoints, value_type](hir::Loop* target) {
+            BreakEndpoint ep;
+            ep.target = target;
+            ep.value_type = value_type;
+            endpoints.insert(std::move(ep));
+        },
+        [&endpoints, value_type](hir::While* target) {
+            BreakEndpoint ep;
+            ep.target = target;
+            ep.value_type = value_type;
+            endpoints.insert(std::move(ep));
+        },
+        [](std::monostate) {}
+    }, current_loop);
     return endpoints;
 }
 
@@ -71,15 +79,19 @@ inline EndpointSet break_endpoint(std::variant<hir::Loop*, hir::While*, std::mon
  */
 inline EndpointSet continue_endpoint(std::variant<hir::Loop*, hir::While*, std::monostate> current_loop) {
     EndpointSet endpoints;
-    if (std::holds_alternative<hir::Loop*>(current_loop)) {
-        ContinueEndpoint ep;
-        ep.target = std::get<hir::Loop*>(current_loop);
-        endpoints.insert(std::move(ep));
-    } else if (std::holds_alternative<hir::While*>(current_loop)) {
-        ContinueEndpoint ep;
-        ep.target = std::get<hir::While*>(current_loop);
-        endpoints.insert(std::move(ep));
-    }
+    std::visit(Overloaded{
+        [&endpoints](hir::Loop* target) {
+            ContinueEndpoint ep;
+            ep.target = target;
+            endpoints.insert(std::move(ep));
+        },
+        [&endpoints](hir::While* target) {
+            ContinueEndpoint ep;
+            ep.target = target;
+            endpoints.insert(std::move(ep));
+        },
+        [](std::monostate) {}
+    }, current_loop);
     return endpoints;
 }
 
@@ -89,17 +101,20 @@ inline EndpointSet continue_endpoint(std::variant<hir::Loop*, hir::While*, std::
 inline EndpointSet return_endpoint(std::variant<hir::Function*, hir::Method*> current_target, 
                                    std::optional<semantic::TypeId> value_type = std::nullopt) {
     EndpointSet endpoints;
-    if (std::holds_alternative<hir::Function*>(current_target)) {
-        ReturnEndpoint ep;
-        ep.target = std::get<hir::Function*>(current_target);
-        ep.value_type = value_type;
-        endpoints.insert(std::move(ep));
-    } else if (std::holds_alternative<hir::Method*>(current_target)) {
-        ReturnEndpoint ep;
-        ep.target = std::get<hir::Method*>(current_target);
-        ep.value_type = value_type;
-        endpoints.insert(std::move(ep));
-    }
+    std::visit(Overloaded{
+        [&endpoints, value_type](hir::Function* target) {
+            ReturnEndpoint ep;
+            ep.target = target;
+            ep.value_type = value_type;
+            endpoints.insert(std::move(ep));
+        },
+        [&endpoints, value_type](hir::Method* target) {
+            ReturnEndpoint ep;
+            ep.target = target;
+            ep.value_type = value_type;
+            endpoints.insert(std::move(ep));
+        }
+    }, current_target);
     return endpoints;
 }
 

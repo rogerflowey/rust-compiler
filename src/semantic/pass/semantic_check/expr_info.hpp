@@ -4,6 +4,7 @@
 #pragma once
 
 #include "semantic/const/const.hpp"
+#include "semantic/utils.hpp"
 #include "type/type.hpp"
 #include <variant>
 #include <unordered_set>
@@ -33,11 +34,13 @@ struct BreakEndpoint {
     bool operator==(const BreakEndpoint& other) const {
         if (value_type != other.value_type) return false;
         if (target.index() != other.target.index()) return false;
-        if (target.index() == 0) {
-            return std::get<hir::Loop*>(target) == std::get<hir::Loop*>(other.target);
-        } else {
-            return std::get<hir::While*>(target) == std::get<hir::While*>(other.target);
+        if (auto loop_ptr = std::get_if<hir::Loop*>(&target)) {
+            return *loop_ptr == *std::get_if<hir::Loop*>(&other.target);
         }
+        if (auto while_ptr = std::get_if<hir::While*>(&target)) {
+            return *while_ptr == *std::get_if<hir::While*>(&other.target);
+        }
+        return false;
     }
 };
 
@@ -46,11 +49,13 @@ struct ContinueEndpoint {
     
     bool operator==(const ContinueEndpoint& other) const {
         if (target.index() != other.target.index()) return false;
-        if (target.index() == 0) {
-            return std::get<hir::Loop*>(target) == std::get<hir::Loop*>(other.target);
-        } else {
-            return std::get<hir::While*>(target) == std::get<hir::While*>(other.target);
+        if (auto loop_ptr = std::get_if<hir::Loop*>(&target)) {
+            return *loop_ptr == *std::get_if<hir::Loop*>(&other.target);
         }
+        if (auto while_ptr = std::get_if<hir::While*>(&target)) {
+            return *while_ptr == *std::get_if<hir::While*>(&other.target);
+        }
+        return false;
     }
 };
 
@@ -61,11 +66,13 @@ struct ReturnEndpoint {
     bool operator==(const ReturnEndpoint& other) const {
         if (value_type != other.value_type) return false;
         if (target.index() != other.target.index()) return false;
-        if (target.index() == 0) {
-            return std::get<hir::Function*>(target) == std::get<hir::Function*>(other.target);
-        } else {
-            return std::get<hir::Method*>(target) == std::get<hir::Method*>(other.target);
+        if (auto func_ptr = std::get_if<hir::Function*>(&target)) {
+            return *func_ptr == *std::get_if<hir::Function*>(&other.target);
         }
+        if (auto method_ptr = std::get_if<hir::Method*>(&target)) {
+            return *method_ptr == *std::get_if<hir::Method*>(&other.target);
+        }
+        return false;
     }
 };
 
@@ -79,8 +86,13 @@ struct EndpointHash {
     
     size_t operator()(const BreakEndpoint& ep) const {
         size_t hash = 0x42524541; // "BREA" in hex
-        std::visit([&hash](auto target) { 
-            hash ^= std::hash<void*>()(static_cast<void*>(target));
+        std::visit(Overloaded{
+            [&hash](hir::Loop* target) { 
+                hash ^= std::hash<void*>()(static_cast<void*>(target));
+            },
+            [&hash](hir::While* target) { 
+                hash ^= std::hash<void*>()(static_cast<void*>(target));
+            }
         }, ep.target);
         if (ep.value_type) {
             hash ^= std::hash<TypeId>()(*ep.value_type);
@@ -90,16 +102,26 @@ struct EndpointHash {
     
     size_t operator()(const ContinueEndpoint& ep) const {
         size_t hash = 0x434F4E54; // "CONT" in hex
-        std::visit([&hash](auto target) { 
-            hash ^= std::hash<void*>()(static_cast<void*>(target));
+        std::visit(Overloaded{
+            [&hash](hir::Loop* target) { 
+                hash ^= std::hash<void*>()(static_cast<void*>(target));
+            },
+            [&hash](hir::While* target) { 
+                hash ^= std::hash<void*>()(static_cast<void*>(target));
+            }
         }, ep.target);
         return hash;
     }
     
     size_t operator()(const ReturnEndpoint& ep) const {
         size_t hash = 0x52455452; // "RETR" in hex
-        std::visit([&hash](auto target) { 
-            hash ^= std::hash<void*>()(static_cast<void*>(target));
+        std::visit(Overloaded{
+            [&hash](hir::Function* target) { 
+                hash ^= std::hash<void*>()(static_cast<void*>(target));
+            },
+            [&hash](hir::Method* target) { 
+                hash ^= std::hash<void*>()(static_cast<void*>(target));
+            }
         }, ep.target);
         if (ep.value_type) {
             hash ^= std::hash<TypeId>()(*ep.value_type);
@@ -116,8 +138,12 @@ struct EndpointHash {
 struct EndpointEqual {
     bool operator()(const Endpoint& lhs, const Endpoint& rhs) const {
         if (lhs.index() != rhs.index()) return false;
-        return std::visit([&rhs](const auto& left_endpoint) {
-            return left_endpoint == std::get<std::decay_t<decltype(left_endpoint)>>(rhs);
+        return std::visit([&rhs](const auto& left_endpoint) -> bool {
+            using LeftType = std::decay_t<decltype(left_endpoint)>;
+            if (auto right_endpoint = std::get_if<LeftType>(&rhs)) {
+                return left_endpoint == *right_endpoint;
+            }
+            return false;
         }, lhs);
     }
 };

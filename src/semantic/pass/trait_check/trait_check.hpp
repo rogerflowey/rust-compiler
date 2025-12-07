@@ -230,17 +230,23 @@ inline void TraitValidator::validate_trait_impl(hir::Impl& impl, const hir::Trai
         
         // Validate signature matches
         bool signature_valid = std::visit(Overloaded{
-            [&](hir::Function* trait_fn) {
-                auto* impl_fn = std::get<hir::Function*>(*impl_item);
-                return validate_function_signature(*trait_fn, *impl_fn);
+            [&](hir::Function* trait_fn) -> bool {
+                if (auto* impl_fn = std::get_if<hir::Function*>(&*impl_item)) {
+                    return validate_function_signature(*trait_fn, **impl_fn);
+                }
+                return false;
             },
-            [&](hir::Method* trait_method) {
-                auto* impl_method = std::get<hir::Method*>(*impl_item);
-                return validate_method_signature(*trait_method, *impl_method);
+            [&](hir::Method* trait_method) -> bool {
+                if (auto* impl_method = std::get_if<hir::Method*>(&*impl_item)) {
+                    return validate_method_signature(*trait_method, **impl_method);
+                }
+                return false;
             },
-            [&](hir::ConstDef* trait_const) {
-                auto* impl_const = std::get<hir::ConstDef*>(*impl_item);
-                return validate_const_signature(*trait_const, *impl_const);
+            [&](hir::ConstDef* trait_const) -> bool {
+                if (auto* impl_const = std::get_if<hir::ConstDef*>(&*impl_item)) {
+                    return validate_const_signature(*trait_const, **impl_const);
+                }
+                return false;
             }
         }, trait_item.item);
         

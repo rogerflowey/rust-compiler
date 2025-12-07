@@ -71,6 +71,30 @@ def parse_args() -> argparse.Namespace:
         "--filter",
         help="Regex applied to test case paths relative to the src directory. Only matching cases run.",
     )
+    parser.add_argument(
+        "--timeout-ir",
+        type=int,
+        default=30,
+        help="Timeout in seconds for ir_pipeline compilation. Default: 30s.",
+    )
+    parser.add_argument(
+        "--timeout-clang",
+        type=int,
+        default=30,
+        help="Timeout in seconds for clang assembly generation. Default: 30s.",
+    )
+    parser.add_argument(
+        "--timeout-reimu",
+        type=int,
+        default=30,
+        help="Timeout in seconds for reimu execution. Default: 30s.",
+    )
+    parser.add_argument(
+        "--timeout-builtin",
+        type=int,
+        default=30,
+        help="Timeout in seconds for builtin.c compilation. Default: 30s.",
+    )
     return parser.parse_args()
 
 
@@ -89,8 +113,17 @@ def detect_clang(user_choice: str | None) -> str:
     sys.exit(1)
 
 
-def run_cmd(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+def run_cmd(cmd: list[str], cwd: Path | None = None, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        # Create a CompletedProcess-like object with timeout info
+        result = subprocess.CompletedProcess(cmd, returncode=-1)
+        result.stdout = e.stdout.decode("utf-8") if e.stdout else ""
+        result.stderr = e.stderr.decode("utf-8") if e.stderr else ""
+        if not result.stderr:
+            result.stderr = f"Process timed out after {timeout} seconds"
+        return result
 
 
 def ensure_file(path: Path, description: str) -> None:
@@ -115,12 +148,13 @@ def normalize_output(path: Path) -> list[str]:
     return [line.rstrip() for line in lines if line.rstrip()]
 
 
-def compile_builtin(clang: str, target: str, builtin_path: Path, work_root: Path) -> Path:
+def compile_builtin(clang: str, target: str, builtin_path: Path, work_root: Path, timeout: int | None = None) -> Path:
     builtin_source = work_root / "builtin.s.source"
     builtin_clean = work_root / "builtin.s"
 
     result = run_cmd(
         [clang, "-S", f"--target={target}", "-O2", "-fno-builtin", str(builtin_path), "-o", str(builtin_source)],
+        timeout=timeout,
     )
     if result.returncode != 0:
         sys.stderr.write("error: failed to compile builtin.c\n")
@@ -204,7 +238,7 @@ def main() -> int:
     else:
         print(f"Working directory: {temp_root}")
 
-    compiled_builtin = compile_builtin(clang, args.target, builtin_path, temp_root)
+    compiled_builtin = compile_builtin(clang, args.target, builtin_path, temp_root, timeout=args.timeout_builtin)
 
     failures: list[tuple[Path, str]] = []
     total = len(cases)
@@ -237,7 +271,7 @@ def main() -> int:
         log_lines: list[str] = []
 
         # 1) ir_pipeline
-        result_ir = run_cmd([str(binary_path), str(case_path), str(ir_path)])
+        result_ir = run_cmd([str(binary_path), str(case_path), str(ir_path)], timeout=args.timeout_ir)
         log_lines.append("== ir_pipeline ==")
         if result_ir.stdout:
             log_lines.append(result_ir.stdout.rstrip())
@@ -246,6 +280,8 @@ def main() -> int:
 
         if result_ir.returncode != 0:
             reason = f"ir_pipeline exit {result_ir.returncode}: {extract_last_line(result_ir.stderr or result_ir.stdout)}"
+            if result_ir.returncode == -1:
+                reason = f"ir_pipeline timeout (>{args.timeout_ir}s): {extract_last_line(result_ir.stderr or result_ir.stdout)}"
             failures.append((rel_case, reason))
             print(f"[{idx}/{total}] {rel_case}: {RED}fail (compile){RESET}")
             (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
@@ -255,7 +291,7 @@ def main() -> int:
             continue
 
         # 2) clang assemble
-        result_clang = run_cmd([clang, "-S", f"--target={args.target}", str(ir_path), "-o", str(asm_source)])
+        result_clang = run_cmd([clang, "-S", f"--target={args.target}", str(ir_path), "-o", str(asm_source)], timeout=args.timeout_clang)
         log_lines.append("== clang ==")
         if result_clang.stdout:
             log_lines.append(result_clang.stdout.rstrip())
@@ -264,6 +300,8 @@ def main() -> int:
 
         if result_clang.returncode != 0:
             reason = f"clang exit {result_clang.returncode}: {extract_last_line(result_clang.stderr or result_clang.stdout)}"
+            if result_clang.returncode == -1:
+                reason = f"clang timeout (>{args.timeout_clang}s): {extract_last_line(result_clang.stderr or result_clang.stdout)}"
             failures.append((rel_case, reason))
             print(f"[{idx}/{total}] {rel_case}: {RED}fail (clang){RESET}")
             (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
@@ -279,7 +317,7 @@ def main() -> int:
             args.reimu,
             f"-i={work_dir / 'test.in'}",
             f"-o={actual_output}",
-        ], cwd=work_dir)
+        ], cwd=work_dir, timeout=args.timeout_reimu)
         log_lines.append("== reimu ==")
         if result_run.stdout:
             log_lines.append(result_run.stdout.rstrip())
@@ -288,6 +326,8 @@ def main() -> int:
 
         if result_run.returncode != 0:
             reason = f"reimu exit {result_run.returncode}: {extract_last_line(result_run.stderr or result_run.stdout)}"
+            if result_run.returncode == -1:
+                reason = f"reimu timeout (>{args.timeout_reimu}s): {extract_last_line(result_run.stderr or result_run.stdout)}"
             failures.append((rel_case, reason))
             print(f"[{idx}/{total}] {rel_case}: {RED}fail (runtime){RESET}")
             (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
