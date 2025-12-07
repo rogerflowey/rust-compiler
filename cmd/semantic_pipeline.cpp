@@ -15,7 +15,6 @@
 // Semantic analysis includes
 #include "src/semantic/hir/converter.hpp"
 #include "src/semantic/query/semantic_context.hpp"
-#include "src/semantic/pass/struct_enum_skeleton_registration.hpp"
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
 #include "src/semantic/pass/struct_enum_registration.hpp"
 #include "src/semantic/pass/trait_check/trait_check.hpp"
@@ -157,12 +156,8 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // Phase 4a: Struct/Enum Skeleton Registration (before name resolution)
-        // This allocates struct/enum IDs so name resolution can use them for impl lookups
-        semantic::StructEnumSkeletonRegistrationPass skeleton_registration_pass;
-        skeleton_registration_pass.register_program(*hir_program);
-
-        // Phase 4b: Name Resolution
+        // Phase 4: Name Resolution (includes struct/enum skeleton registration)
+        // The NameResolver now handles skeleton registration internally before name resolution
         semantic::ImplTable impl_table;
         semantic::inject_predefined_methods(impl_table);
         semantic::NameResolver name_resolver(impl_table);
@@ -170,12 +165,12 @@ int main(int argc, char* argv[]) {
 
         semantic::SemanticContext semantic_ctx(impl_table);
 
-        // Phase 4c: Struct and Enum Field Type Resolution
+        // Phase 5: Struct and Enum Field Type Resolution
         // Resolves all struct field types (structs/enums already registered in skeleton form)
         semantic::StructEnumRegistrationPass registration_pass(semantic_ctx);
         registration_pass.register_program(*hir_program);
 
-        // Phase 5: Trait Validation
+        // Phase 6: Trait Validation
         semantic::TraitValidator trait_validator(semantic_ctx);
         trait_validator.validate(*hir_program);
 

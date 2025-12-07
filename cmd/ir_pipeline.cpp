@@ -13,7 +13,6 @@
 #include "src/semantic/hir/converter.hpp"
 #include "src/semantic/pass/control_flow_linking/control_flow_linking.hpp"
 #include "src/semantic/pass/exit_check/exit_check.hpp"
-#include "src/semantic/pass/struct_enum_skeleton_registration.hpp"
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
 #include "src/semantic/pass/struct_enum_registration.hpp"
 #include "src/semantic/pass/semantic_check/semantic_check.hpp"
@@ -155,11 +154,8 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        // Phase 4a: Struct/Enum Skeleton Registration (before name resolution)
-        semantic::StructEnumSkeletonRegistrationPass skeleton_registration_pass;
-        skeleton_registration_pass.register_program(*hir_program);
-
-        // Phase 4b: Name Resolution
+        // Phase 4: Name Resolution (includes struct/enum skeleton registration)
+        // The NameResolver now handles skeleton registration internally before name resolution
         semantic::ImplTable impl_table;
         semantic::inject_predefined_methods(impl_table);
         semantic::NameResolver name_resolver(impl_table);
@@ -167,7 +163,7 @@ int main(int argc, char *argv[]) {
 
         semantic::SemanticContext semantic_ctx(impl_table);
 
-        // Phase 4c: Struct and Enum Field Type Resolution
+        // Phase 5: Struct and Enum Field Type Resolution
         semantic::StructEnumRegistrationPass registration_pass(semantic_ctx);
         registration_pass.register_program(*hir_program);
 
