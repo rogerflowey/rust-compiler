@@ -1,0 +1,14 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn sum_coords(p: Point) -> i32 {
+    p.x + p.y
+}
+
+fn main() {
+    let p: Point = Point { x: 3, y: 7 };
+    printlnInt(sum_coords(p));
+    exit(0);
+}

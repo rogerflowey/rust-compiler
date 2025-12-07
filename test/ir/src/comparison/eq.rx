@@ -1,0 +1,10 @@
+fn main() {
+    let a: i32 = 5;
+    let b: i32 = 5;
+    if (a == b) {
+        printlnInt(1);
+    } else {
+        printlnInt(0);
+    }
+    exit(0);
+}

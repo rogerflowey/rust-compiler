@@ -1,0 +1,6 @@
+fn main() {
+    let mut arr: [i32; 4] = [1, 2, 3, 4];
+    let idx: usize = 2;
+    printlnInt(arr[idx]);
+    exit(0);
+}

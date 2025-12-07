@@ -1,0 +1,17 @@
+fn count_even(arr: [i32; 5]) -> i32 {
+    let mut count: i32 = 0;
+    let mut i: usize = 0;
+    while (i < 5) {
+        if (arr[i] % 2 == 0) {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    count
+}
+
+fn main() {
+    let nums: [i32; 5] = [1, 2, 3, 4, 5];
+    printlnInt(count_even(nums));
+    exit(0);
+}

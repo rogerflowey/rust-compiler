@@ -1,0 +1,4 @@
+fn main() {
+    printlnInt(17 % 5);
+    exit(0);
+}

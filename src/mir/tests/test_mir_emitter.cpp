@@ -119,3 +119,124 @@ TEST(MirEmitterTest, EmitsExternalFunctionDeclarations) {
     EXPECT_NE(ir.find("@print"), std::string::npos);
     EXPECT_NE(ir.find("@getInt"), std::string::npos);
 }
+
+TEST(MirEmitterTest, OptimizesArrayRepeatWithZeroInitializer) {
+    mir::MirModule module;
+
+    mir::MirFunction function;
+    function.id = 0;
+    function.name = "@test_zero_array";
+
+    type::TypeId int_type = type::get_typeID(type::Type{type::PrimitiveKind::I32});
+    type::TypeId array_type = type::get_typeID(type::Type{type::ArrayType{int_type, 10}});
+
+    function.return_type = array_type;
+    function.temp_types = {array_type};
+
+    mir::BasicBlock entry;
+    
+    // Create array repeat with zero value: [0; 10]
+    mir::ArrayRepeatRValue repeat;
+    mir::Constant zero;
+    zero.type = int_type;
+    mir::IntConstant zero_val;
+    zero_val.value = 0;
+    zero_val.is_negative = false;
+    zero_val.is_signed = true;
+    zero.value = zero_val;
+    repeat.value.value = zero;
+    repeat.count = 10;
+
+    mir::DefineStatement define;
+    define.dest = 0;
+    mir::RValue rvalue;
+    rvalue.value = repeat;
+    define.rvalue = rvalue;
+
+    mir::Statement stmt;
+    stmt.value = define;
+    entry.statements.push_back(stmt);
+
+    mir::ReturnTerminator ret;
+    mir::Operand ret_operand;
+    ret_operand.value = mir::TempId{0};
+    ret.value = ret_operand;
+    entry.terminator.value = ret;
+
+    function.basic_blocks.push_back(entry);
+    function.start_block = 0;
+
+    module.functions.push_back(std::move(function));
+
+    codegen::Emitter emitter(module);
+    std::string ir = emitter.emit();
+
+    // With optimization, should use zeroinitializer instead of multiple insertvalue
+    // The IR should contain zeroinitializer and NOT have 10 insertvalue instructions
+    EXPECT_NE(ir.find("zeroinitializer"), std::string::npos);
+    
+    // Count insertvalue instructions - should be significantly fewer than 10
+    size_t insertvalue_count = 0;
+    size_t pos = 0;
+    while ((pos = ir.find("insertvalue", pos)) != std::string::npos) {
+        insertvalue_count++;
+        pos += 11;
+    }
+    // Should have 0 or very few insertvalue instructions for [0; 10]
+    EXPECT_EQ(insertvalue_count, 0u);
+}
+
+TEST(MirEmitterTest, OptimizesArrayRepeatWithBoolZero) {
+    mir::MirModule module;
+
+    mir::MirFunction function;
+    function.id = 0;
+    function.name = "@test_bool_array";
+
+    type::TypeId bool_type = type::get_typeID(type::Type{type::PrimitiveKind::BOOL});
+    type::TypeId array_type = type::get_typeID(type::Type{type::ArrayType{bool_type, 5}});
+
+    function.return_type = array_type;
+    function.temp_types = {array_type};
+
+    mir::BasicBlock entry;
+    
+    // Create array repeat with false value: [false; 5]
+    mir::ArrayRepeatRValue repeat;
+    mir::Constant false_val;
+    false_val.type = bool_type;
+    mir::BoolConstant bool_const;
+    bool_const.value = false;
+    false_val.value = bool_const;
+    repeat.value.value = false_val;
+    repeat.count = 5;
+
+    mir::DefineStatement define;
+    define.dest = 0;
+    mir::RValue rvalue;
+    rvalue.value = repeat;
+    define.rvalue = rvalue;
+
+    mir::Statement stmt;
+    stmt.value = define;
+    entry.statements.push_back(stmt);
+
+    mir::ReturnTerminator ret;
+    mir::Operand ret_operand;
+    ret_operand.value = mir::TempId{0};
+    ret.value = ret_operand;
+    ret.value = ret_operand;
+    entry.terminator.value = ret;
+
+    function.basic_blocks.push_back(entry);
+    function.start_block = 0;
+
+    module.functions.push_back(std::move(function));
+
+    codegen::Emitter emitter(module);
+    std::string ir = emitter.emit();
+
+    // With optimization, should use zeroinitializer for [false; 5]
+    EXPECT_NE(ir.find("zeroinitializer"), std::string::npos);
+}
+

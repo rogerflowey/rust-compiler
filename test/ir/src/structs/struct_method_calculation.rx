@@ -1,0 +1,16 @@
+struct Rectangle {
+    width: i32,
+    height: i32,
+}
+
+impl Rectangle {
+    fn area(self) -> i32 {
+        self.width * self.height
+    }
+}
+
+fn main() {
+    let rect: Rectangle = Rectangle { width: 5, height: 4 };
+    printlnInt(rect.area());
+    exit(0);
+}

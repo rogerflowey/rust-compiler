@@ -1,0 +1,8 @@
+fn main() {
+    if (false) {
+        printlnInt(1);
+    } else {
+        printlnInt(2);
+    }
+    exit(0);
+}

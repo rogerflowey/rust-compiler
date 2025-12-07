@@ -12,7 +12,6 @@ import argparse
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 CLANG_CANDIDATES = ["clang-18", "clang-17", "clang-16", "clang-15", "clang"]
@@ -58,9 +57,9 @@ def parse_args() -> argparse.Namespace:
         help="Directory to store outputs and logs; default is <test-root>/output",
     )
     parser.add_argument(
-        "--keep-temps",
+        "--keep-working-files",
         action="store_true",
-        help="Keep the temporary working directory for debugging.",
+        help="Keep intermediate working files (builtin.s, test.ll, test.s, etc.) in output directory.",
     )
     return parser.parse_args()
 
@@ -164,15 +163,9 @@ def main() -> int:
         return 0
 
     print(f"Using clang='{clang}', reimu='{reimu}', target='{args.target}'")
+    print(f"Output directory: {output_root}")
 
-    temp_dir_obj = tempfile.TemporaryDirectory(prefix="rcompiler-ir-e2e-")
-    temp_root = Path(temp_dir_obj.name)
-    if args.keep_temps:
-        print(f"Keeping temporary files at {temp_root}")
-    else:
-        print(f"Working directory: {temp_root}")
-
-    compiled_builtin = compile_builtin(clang, args.target, builtin_path, temp_root)
+    compiled_builtin = compile_builtin(clang, args.target, builtin_path, output_root)
 
     failures: list[tuple[Path, str]] = []
     total = len(cases)
@@ -189,7 +182,7 @@ def main() -> int:
             print(f"[{idx}/{total}] {rel_case}: {RED}missing input/output{RESET}")
             continue
 
-        work_dir = temp_root / rel_case.parent
+        work_dir = output_root / rel_case.parent
         work_dir.mkdir(parents=True, exist_ok=True)
 
         shutil.copy(compiled_builtin, work_dir / "builtin.s")
@@ -263,13 +256,10 @@ def main() -> int:
         (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
 
         if matched:
-            print(f"[{idx}/{total}] {rel_case}: {GREEN}ok{RESET}")
+            print(f"[{idx}/{total}] {rel_case}: {GREEN}pass{RESET}")
         else:
-            failures.append((rel_case, "output mismatch"))
+            failures.append((rel_case, f"output mismatch"))
             print(f"[{idx}/{total}] {rel_case}: {RED}fail (output){RESET}")
-
-    if not args.keep_temps:
-        temp_dir_obj.cleanup()
 
     summary_path = output_root / "summary"
     summary_lines = [f"Total: {total}, Passed: {total - len(failures)}, Failed: {len(failures)}"]

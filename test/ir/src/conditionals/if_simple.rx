@@ -1,0 +1,6 @@
+fn main() {
+    if (true) {
+        printlnInt(42);
+    }
+    exit(0);
+}

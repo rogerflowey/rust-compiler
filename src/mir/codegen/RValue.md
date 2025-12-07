@@ -100,7 +100,20 @@ Example IR:
 ; final result is %tmp2
 ```
 
-Array Repeat should be optimized to use `zero initializer` if it can(if the value can be zero initialized. Recursize check needed).
+Array Repeat should be optimized to use `zero initializer` if:
+1. The count is 0, OR
+2. The repeated value is a zero/false constant AND the element type is zero-initializable
+
+Zero-initializable types include:
+- Primitive numeric types (i32, u32, isize, usize)
+- Boolean and character types
+- Arrays of zero-initializable types
+- Structs with all zero-initializable fields
+- Unit type
+
+This optimization significantly reduces code size and improves performance for common patterns like `[0; 1000]` or `[false; N]` by using a single `zeroinitializer` instruction instead of hundreds of `insertvalue` instructions.
+
+The recursion check ensures correctness for nested types like `[[0; 5]; 10]`.
 ---
 
 ## 9. CastRValue in text

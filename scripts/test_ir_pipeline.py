@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,15 @@ def parse_args() -> argparse.Namespace:
         "--keep-temps",
         action="store_true",
         help="Keep the temporary working directory for debugging.",
+    )
+    parser.add_argument(
+        "--preserve-intermediates",
+        action="store_true",
+        help="Preserve all intermediate build artifacts (.ll, .s.source, .s files) in output directory.",
+    )
+    parser.add_argument(
+        "--filter",
+        help="Regex applied to test case paths relative to the src directory. Only matching cases run.",
     )
     return parser.parse_args()
 
@@ -126,6 +136,23 @@ def extract_last_line(text: str) -> str:
     return stripped[-1] if stripped else "<no output>"
 
 
+def preserve_intermediates(output_dir: Path, case_name_stem: str, work_dir: Path) -> None:
+    """Copy intermediate build artifacts to output directory."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    ir_file = work_dir / "test.ll"
+    if ir_file.is_file():
+        shutil.copy(ir_file, output_dir / f"{case_name_stem}.ll")
+    
+    asm_source_file = work_dir / "test.s.source"
+    if asm_source_file.is_file():
+        shutil.copy(asm_source_file, output_dir / f"{case_name_stem}.s.source")
+    
+    asm_clean_file = work_dir / "test.s"
+    if asm_clean_file.is_file():
+        shutil.copy(asm_clean_file, output_dir / f"{case_name_stem}.s")
+
+
 def main() -> int:
     args = parse_args()
     repo_root = Path(__file__).resolve().parent.parent
@@ -153,8 +180,19 @@ def main() -> int:
     output_root.mkdir(parents=True, exist_ok=True)
 
     cases = sorted(src_dir.rglob("*.rx"))
+    if args.filter:
+        try:
+            filter_re = re.compile(args.filter)
+        except re.error as exc:
+            sys.stderr.write(f"error: invalid regex for --filter: {exc}\n")
+            return 1
+        cases = [case for case in cases if filter_re.search(str(case.relative_to(src_dir)))]
+
     if not cases:
-        sys.stderr.write(f"warning: no .rx files found under {src_dir}\n")
+        if args.filter:
+            sys.stderr.write(f"warning: no .rx files matched filter '{args.filter}' under {src_dir}\n")
+        else:
+            sys.stderr.write(f"warning: no .rx files found under {src_dir}\n")
         return 0
 
     print(f"Using clang='{clang}', reimu='{args.reimu}', target='{args.target}'")
@@ -212,6 +250,8 @@ def main() -> int:
             print(f"[{idx}/{total}] {rel_case}: {RED}fail (compile){RESET}")
             (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
             (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
+            if args.preserve_intermediates:
+                preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
             continue
 
         # 2) clang assemble
@@ -228,6 +268,8 @@ def main() -> int:
             print(f"[{idx}/{total}] {rel_case}: {RED}fail (clang){RESET}")
             (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
             (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
+            if args.preserve_intermediates:
+                preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
             continue
 
         remove_plt(asm_source, asm_clean)
@@ -250,6 +292,8 @@ def main() -> int:
             print(f"[{idx}/{total}] {rel_case}: {RED}fail (runtime){RESET}")
             (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
             (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
+            if args.preserve_intermediates:
+                preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
             continue
 
         # 4) compare outputs
@@ -260,6 +304,9 @@ def main() -> int:
         (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
         (output_root / rel_case.with_suffix(".out")).write_text(actual_output.read_text(encoding="utf-8"), encoding="utf-8")
         (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
+        
+        if args.preserve_intermediates:
+            preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
 
         if matched:
             print(f"[{idx}/{total}] {rel_case}: {GREEN}ok{RESET}")

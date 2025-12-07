@@ -1,0 +1,13 @@
+fn max(a: i32, b: i32) -> i32 {
+    if (a > b) {
+        a
+    } else {
+        b
+    }
+}
+
+fn main() {
+    printlnInt(max(5, 10));
+    printlnInt(max(15, 8));
+    exit(0);
+}

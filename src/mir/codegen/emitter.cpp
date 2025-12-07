@@ -49,6 +49,33 @@ std::string escape_string_literal(std::string_view text) {
   return oss.str();
 }
 
+/**
+ * @brief Check if an operand is a zero constant
+ * @return true if operand is a constant with zero/false value for its type
+ */
+bool is_const_zero(const mir::Operand &operand) {
+  if (!std::holds_alternative<mir::Constant>(operand.value)) {
+    return false;
+  }
+
+  const auto &constant = std::get<mir::Constant>(operand.value);
+  return std::visit(
+      [](const auto &val) -> bool {
+        using T = std::decay_t<decltype(val)>;
+        if constexpr (std::is_same_v<T, mir::BoolConstant>) {
+          return !val.value;
+        } else if constexpr (std::is_same_v<T, mir::IntConstant>) {
+          return val.value == 0;
+        } else if constexpr (std::is_same_v<T, mir::CharConstant>) {
+          return val.value == 0;
+        } else {
+          // StringConstant is never zero
+          return false;
+        }
+      },
+      constant.value);
+}
+
 } // namespace
 
 namespace codegen {
@@ -565,7 +592,12 @@ void Emitter::emit_array_repeat_rvalue_into(mir::TempId dest,
     throw std::logic_error("Array repeat count mismatch during codegen");
   }
   std::string aggregate_type = module_.get_type_name(dest_type);
-  if (value.count == 0) {
+  
+  // Optimization: use zeroinitializer if:
+  // 1. count is 0, OR
+  // 2. value is zero and element type is zero-initializable
+  if (value.count == 0 || 
+      (is_const_zero(value.value) && type::helper::type_helper::is_zero_initializable(array_type->element_type))) {
     materialize_constant_into_temp(dest, aggregate_type, "zeroinitializer");
     return;
   }

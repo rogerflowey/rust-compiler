@@ -220,8 +220,8 @@ public:
         auto context_guard = expr_checker.enter_context("struct", hir::helper::get_name(struct_def).name);
 
         // Validate all field type annotations are resolved
-        for (const auto& type_annotation : struct_def.field_type_annotations) {
-            context.type_query(const_cast<hir::TypeAnnotation&>(type_annotation));
+        for (auto& type_annotation : struct_def.field_type_annotations) {
+            context.type_query(type_annotation);
         }
 
         for (size_t idx = 0; idx < struct_def.fields.size(); ++idx) {

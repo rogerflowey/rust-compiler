@@ -1,0 +1,4 @@
+fn main() {
+    printlnInt(-100);
+    exit(0);
+}

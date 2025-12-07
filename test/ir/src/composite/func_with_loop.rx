@@ -1,0 +1,14 @@
+fn sum_range(start: i32, end: i32) -> i32 {
+    let mut sum: i32 = 0;
+    let mut i: i32 = start;
+    while (i <= end) {
+        sum = sum + i;
+        i = i + 1;
+    }
+    sum
+}
+
+fn main() {
+    printlnInt(sum_range(1, 5));
+    exit(0);
+}

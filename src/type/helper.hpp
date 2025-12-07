@@ -118,6 +118,89 @@ inline bool is_zero_sized_type(TypeId type) {
 }
 
 /**
+ * @brief Check if a type can be zero-initialized (all fields/elements can be zero-initialized)
+ * @details
+ * A type is zero-initializable if:
+ * - It's a primitive numeric type (i32, u32, isize, usize, bool, char)
+ * - It's an array of zero-initializable types
+ * - It's a struct with all zero-initializable fields
+ * - It's a unit type
+ * 
+ * References, enums, and strings are NOT zero-initializable.
+ */
+inline bool is_zero_initializable(TypeId type) {
+    if (type == invalid_type_id) {
+        return false;
+    }
+
+    struct ZeroInitVisitor {
+        bool operator()(const PrimitiveKind& pk) const {
+            // Primitive numeric types and bool/char can be zero-initialized
+            switch (pk) {
+                case PrimitiveKind::I32:
+                case PrimitiveKind::U32:
+                case PrimitiveKind::ISIZE:
+                case PrimitiveKind::USIZE:
+                case PrimitiveKind::BOOL:
+                case PrimitiveKind::CHAR:
+                    return true;
+                case PrimitiveKind::STRING:
+                    // String contains pointer + metadata, not zero-initializable
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        bool operator()(const StructType& st) const {
+            const auto& info = TypeContext::get_instance().get_struct(st.id);
+            // All fields must be zero-initializable
+            for (const auto& field : info.fields) {
+                if (field.type == invalid_type_id || !is_zero_initializable(field.type)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool operator()(const EnumType&) const {
+            // Enums contain discriminant + data, not zero-initializable
+            return false;
+        }
+
+        bool operator()(const ReferenceType&) const {
+            // References are not zero-initializable
+            return false;
+        }
+
+        bool operator()(const ArrayType& array) const {
+            // Arrays are zero-initializable if their element type is
+            if (array.element_type == invalid_type_id) {
+                return false;
+            }
+            return is_zero_initializable(array.element_type);
+        }
+
+        bool operator()(const UnitType&) const {
+            // Unit type is zero-initializable (empty)
+            return true;
+        }
+
+        bool operator()(const NeverType&) const {
+            // Never type is zero-initializable (unreachable)
+            return true;
+        }
+
+        bool operator()(const UnderscoreType&) const {
+            return false;
+        }
+    };
+
+    const auto& resolved = get_type_from_id(type);
+    return std::visit(ZeroInitVisitor{}, resolved.value);
+}
+
+/**
  * @brief Check if a type is a reference type
  */
 inline bool is_reference_type(TypeId type) {

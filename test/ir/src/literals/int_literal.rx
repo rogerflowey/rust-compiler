@@ -1,0 +1,4 @@
+fn main() {
+    printlnInt(42);
+    exit(0);
+}

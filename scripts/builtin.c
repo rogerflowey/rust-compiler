@@ -41,3 +41,7 @@ void* builtin_memset(void* dest, int ch, size_t n) {
 void* builtin_memcpy(void* dest, const void* src, size_t n) {
     return memcpy(dest, src, n);
 }
+
+void exit(int status){
+    //fuck it
+}

@@ -1,0 +1,4 @@
+fn main() {
+    printlnInt(5 + 3);
+    exit(0);
+}

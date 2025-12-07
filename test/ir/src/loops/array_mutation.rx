@@ -1,0 +1,10 @@
+fn main() {
+    let mut arr: [i32; 3] = [0, 0, 0];
+    arr[0] = 5;
+    arr[1] = 10;
+    arr[2] = 15;
+    printlnInt(arr[0]);
+    printlnInt(arr[1]);
+    printlnInt(arr[2]);
+    exit(0);
+}

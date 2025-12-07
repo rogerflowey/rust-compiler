@@ -1,0 +1,9 @@
+fn double(x: i32) -> i32 {
+    x * 2
+}
+
+fn main() {
+    printlnInt(double(5));
+    printlnInt(double(10));
+    exit(0);
+}

@@ -1,0 +1,19 @@
+fn check_valid(x: i32) -> i32 {
+    if (x < 0) {
+        0
+    } else if (x > 100) {
+        0
+    } else {
+        1
+    }
+}
+
+fn main() {
+    let mut a: i32 = getInt();
+    let mut b: i32 = getInt();
+    let mut c: i32 = getInt();
+    printlnInt(check_valid(a));
+    printlnInt(check_valid(b));
+    printlnInt(check_valid(c));
+    exit(0);
+}

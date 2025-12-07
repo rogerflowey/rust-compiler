@@ -1,0 +1,13 @@
+fn main() {
+    let x: i32 = 5;
+    if (x > 0) {
+        if (x > 10) {
+            printlnInt(1);
+        } else {
+            printlnInt(2);
+        }
+    } else {
+        printlnInt(3);
+    }
+    exit(0);
+}

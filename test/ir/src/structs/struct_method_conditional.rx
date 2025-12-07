@@ -1,0 +1,22 @@
+struct Pair {
+    a: i32,
+    b: i32,
+}
+
+impl Pair {
+    fn max(self) -> i32 {
+        if (self.a > self.b) {
+            self.a
+        } else {
+            self.b
+        }
+    }
+}
+
+fn main() {
+    let p1: Pair = Pair { a: 5, b: 3 };
+    let p2: Pair = Pair { a: 2, b: 8 };
+    printlnInt(p1.max());
+    printlnInt(p2.max());
+    exit(0);
+}

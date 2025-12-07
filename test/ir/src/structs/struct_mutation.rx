@@ -1,0 +1,12 @@
+struct Rectangle {
+    width: i32,
+    height: i32,
+}
+
+fn main() {
+    let mut rect: Rectangle = Rectangle { width: 4, height: 5 };
+    rect.width = 6;
+    printlnInt(rect.width);
+    printlnInt(rect.height);
+    exit(0);
+}
