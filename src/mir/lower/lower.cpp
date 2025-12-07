@@ -328,9 +328,9 @@ mir::FunctionRef FunctionLowerer::lookup_function(const void* key) const {
 	if (auto* internal = std::get_if<MirFunction*>(&target)) {
 		call_stmt.target.kind = mir::CallTarget::Kind::Internal;
 		call_stmt.target.id = (*internal)->id;
-	} else {
+	} else if (auto* external = std::get_if<ExternalFunction*>(&target)) {
 		call_stmt.target.kind = mir::CallTarget::Kind::External;
-		call_stmt.target.id = std::get<ExternalFunction*>(target)->id;
+		call_stmt.target.id = (*external)->id;
 	}
 	
 	call_stmt.args = std::move(args);
@@ -450,12 +450,15 @@ TempId FunctionLowerer::materialize_operand(const Operand& operand, TypeId type)
 		throw std::logic_error("Operand missing resolved type during materialization");
 	}
 	TypeId normalized = canonicalize_type_for_mir(type);
-	const auto& constant = std::get<Constant>(operand.value);
-	if (constant.type != normalized) {
+	const auto* constant = std::get_if<Constant>(&operand.value);
+	if (!constant) {
+		throw std::logic_error("Operand must contain a constant value");
+	}
+	if (constant->type != normalized) {
 		throw std::logic_error("Operand type mismatch during materialization");
 	}
 	TempId dest = allocate_temp(normalized);
-	ConstantRValue const_rvalue{constant};
+	ConstantRValue const_rvalue{*constant};
 	RValue rvalue;
 	rvalue.value = const_rvalue;
 	DefineStatement define{.dest = dest, .rvalue = std::move(rvalue)};

@@ -1,5 +1,7 @@
 #include "mir/codegen/llvmbuilder/type_formatter.hpp"
 
+#include "semantic/utils.hpp"
+
 #include <sstream>
 #include <stdexcept>
 
@@ -81,42 +83,42 @@ std::string TypeFormatter::get_type_name(TypeId type) {
 
     const auto& resolved = type::get_type_from_id(type);
 
-    if (auto primitive = std::get_if<type::PrimitiveKind>(&resolved.value)) {
-        std::string name = primitive_type_to_llvm(*primitive);
-        emitted_types_.emplace(type, name);
-        return name;
-    }
-    if (std::holds_alternative<type::UnitType>(resolved.value)) {
-        return emit_special_struct(type, "__rc_unit", "{}");
-    }
-    if (std::holds_alternative<type::NeverType>(resolved.value)) {
-        throw std::logic_error("Never type should not reach codegen");
-    }
-    if (std::holds_alternative<type::UnderscoreType>(resolved.value)) {
-        throw std::logic_error("Underscore type should not reach codegen");
-    }
-    if (std::holds_alternative<type::StructType>(resolved.value)) {
-        return emit_struct_definition(type);
-    }
-    if (std::holds_alternative<type::EnumType>(resolved.value)) {
-        auto [it, _] = emitted_types_.emplace(type, "i32");
-        return it->second;
-    }
-    if (auto reference_type = std::get_if<type::ReferenceType>(&resolved.value)) {
-        std::string pointee = get_type_name(reference_type->referenced_type);
-        std::string name = pointee + "*";
-        auto [it, _] = emitted_types_.emplace(type, std::move(name));
-        return it->second;
-    }
-    if (auto array_type = std::get_if<type::ArrayType>(&resolved.value)) {
-        std::ostringstream oss;
-        oss << "[" << array_type->size << " x " << get_type_name(array_type->element_type) << "]";
-        std::string name = oss.str();
-        auto [it, _] = emitted_types_.emplace(type, std::move(name));
-        return it->second;
-    }
-
-    throw std::logic_error("Unhandled type variant in get_type_name");
+    return std::visit(Overloaded{
+        [this, type](const type::PrimitiveKind& primitive) -> std::string {
+            std::string name = primitive_type_to_llvm(primitive);
+            emitted_types_.emplace(type, name);
+            return name;
+        },
+        [this, type](const type::UnitType&) -> std::string {
+            return emit_special_struct(type, "__rc_unit", "{}");
+        },
+        [](const type::NeverType&) -> std::string {
+            throw std::logic_error("Never type should not reach codegen");
+        },
+        [](const type::UnderscoreType&) -> std::string {
+            throw std::logic_error("Underscore type should not reach codegen");
+        },
+        [this, type](const type::StructType&) -> std::string {
+            return emit_struct_definition(type);
+        },
+        [this, type](const type::EnumType&) -> std::string {
+            auto [it, _] = emitted_types_.emplace(type, "i32");
+            return it->second;
+        },
+        [this, type](const type::ReferenceType& reference_type) -> std::string {
+            std::string pointee = get_type_name(reference_type.referenced_type);
+            std::string name = pointee + "*";
+            auto [it, _] = emitted_types_.emplace(type, std::move(name));
+            return it->second;
+        },
+        [this, type](const type::ArrayType& array_type) -> std::string {
+            std::ostringstream oss;
+            oss << "[" << array_type.size << " x " << get_type_name(array_type.element_type) << "]";
+            std::string name = oss.str();
+            auto [it, _] = emitted_types_.emplace(type, std::move(name));
+            return it->second;
+        }
+    }, resolved.value);
 }
 
 std::string TypeFormatter::primitive_type_to_llvm(type::PrimitiveKind kind) const {

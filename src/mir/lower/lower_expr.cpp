@@ -86,7 +86,7 @@ Place FunctionLowerer::lower_place_impl(const hir::Index& index_expr, const sema
 }
 
 Place FunctionLowerer::lower_place_impl(const hir::UnaryOp& unary, const semantic::ExprInfo&) {
-    if (!std::holds_alternative<hir::Dereference>(unary.op)) {
+    if (!std::get_if<hir::Dereference>(&unary.op)) {
             throw std::logic_error("Only dereference unary ops can be lowered as places");
     }
 	if (!unary.rhs) {
@@ -139,7 +139,7 @@ TempId FunctionLowerer::materialize_place_base(const hir::Expr& base_expr,
 }
 
 std::optional<Operand> FunctionLowerer::lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info) {
-	if (std::holds_alternative<hir::Literal::String>(literal.value)) {
+	if (std::get_if<hir::Literal::String>(&literal.value)) {
 		if (!info.has_type || info.type == invalid_type_id) {
 			throw std::logic_error("String literal missing resolved type during MIR lowering");
 		}
@@ -268,10 +268,10 @@ std::optional<Operand> FunctionLowerer::lower_expr_impl(const hir::Cast& cast_ex
 }
 
 std::optional<Operand> FunctionLowerer::lower_expr_impl(const hir::BinaryOp& binary, const semantic::ExprInfo& info) {
-        if (std::holds_alternative<hir::LogicalAnd>(binary.op)) {
+        if (std::get_if<hir::LogicalAnd>(&binary.op)) {
                 return lower_short_circuit(binary, info, true);
         }
-        if (std::holds_alternative<hir::LogicalOr>(binary.op)) {
+        if (std::get_if<hir::LogicalOr>(&binary.op)) {
                 return lower_short_circuit(binary, info, false);
         }
 
@@ -295,12 +295,12 @@ std::optional<Operand> FunctionLowerer::lower_expr_impl(const hir::Assignment& a
 	if (!assignment.lhs || !assignment.rhs) {
 		throw std::logic_error("Assignment missing operands during MIR lowering");
 	}
-	if (std::holds_alternative<hir::Underscore>(assignment.lhs->value)) {
+	if (std::get_if<hir::Underscore>(&assignment.lhs->value)) {
 		const hir::Expr* rhs_expr = assignment.rhs.get();
 		if (rhs_expr) {
 			if (const auto* binary = std::get_if<hir::BinaryOp>(&rhs_expr->value)) {
 				const hir::Expr* compound_rhs = nullptr;
-				if (binary->lhs && std::holds_alternative<hir::Underscore>(binary->lhs->value)) {
+				if (binary->lhs && std::get_if<hir::Underscore>(&binary->lhs->value)) {
 					compound_rhs = binary->rhs.get();
 				}
 				if (compound_rhs) {

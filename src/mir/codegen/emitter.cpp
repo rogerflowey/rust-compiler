@@ -54,11 +54,11 @@ std::string escape_string_literal(std::string_view text) {
  * @return true if operand is a constant with zero/false value for its type
  */
 bool is_const_zero(const mir::Operand &operand) {
-  if (!std::holds_alternative<mir::Constant>(operand.value)) {
+  const auto *constant = std::get_if<mir::Constant>(&operand.value);
+  if (!constant) {
     return false;
   }
 
-  const auto &constant = std::get<mir::Constant>(operand.value);
   return std::visit(
       [](const auto &val) -> bool {
         using T = std::decay_t<decltype(val)>;
@@ -73,7 +73,7 @@ bool is_const_zero(const mir::Operand &operand) {
           return false;
         }
       },
-      constant.value);
+      constant->value);
 }
 
 } // namespace
@@ -140,7 +140,7 @@ void Emitter::emit_function(const mir::MirFunction &function) {
 
   // Use "void" for unit return types
   std::string return_type;
-  if (std::holds_alternative<type::UnitType>(type::get_type_from_id(function.return_type).value)) {
+  if (std::get_if<type::UnitType>(&type::get_type_from_id(function.return_type).value)) {
     return_type = "void";
   } else {
     return_type = module_.get_type_name(function.return_type);
@@ -182,7 +182,7 @@ void Emitter::emit_external_declaration(const mir::ExternalFunction &function) {
   
   // Build the return type string - use "void" for unit types
   std::string ret_type;
-  if (std::holds_alternative<type::UnitType>(type::get_type_from_id(function.return_type).value)) {
+  if (std::get_if<type::UnitType>(&type::get_type_from_id(function.return_type).value)) {
     ret_type = "void";
   } else {
     ret_type = module_.get_type_name(function.return_type);
@@ -293,7 +293,7 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
   if (statement.target.kind == mir::CallTarget::Kind::Internal) {
     const auto& fn = mir_module_.functions.at(statement.target.id);
     // Use "void" for unit return types
-    if (std::holds_alternative<type::UnitType>(type::get_type_from_id(fn.return_type).value)) {
+    if (std::get_if<type::UnitType>(&type::get_type_from_id(fn.return_type).value)) {
       ret_type = "void";
     } else {
       ret_type = module_.get_type_name(fn.return_type);
@@ -302,7 +302,7 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
   } else {
     const auto& ext_fn = mir_module_.external_functions.at(statement.target.id);
     // Use "void" for unit return types
-    if (std::holds_alternative<type::UnitType>(type::get_type_from_id(ext_fn.return_type).value)) {
+    if (std::get_if<type::UnitType>(&type::get_type_from_id(ext_fn.return_type).value)) {
       ret_type = "void";
     } else {
       ret_type = module_.get_type_name(ext_fn.return_type);
@@ -355,10 +355,16 @@ void Emitter::emit_terminator(const mir::Terminator &terminator) {
                if (ret.value.has_value()) {
                  auto operand = get_typed_operand(*ret.value);
                  // Check if the return type is a unit type - if so, return void
-                 mir::TypeId ret_type = current_function_->get_temp_type(std::get<mir::TempId>(ret.value->value));
-                 if (std::holds_alternative<type::UnitType>(type::get_type_from_id(ret_type).value)) {
-                   current_block_builder_->emit_ret_void();
+                 if (const auto* temp_id = std::get_if<mir::TempId>(&ret.value->value)) {
+                   mir::TypeId ret_type = current_function_->get_temp_type(*temp_id);
+                   if (std::get_if<type::UnitType>(&type::get_type_from_id(ret_type).value)) {
+                     current_block_builder_->emit_ret_void();
+                   } else {
+                     current_block_builder_->emit_ret(operand.type_name,
+                                                      operand.value_name);
+                   }
                  } else {
+                   // Constant value
                    current_block_builder_->emit_ret(operand.type_name,
                                                     operand.value_name);
                  }
@@ -478,10 +484,8 @@ TypedOperand Emitter::materialize_constant_operand(mir::TypeId fallback_type,
   if (const_type == mir::invalid_type_id) {
     throw std::logic_error("Constant operand missing resolved type during codegen");
   }
-  if (std::holds_alternative<mir::StringConstant>(constant.value)) {
-    return emit_string_constant_operand(const_type,
-                                        std::get<mir::StringConstant>(constant.value),
-                                        target_temp);
+  if (const auto *string_const = std::get_if<mir::StringConstant>(&constant.value)) {
+    return emit_string_constant_operand(const_type, *string_const, target_temp);
   }
 
   std::string type_name = module_.get_type_name(const_type);

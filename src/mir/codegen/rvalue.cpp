@@ -119,7 +119,7 @@ ValueCategory classify_type(mir::TypeId type_id) {
 			return ValueCategory::Other;
 		}
 	}
-	if (std::holds_alternative<type::ReferenceType>(resolved.value)) {
+	if (std::get_if<type::ReferenceType>(&resolved.value)) {
 		return ValueCategory::Pointer;
 	}
 	return ValueCategory::Other;

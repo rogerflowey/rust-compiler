@@ -103,12 +103,12 @@ TypeId get_bool_type() {
 
 bool is_unit_type(TypeId type) {
     return type != type::invalid_type_id &&
-           std::holds_alternative<type::UnitType>(type::get_type_from_id(type).value);
+           std::get_if<type::UnitType>(&type::get_type_from_id(type).value) != nullptr;
 }
 
 bool is_never_type(TypeId type) {
     return type != type::invalid_type_id &&
-           std::holds_alternative<type::NeverType>(type::get_type_from_id(type).value);
+           std::get_if<type::NeverType>(&type::get_type_from_id(type).value) != nullptr;
 }
 
 Constant make_bool_constant(bool value) {
@@ -389,10 +389,10 @@ std::string type_name(TypeId type) {
     if (auto array_type = std::get_if<type::ArrayType>(&resolved.value)) {
         return "[" + type_name(array_type->element_type) + ";" + std::to_string(array_type->size) + "]";
     }
-    if (std::holds_alternative<type::UnitType>(resolved.value)) {
+    if (std::get_if<type::UnitType>(&resolved.value)) {
         return "unit";
     }
-    if (std::holds_alternative<type::NeverType>(resolved.value)) {
+    if (std::get_if<type::NeverType>(&resolved.value)) {
         return "!";
     }
     return "_";
