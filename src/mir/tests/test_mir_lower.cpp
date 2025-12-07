@@ -759,7 +759,8 @@ TEST(MirLowerTest, LowersDirectFunctionCall) {
     ASSERT_TRUE(std::holds_alternative<mir::CallStatement>(block.statements[0].value));
     const auto& call_stmt = std::get<mir::CallStatement>(block.statements[0].value);
     ASSERT_TRUE(call_stmt.dest.has_value());
-    EXPECT_EQ(call_stmt.function, callee_mir.id);
+    EXPECT_EQ(call_stmt.target.kind, mir::CallTarget::Kind::Internal);
+    EXPECT_EQ(call_stmt.target.id, callee_mir.id);
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
     ASSERT_TRUE(ret.value.has_value());
@@ -770,13 +771,15 @@ TEST(MirLowerTest, LowersDirectFunctionCall) {
 TEST(MirLowerTest, LowerFunctionUsesProvidedIdMapForCalls) {
     TypeId int_type = make_type(type::PrimitiveKind::I32);
 
-    hir::Function callee;
+    auto callee_item = std::make_unique<hir::Item>(hir::Function{});
+    auto& callee = std::get<hir::Function>(callee_item->value);
     callee.return_type = hir::TypeAnnotation(int_type);
     auto callee_body = std::make_unique<hir::Block>();
     callee_body->final_expr = make_int_literal_expr(11, int_type);
     callee.body = std::move(callee_body);
 
-    hir::Function caller;
+    auto caller_item = std::make_unique<hir::Item>(hir::Function{});
+    auto& caller = std::get<hir::Function>(caller_item->value);
     caller.return_type = hir::TypeAnnotation(int_type);
 
     hir::Call call_expr;
@@ -789,18 +792,26 @@ TEST(MirLowerTest, LowerFunctionUsesProvidedIdMapForCalls) {
     caller_body->final_expr = std::move(call_expr_node);
     caller.body = std::move(caller_body);
 
-    std::unordered_map<const void*, mir::FunctionId> ids;
-    ids.emplace(&callee, static_cast<mir::FunctionId>(0));
-    ids.emplace(&caller, static_cast<mir::FunctionId>(1));
+    hir::Program program;
+    program.items.push_back(std::move(callee_item));
+    program.items.push_back(std::move(caller_item));
 
-    mir::MirFunction lowered = mir::lower_function(caller, ids, ids.at(&caller));
-    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
-    const auto& block = lowered.basic_blocks.front();
+    // Lower the entire program to verify function calls work with the new unified mapping
+    mir::MirModule module = mir::lower_program(program);
+    
+    // The module should have 2 functions (callee and caller)
+    ASSERT_EQ(module.functions.size(), 2u);
+    
+    const auto& callee_mir = module.functions[0];
+    const auto& caller_mir = module.functions[1];
+    const auto& block = caller_mir.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
     ASSERT_TRUE(std::holds_alternative<mir::CallStatement>(block.statements[0].value));
+    
     const auto& call_stmt = std::get<mir::CallStatement>(block.statements[0].value);
     ASSERT_TRUE(call_stmt.dest.has_value());
-    EXPECT_EQ(call_stmt.function, ids.at(&callee));
+    EXPECT_EQ(call_stmt.target.kind, mir::CallTarget::Kind::Internal);
+    EXPECT_EQ(call_stmt.target.id, callee_mir.id);
 }
 
 TEST(MirLowerTest, LowersLoopWithContinue) {
@@ -1043,7 +1054,8 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
     const auto& aggregate_define = std::get<mir::DefineStatement>(entry.statements[0].value);
     ASSERT_TRUE(std::holds_alternative<mir::AggregateRValue>(aggregate_define.rvalue.value));
     const auto& call_stmt = std::get<mir::CallStatement>(entry.statements[1].value);
-    EXPECT_EQ(call_stmt.function, method_mir.id);
+    EXPECT_EQ(call_stmt.target.kind, mir::CallTarget::Kind::Internal);
+    EXPECT_EQ(call_stmt.target.id, method_mir.id);
     ASSERT_EQ(call_stmt.args.size(), 1u);
     ASSERT_TRUE(std::holds_alternative<mir::TempId>(call_stmt.args[0].value));
     EXPECT_EQ(std::get<mir::TempId>(call_stmt.args[0].value), aggregate_define.dest);

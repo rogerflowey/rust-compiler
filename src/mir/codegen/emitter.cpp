@@ -68,6 +68,13 @@ Emitter::Emitter(mir::MirModule &module, std::string target_triple,
 
 std::string Emitter::emit() {
   emit_globals();
+  
+  // Emit external function declarations first
+  for (const auto &external_function : mir_module_.external_functions) {
+    emit_external_declaration(external_function);
+  }
+  
+  // Emit internal function definitions
   for (const auto &function : mir_module_.functions) {
     emit_function(function);
   }
@@ -104,9 +111,17 @@ void Emitter::emit_function(const mir::MirFunction &function) {
                                        param.name});
   }
 
+  // Use "void" for unit return types
+  std::string return_type;
+  if (std::holds_alternative<type::UnitType>(type::get_type_from_id(function.return_type).value)) {
+    return_type = "void";
+  } else {
+    return_type = module_.get_type_name(function.return_type);
+  }
+
   current_function_builder_ =
       &module_.add_function(get_function_name(function.id),
-                  module_.get_type_name(function.return_type),
+                  return_type,
                             std::move(params));
 
   block_builders_.emplace(function.start_block,
@@ -128,6 +143,36 @@ void Emitter::emit_function(const mir::MirFunction &function) {
   current_function_ = nullptr;
   current_block_builder_ = nullptr;
   current_function_builder_ = nullptr;
+}
+
+void Emitter::emit_external_declaration(const mir::ExternalFunction &function) {
+  // Build parameter type list
+  std::vector<std::string> param_types;
+  param_types.reserve(function.param_types.size());
+  for (mir::TypeId param_type : function.param_types) {
+    param_types.push_back(module_.get_type_name(param_type));
+  }
+  
+  // Build the return type string - use "void" for unit types
+  std::string ret_type;
+  if (std::holds_alternative<type::UnitType>(type::get_type_from_id(function.return_type).value)) {
+    ret_type = "void";
+  } else {
+    ret_type = module_.get_type_name(function.return_type);
+  }
+  
+  std::string params;
+  for (std::size_t i = 0; i < param_types.size(); ++i) {
+    if (i > 0) {
+      params += ", ";
+    }
+    params += param_types[i];
+  }
+  
+  // Emit as LLVM declare statement
+  std::string declaration = "declare dso_local " + ret_type + " @" + 
+                            function.name + "(" + params + ")";
+  module_.add_global(declaration);
 }
 
 void Emitter::emit_block(mir::BasicBlockId block_id) {
@@ -214,15 +259,38 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
     args.emplace_back(operand.type_name, operand.value_name);
   }
 
-  const auto &callee = mir_module_.functions.at(statement.function);
-  std::string ret_type = module_.get_type_name(callee.return_type);
+  // Resolve the call target
+  std::string ret_type;
+  std::string func_name;
+
+  if (statement.target.kind == mir::CallTarget::Kind::Internal) {
+    const auto& fn = mir_module_.functions.at(statement.target.id);
+    // Use "void" for unit return types
+    if (std::holds_alternative<type::UnitType>(type::get_type_from_id(fn.return_type).value)) {
+      ret_type = "void";
+    } else {
+      ret_type = module_.get_type_name(fn.return_type);
+    }
+    func_name = fn.name;
+  } else {
+    const auto& ext_fn = mir_module_.external_functions.at(statement.target.id);
+    // Use "void" for unit return types
+    if (std::holds_alternative<type::UnitType>(type::get_type_from_id(ext_fn.return_type).value)) {
+      ret_type = "void";
+    } else {
+      ret_type = module_.get_type_name(ext_fn.return_type);
+    }
+    func_name = ext_fn.name;
+  }
+
+  // Trust the dest field set by lowerer: if dest is present, call returns a value
   if (statement.dest) {
     current_block_builder_->emit_call_into(
         llvmbuilder::temp_name(*statement.dest), ret_type,
-        get_function_name(statement.function), args);
+        func_name, args);
   } else {
     current_block_builder_->emit_call(
-        ret_type, get_function_name(statement.function), args, {});
+        ret_type, func_name, args, {});
   }
 }
 
@@ -259,8 +327,14 @@ void Emitter::emit_terminator(const mir::Terminator &terminator) {
              [&](const mir::ReturnTerminator &ret) {
                if (ret.value.has_value()) {
                  auto operand = get_typed_operand(*ret.value);
-                 current_block_builder_->emit_ret(operand.type_name,
-                                                  operand.value_name);
+                 // Check if the return type is a unit type - if so, return void
+                 mir::TypeId ret_type = current_function_->get_temp_type(std::get<mir::TempId>(ret.value->value));
+                 if (std::holds_alternative<type::UnitType>(type::get_type_from_id(ret_type).value)) {
+                   current_block_builder_->emit_ret_void();
+                 } else {
+                   current_block_builder_->emit_ret(operand.type_name,
+                                                    operand.value_name);
+                 }
                } else {
                  current_block_builder_->emit_ret_void();
                }
@@ -385,18 +459,6 @@ TypedOperand Emitter::materialize_constant_operand(mir::TypeId fallback_type,
 
   std::string type_name = module_.get_type_name(const_type);
   std::string value_name;
-
-  if (std::holds_alternative<mir::UnitConstant>(constant.value)) {
-    if (target_temp) {
-      materialize_constant_into_temp(*target_temp, type_name, "zeroinitializer");
-      value_name = llvmbuilder::temp_name(*target_temp);
-    } else {
-      value_name = "undef";
-    }
-    return TypedOperand{.type_name = std::move(type_name),
-                        .value_name = std::move(value_name),
-                        .type = const_type};
-  }
 
   std::string literal = format_constant_literal(constant);
   if (target_temp) {
@@ -645,7 +707,6 @@ std::string Emitter::format_constant_literal(const mir::Constant &constant) {
                      std::string prefix = val.is_negative ? "-" : "";
                      return prefix + std::to_string(val.value);
                    },
-                   [](mir::UnitConstant) -> std::string { return "zeroinitializer"; },
                    [](mir::CharConstant val) -> std::string {
                      return std::to_string(static_cast<unsigned int>(
                          static_cast<unsigned char>(val.value)));

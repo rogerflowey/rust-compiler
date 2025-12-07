@@ -38,23 +38,6 @@ std::string make_scoped_name(const std::string& scope, const std::string& base) 
     }
     return scope + "::" + base;
 }
-
-std::string safe_function_name(const hir::Function& function) {
-    try {
-        return hir::helper::get_name(function).name;
-    } catch (const std::logic_error&) {
-        return {};
-    }
-}
-
-std::string safe_method_name(const hir::Method& method) {
-    try {
-        return hir::helper::get_name(method).name;
-    } catch (const std::logic_error&) {
-        return {};
-    }
-}
-
 bool is_signed_integer_kind(type::PrimitiveKind kind) {
     return kind == type::PrimitiveKind::I32 || kind == type::PrimitiveKind::ISIZE;
 }
@@ -135,13 +118,6 @@ Constant make_bool_constant(bool value) {
     return constant;
 }
 
-Constant make_unit_constant() {
-    Constant constant;
-    constant.type = get_unit_type();
-    constant.value = UnitConstant{};
-    return constant;
-}
-
 TypeId canonicalize_type_for_mir(TypeId type) {
     return canonicalize_type_impl(type);
 }
@@ -150,10 +126,6 @@ Operand make_constant_operand(const Constant& constant) {
     Operand operand;
     operand.value = constant;
     return operand;
-}
-
-Operand make_unit_operand() {
-    return make_constant_operand(make_unit_constant());
 }
 
 std::optional<type::PrimitiveKind> get_primitive_kind(TypeId type) {

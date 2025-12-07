@@ -1,0 +1,15 @@
+fn main() {
+    let mut values: [i32; 5] = [0; 5];
+    let mut idx: usize = 0;
+    while (idx < 5) {
+        values[idx] = getInt();
+        idx += 1;
+    }
+
+    let mut remaining: usize = 5;
+    while (remaining > 0) {
+        remaining -= 1;
+        printlnInt(values[remaining]);
+    }
+    exit(0);
+}

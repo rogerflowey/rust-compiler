@@ -83,3 +83,39 @@ TEST(MirEmitterTest, EmitsDeterministicTempsAndStrings) {
     EXPECT_NE(first_str, std::string::npos);
     EXPECT_EQ(first_str, ir.rfind("@str.0 ="));
 }
+
+TEST(MirEmitterTest, EmitsExternalFunctionDeclarations) {
+    mir::MirModule module;
+    
+    // Create types
+    type::TypeId unit_type = type::get_typeID(type::Type{type::UnitType{}});
+    type::TypeId i32_type = type::get_typeID(type::Type{type::PrimitiveKind::I32});
+    type::TypeId char_type = type::get_typeID(type::Type{type::PrimitiveKind::CHAR});
+    type::ReferenceType char_ptr{.referenced_type = char_type, .is_mutable = false};
+    type::TypeId char_ptr_type = type::get_typeID(type::Type{char_ptr});
+    
+    // Add an external function: print(char*) -> unit
+    mir::ExternalFunction ext_fn;
+    ext_fn.id = 0;
+    ext_fn.name = "print";
+    ext_fn.return_type = unit_type;
+    ext_fn.param_types.push_back(char_ptr_type);
+    
+    module.external_functions.push_back(ext_fn);
+    
+    // Add another external function: getInt() -> i32
+    mir::ExternalFunction getint_fn;
+    getint_fn.id = 1;
+    getint_fn.name = "getInt";
+    getint_fn.return_type = i32_type;
+    
+    module.external_functions.push_back(getint_fn);
+    
+    codegen::Emitter emitter(module);
+    std::string ir = emitter.emit();
+    
+    // Check that external declarations are emitted
+    EXPECT_NE(ir.find("declare dso_local"), std::string::npos);
+    EXPECT_NE(ir.find("@print"), std::string::npos);
+    EXPECT_NE(ir.find("@getInt"), std::string::npos);
+}

@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -19,6 +20,13 @@ using FunctionId = std::uint32_t;
 using TypeId = type::TypeId;
 using GlobalId = std::uint32_t;
 inline constexpr TypeId invalid_type_id = type::invalid_type_id;
+
+// Forward declarations
+struct MirFunction;
+struct ExternalFunction;
+
+// Unified function reference for call targets
+using FunctionRef = std::variant<MirFunction*, ExternalFunction*>;
 
 struct LocalInfo {
     TypeId type = invalid_type_id;
@@ -51,8 +59,6 @@ struct StringConstant {
     bool is_cstyle = false;
 };
 
-struct UnitConstant {};
-
 struct StringLiteralGlobal {
     StringConstant value;
 };
@@ -63,7 +69,7 @@ struct MirGlobal {
     GlobalValue value;
 };
 
-using ConstantValue = std::variant<BoolConstant, IntConstant, UnitConstant, CharConstant, StringConstant>;
+using ConstantValue = std::variant<BoolConstant, IntConstant, CharConstant, StringConstant>;
 
 struct Constant {
     TypeId type = invalid_type_id;
@@ -218,9 +224,15 @@ struct AssignStatement {
     Operand src;
 };
 
+struct CallTarget {
+    enum class Kind { Internal, External };
+    Kind kind = Kind::Internal;
+    std::uint32_t id = 0;  // FunctionId for Internal, ExternalFunction::Id for External
+};
+
 struct CallStatement {
     std::optional<TempId> dest;
-    FunctionId function = 0;
+    CallTarget target;
     std::vector<Operand> args;
 };
 
@@ -273,6 +285,16 @@ struct BasicBlock {
     Terminator terminator{ReturnTerminator{std::nullopt}};
 };
 
+struct ExternalFunction {
+    using Id = std::uint32_t;
+    static constexpr Id invalid_id = std::numeric_limits<Id>::max();
+
+    Id id = invalid_id;
+    std::string name;
+    std::vector<TypeId> param_types;
+    TypeId return_type = invalid_type_id;
+};
+
 struct MirFunction {
     FunctionId id = 0;
     std::string name;
@@ -308,6 +330,7 @@ struct MirFunction {
 struct MirModule {
     std::vector<MirGlobal> globals;
     std::vector<MirFunction> functions;
+    std::vector<ExternalFunction> external_functions;
 };
 
 } // namespace mir

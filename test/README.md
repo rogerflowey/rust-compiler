@@ -98,6 +98,12 @@ Tests live next to the code they exercise. This keeps fixtures close to their he
 - Performance of full compilation
 - Correctness of generated output
 
+#### IR End-to-End Fixtures (`test/ir`)
+
+- Minimal IR pipeline smoke cases live in `test/ir/src`.
+- Run them with `python3 test/ir/run_ir_e2e.py` (defaults to `build/ninja-debug/cmd/ir_pipeline`, `scripts/builtin.c`, output in `test/ir/output`).
+- Requires a riscv32-capable `clang` and `reimu` on `PATH`; pass `--keep-temps` to preserve intermediates for debugging.
+
 #### Cross-Component Tests
 
 **Purpose**: Test interactions between different compiler components.

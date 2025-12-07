@@ -84,7 +84,7 @@ std::string build_call_body(
     const std::string& callee,
     const std::vector<std::pair<std::string, std::string>>& args) {
     std::ostringstream oss;
-    oss << "call " << return_type << ' ' << callee << "(";
+    oss << "call " << return_type << " @" << callee << "(";
     for (std::size_t i = 0; i < args.size(); ++i) {
         if (i > 0) {
             oss << ", ";

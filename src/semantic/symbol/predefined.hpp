@@ -137,6 +137,7 @@ inline hir::Function make_builtin_function(std::string_view name,
     fn.return_type = hir::TypeAnnotation{return_type};
     fn.body = nullptr;
     fn.locals.clear();
+    fn.is_builtin = true; // NEW: Mark as builtin
 
     return fn;
 }
@@ -164,6 +165,7 @@ inline hir::Method make_builtin_method(std::string_view name,
     method.body = nullptr;
     method.self_local.reset();
     method.locals.clear();
+    method.is_builtin = true; // NEW: Mark as builtin
 
     return method;
 }

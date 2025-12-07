@@ -48,6 +48,7 @@ private:
 
   // emit helpers
   void emit_function(const mir::MirFunction &function);
+  void emit_external_declaration(const mir::ExternalFunction &function);
   void emit_block(mir::BasicBlockId block_id);
   void emit_statement(const mir::Statement &statement);
   void emit_terminator(const mir::Terminator &terminator);

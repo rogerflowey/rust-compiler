@@ -127,6 +127,11 @@ public:
   }
 
   Scope *get_parent() const { return parent; }
+  
+  // NEW: Get local items for iteration (used by lowering for predefined builtins)
+  const std::unordered_map<std::string, ValueDef>& get_items_local() const {
+    return item_symbols;
+  }
 };
 
 } // namespace semantic

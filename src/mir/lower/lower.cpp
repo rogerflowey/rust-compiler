@@ -5,6 +5,7 @@
 #include "mir/lower/lower_const.hpp"
 
 #include "semantic/hir/helper.hpp"
+#include "semantic/symbol/predefined.hpp"
 #include "type/type.hpp"
 
 #include <optional>
@@ -27,6 +28,7 @@ struct FunctionDescriptor {
 	const hir::Method* method = nullptr;
 	std::string name;
 	FunctionId id = 0;
+	bool is_external = false; // NEW: Track if function is external/builtin
 };
 
 void add_function_descriptor(const hir::Function& function,
@@ -53,6 +55,22 @@ void add_method_descriptor(const hir::Method& method,
 
 std::vector<FunctionDescriptor> collect_function_descriptors(const hir::Program& program) {
 	std::vector<FunctionDescriptor> descriptors;
+	
+	// Phase 2: Collect predefined scope functions first (builtins)
+	const semantic::Scope& predefined = semantic::get_predefined_scope();
+	for (const auto& [name, symbol] : predefined.get_items_local()) {
+		if (auto* fn_ptr = std::get_if<hir::Function*>(&symbol)) {
+			FunctionDescriptor descriptor;
+			descriptor.kind = FunctionDescriptor::Kind::Function;
+			descriptor.function = *fn_ptr;
+			descriptor.key = *fn_ptr;
+			descriptor.name = std::string(name);
+			descriptor.is_external = true; // Mark as external/builtin
+			descriptors.push_back(std::move(descriptor));
+		}
+	}
+	
+	// Collect from program (user-defined)
 	for (const auto& item_ptr : program.items) {
 		if (!item_ptr) {
 			continue;
@@ -80,12 +98,12 @@ std::vector<FunctionDescriptor> collect_function_descriptors(const hir::Program&
 }
 
 MirFunction lower_descriptor(const FunctionDescriptor& descriptor,
-	       const std::unordered_map<const void*, FunctionId>& ids) {
+	       const std::unordered_map<const void*, mir::FunctionRef>& fn_map) {
 	if (descriptor.kind == FunctionDescriptor::Kind::Function) {
-		FunctionLowerer lowerer(*descriptor.function, ids, descriptor.id, descriptor.name);
+		FunctionLowerer lowerer(*descriptor.function, fn_map, descriptor.id, descriptor.name);
 		return lowerer.lower();
 	}
-	FunctionLowerer lowerer(*descriptor.method, ids, descriptor.id, descriptor.name);
+	FunctionLowerer lowerer(*descriptor.method, fn_map, descriptor.id, descriptor.name);
 	return lowerer.lower();
 }
 
@@ -96,22 +114,22 @@ MirFunction lower_descriptor(const FunctionDescriptor& descriptor,
 namespace detail {
 
 FunctionLowerer::FunctionLowerer(const hir::Function& function,
-			       const std::unordered_map<const void*, FunctionId>& id_map,
+			       const std::unordered_map<const void*, mir::FunctionRef>& fn_map,
 		       FunctionId id,
 	       std::string name)
 	: function_kind(FunctionKind::Function),
 	  hir_function(&function),
-	  function_ids(id_map) {
+	  function_map(fn_map) {
 	initialize(id, std::move(name));
 }
 
 FunctionLowerer::FunctionLowerer(const hir::Method& method,
-			       const std::unordered_map<const void*, FunctionId>& id_map,
+			       const std::unordered_map<const void*, mir::FunctionRef>& fn_map,
 	       FunctionId id,
 	       std::string name)
 	: function_kind(FunctionKind::Method),
 	  hir_method(&method),
-	  function_ids(id_map) {
+	  function_map(fn_map) {
 	initialize(id, std::move(name));
 }
 
@@ -281,20 +299,20 @@ void FunctionLowerer::require_reachable(const char* context) const {
 	}
 }
 
-FunctionId FunctionLowerer::lookup_function_id(const void* key) const {
-	auto it = function_ids.find(key);
-	if (it == function_ids.end()) {
+mir::FunctionRef FunctionLowerer::lookup_function(const void* key) const {
+	auto it = function_map.find(key);
+	if (it == function_map.end()) {
 		throw std::logic_error("Call target not registered during MIR lowering");
 	}
 	return it->second;
 }
 
-Operand FunctionLowerer::emit_call(FunctionId target,
-			           TypeId result_type,
-			           std::vector<Operand>&& args) {
+	std::optional<Operand> FunctionLowerer::emit_call(mir::FunctionRef target,
+		           TypeId result_type,
+		           std::vector<Operand>&& args) {
 	bool result_needed = !is_unit_type(result_type) && !is_never_type(result_type);
 	std::optional<TempId> dest;
-	Operand result = make_unit_operand();
+	std::optional<Operand> result;
 	if (result_needed) {
 		TempId temp = allocate_temp(result_type);
 		dest = temp;
@@ -302,8 +320,19 @@ Operand FunctionLowerer::emit_call(FunctionId target,
 	}
 
 	CallStatement call_stmt;
+	// Only set dest if result is needed (not unit/never type)
+	// This applies same logic for both internal and external calls
 	call_stmt.dest = dest;
-	call_stmt.function = target;
+	
+	// Phase 4: Set correct CallTarget::Kind and ID based on function type
+	if (auto* internal = std::get_if<MirFunction*>(&target)) {
+		call_stmt.target.kind = mir::CallTarget::Kind::Internal;
+		call_stmt.target.id = (*internal)->id;
+	} else {
+		call_stmt.target.kind = mir::CallTarget::Kind::External;
+		call_stmt.target.id = std::get<ExternalFunction*>(target)->id;
+	}
+	
 	call_stmt.args = std::move(args);
 	Statement stmt;
 	stmt.value = std::move(call_stmt);
@@ -347,6 +376,9 @@ TempId FunctionLowerer::allocate_temp(TypeId type) {
 		throw std::logic_error("Temporary missing resolved type during MIR lowering");
 	}
 	TypeId normalized = canonicalize_type_for_mir(type);
+	if (is_unit_type(normalized)) {
+		throw std::logic_error("Unit temporaries should not be allocated");
+	}
 	TempId id = static_cast<TempId>(mir_function.temp_types.size());
 	mir_function.temp_types.push_back(normalized);
 	return id;
@@ -457,7 +489,9 @@ FunctionLowerer::LoopContext& FunctionLowerer::push_loop_context(const void* key
 	if (break_type) {
 		TypeId normalized = canonicalize_type_for_mir(*break_type);
 		ctx.break_type = normalized;
-		ctx.break_result = allocate_temp(normalized);
+		if (!is_unit_type(normalized) && !is_never_type(normalized)) {
+			ctx.break_result = allocate_temp(normalized);
+		}
 	} else {
 		ctx.break_type = std::nullopt;
 	}
@@ -518,21 +552,24 @@ void FunctionLowerer::lower_block(const hir::Block& hir_block) {
 			emit_return(std::nullopt);
 			return;
 		}
-		Operand value = lower_expr(*expr_ptr);
+		std::optional<Operand> value = lower_expr(*expr_ptr);
+		if (!value && !is_unit_type(mir_function.return_type) && !is_never_type(mir_function.return_type)) {
+			throw std::logic_error("Missing return value for function requiring return value");
+		}
 		emit_return(std::move(value));
 		return;
 	}
 
-	if (mir_function.return_type == get_unit_type()) {
+	if (mir_function.return_type == get_unit_type() || is_never_type(mir_function.return_type)) {
 		emit_return(std::nullopt);
 	} else {
 		throw std::logic_error("Missing final expression for non-unit function");
 	}
 }
 
-Operand FunctionLowerer::lower_block_expr(const hir::Block& block, TypeId expected_type) {
+	std::optional<Operand> FunctionLowerer::lower_block_expr(const hir::Block& block, TypeId expected_type) {
 	if (!lower_block_statements(block)) {
-		return make_unit_operand();
+		return std::nullopt;
 	}
 
 	if (block.final_expr) {
@@ -540,11 +577,11 @@ Operand FunctionLowerer::lower_block_expr(const hir::Block& block, TypeId expect
 		if (expr_ptr) {
 			return lower_expr(*expr_ptr);
 		}
-		return make_unit_operand();
+		return std::nullopt;
 	}
 
-	if (is_unit_type(expected_type)) {
-		return make_unit_operand();
+	if (is_unit_type(expected_type) || is_never_type(expected_type)) {
+		return std::nullopt;
 	}
 
 	throw std::logic_error("Block expression missing value");
@@ -567,7 +604,7 @@ void FunctionLowerer::lower_statement_impl(const hir::LetStmt& let_stmt) {
 	if (!let_stmt.initializer) {
 		throw std::logic_error("Let statement without initializer not supported in MIR lowering");
 	}
-	Operand value = lower_expr(*let_stmt.initializer);
+	Operand value = expect_operand(lower_expr(*let_stmt.initializer), "Let initializer must produce value");
 	lower_pattern_store(*let_stmt.pattern, value);
 }
 
@@ -641,30 +678,131 @@ LocalId FunctionLowerer::create_synthetic_local(TypeId type,
 MirFunction lower_function(const hir::Function& function,
 	       const std::unordered_map<const void*, FunctionId>& id_map,
 	       FunctionId id) {
-	FunctionLowerer lowerer(function, id_map, id, derive_function_name(function, std::string{}));
+	// Convert old FunctionId map to new FunctionRef map (this is only for backwards compatibility)
+	(void)id_map;  // Unused in new design
+	std::unordered_map<const void*, mir::FunctionRef> fn_map;
+	// Not used in this path since we don't call external functions from standalone lowering
+	FunctionLowerer lowerer(function, fn_map, id, derive_function_name(function, std::string{}));
 	return lowerer.lower();
 }
 
 MirFunction lower_function(const hir::Function& function) {
-	std::unordered_map<const void*, FunctionId> ids;
-	ids.emplace(&function, static_cast<FunctionId>(0));
-	return lower_function(function, ids, 0);
+	std::unordered_map<const void*, mir::FunctionRef> fn_map;
+	return FunctionLowerer(function, fn_map, 0, derive_function_name(function, std::string{})).lower();
+}
+
+ExternalFunction lower_external_function(const FunctionDescriptor& descriptor) {
+	ExternalFunction ext_fn;
+	ext_fn.name = descriptor.name;
+	
+	std::vector<TypeId> param_types;
+	TypeId return_type = type::invalid_type_id;
+	
+	if (descriptor.kind == FunctionDescriptor::Kind::Function && descriptor.function) {
+		// Extract return type
+		if (descriptor.function->return_type) {
+			return_type = hir::helper::get_resolved_type(*descriptor.function->return_type);
+		} else {
+			return_type = type::invalid_type_id;
+		}
+		
+		// Extract parameter types from param_type_annotations
+		for (const auto& param_annotation : descriptor.function->param_type_annotations) {
+			if (param_annotation) {
+				TypeId param_type = hir::helper::get_resolved_type(*param_annotation);
+				param_types.push_back(param_type);
+			}
+		}
+	} else if (descriptor.kind == FunctionDescriptor::Kind::Method && descriptor.method) {
+		// Extract return type
+		if (descriptor.method->return_type) {
+			return_type = hir::helper::get_resolved_type(*descriptor.method->return_type);
+		} else {
+			return_type = type::invalid_type_id;
+		}
+		
+		// Extract parameter types from param_type_annotations
+		for (const auto& param_annotation : descriptor.method->param_type_annotations) {
+			if (param_annotation) {
+				TypeId param_type = hir::helper::get_resolved_type(*param_annotation);
+				param_types.push_back(param_type);
+			}
+		}
+	}
+	
+	ext_fn.return_type = return_type;
+	ext_fn.param_types = std::move(param_types);
+	
+	return ext_fn;
 }
 
 MirModule lower_program(const hir::Program& program) {
 	std::vector<FunctionDescriptor> descriptors = collect_function_descriptors(program);
-	std::unordered_map<const void*, FunctionId> ids;
-	ids.reserve(descriptors.size());
+	
+	// Separate descriptors into internal and external functions
+	// Use is_external flag and/or check for body presence
+	std::vector<FunctionDescriptor> internal_descriptors;
+	std::vector<FunctionDescriptor> external_descriptors;
+	
 	for (auto& descriptor : descriptors) {
-		descriptor.id = static_cast<FunctionId>(ids.size());
-		ids.emplace(descriptor.key, descriptor.id);
+		// Builtins are explicitly marked as external
+		if (descriptor.is_external) {
+			external_descriptors.push_back(descriptor);
+		} else {
+			// User-defined functions without body are also external
+			const hir::Block* body = nullptr;
+			if (descriptor.kind == FunctionDescriptor::Kind::Function && descriptor.function) {
+				body = descriptor.function->body.get();
+			} else if (descriptor.kind == FunctionDescriptor::Kind::Method && descriptor.method) {
+				body = descriptor.method->body.get();
+			}
+			
+			if (body == nullptr) {
+				external_descriptors.push_back(descriptor);
+			} else {
+				internal_descriptors.push_back(descriptor);
+			}
+		}
 	}
-
+	
+	// Phase 3: Unified ID mapping
+	std::unordered_map<const void*, mir::FunctionRef> function_map;
 	MirModule module;
-	module.functions.reserve(descriptors.size());
-	for (const auto& descriptor : descriptors) {
-		module.functions.push_back(lower_descriptor(descriptor, ids));
+	
+	// Process external functions first
+	module.external_functions.reserve(external_descriptors.size());
+	for (auto& descriptor : external_descriptors) {
+		ExternalFunction::Id ext_id = static_cast<ExternalFunction::Id>(module.external_functions.size());
+		
+		ExternalFunction ext_fn = lower_external_function(descriptor);
+		ext_fn.id = ext_id;
+		module.external_functions.push_back(ext_fn);
+		
+		// Map HIR pointer to external function reference
+		function_map.emplace(descriptor.key, &module.external_functions.back());
 	}
+	
+	// Create placeholders for internal functions to get stable pointers
+	module.functions.reserve(internal_descriptors.size());
+	for (auto& descriptor : internal_descriptors) {
+		FunctionId fn_id = static_cast<FunctionId>(module.functions.size());
+		descriptor.id = fn_id;
+		
+		// Create placeholder function
+		MirFunction placeholder;
+		placeholder.id = fn_id;
+		module.functions.push_back(std::move(placeholder));
+		
+		// Map HIR pointer to internal function reference
+		function_map.emplace(descriptor.key, &module.functions.back());
+	}
+	
+	// Lower internal function bodies with unified mapping
+	for (size_t i = 0; i < internal_descriptors.size(); ++i) {
+		const auto& descriptor = internal_descriptors[i];
+		module.functions[i] = lower_descriptor(descriptor, function_map);
+	}
+	
 	return module;
 }
 

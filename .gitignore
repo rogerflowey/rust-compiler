@@ -5,7 +5,7 @@ Testing/
 cmake-build-*/
 .vscode/
 test-output/
-
+test/ir/output/
 
 .venv
 __pycache__/

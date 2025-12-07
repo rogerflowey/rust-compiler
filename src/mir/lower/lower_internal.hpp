@@ -23,12 +23,12 @@ struct FunctionLowerer {
 	enum class FunctionKind { Function, Method };
 
 	FunctionLowerer(const hir::Function& function,
-		   const std::unordered_map<const void*, FunctionId>& id_map,
+		   const std::unordered_map<const void*, mir::FunctionRef>& fn_map,
 	   FunctionId id,
 	   std::string name);
 
 	FunctionLowerer(const hir::Method& method,
-			 const std::unordered_map<const void*, FunctionId>& id_map,
+			 const std::unordered_map<const void*, mir::FunctionRef>& fn_map,
 			 FunctionId id,
 			 std::string name);
 
@@ -47,7 +47,7 @@ private:
 	FunctionKind function_kind = FunctionKind::Function;
 	const hir::Function* hir_function = nullptr;
 	const hir::Method* hir_method = nullptr;
-	const std::unordered_map<const void*, FunctionId>& function_ids;
+	const std::unordered_map<const void*, mir::FunctionRef>& function_map;
 	MirFunction mir_function;
 	std::optional<BasicBlockId> current_block;
 	std::vector<bool> block_terminated;
@@ -60,8 +60,8 @@ private:
 	const std::vector<std::unique_ptr<hir::Local>>& get_locals_vector() const;
 	TypeId resolve_return_type() const;
 	void init_locals();
-	FunctionId lookup_function_id(const void* key) const;
-	Operand emit_call(FunctionId target, TypeId result_type, std::vector<Operand>&& args);
+	mir::FunctionRef lookup_function(const void* key) const; // NEW: Returns FunctionRef
+	std::optional<Operand> emit_call(mir::FunctionRef target, TypeId result_type, std::vector<Operand>&& args);
 	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
 	Operand emit_array_repeat(Operand value, std::size_t count, TypeId result_type);
 	template <typename RValueT>
@@ -98,7 +98,7 @@ private:
 
 	bool lower_block_statements(const hir::Block& block);
 	void lower_block(const hir::Block& hir_block);
-	Operand lower_block_expr(const hir::Block& block, TypeId expected_type);
+	std::optional<Operand> lower_block_expr(const hir::Block& block, TypeId expected_type);
 	void lower_statement(const hir::Stmt& stmt);
 	void lower_statement_impl(const hir::LetStmt& let_stmt);
 	void lower_statement_impl(const hir::ExprStmt& expr_stmt);
@@ -111,11 +111,12 @@ private:
 	Place make_local_place(LocalId local_id) const;
 	LocalId create_synthetic_local(TypeId type, bool is_mutable_reference);
 	Operand load_place_value(Place place, TypeId type);
-	Operand lower_expr(const hir::Expr& expr);
+	std::optional<Operand> lower_expr(const hir::Expr& expr);
 	Place lower_expr_place(const hir::Expr& expr);
 	Place ensure_reference_operand_place(const hir::Expr& operand,
 					  const semantic::ExprInfo& operand_info,
 				  bool mutable_reference);
+	Operand expect_operand(std::optional<Operand> value, const char* context);
 	TempId materialize_place_base(const hir::Expr& base_expr,
 				 const semantic::ExprInfo& base_info);
 	Place make_index_place(const hir::Index& index_expr, bool allow_temporary_base);
@@ -128,42 +129,42 @@ private:
 	Place lower_place_impl(const hir::Index& index_expr, const semantic::ExprInfo& info);
 	Place lower_place_impl(const hir::UnaryOp& unary, const semantic::ExprInfo& info);
 
-	Operand lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::ArrayLiteral& array_literal, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::ArrayRepeat& array_repeat, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Variable& variable, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::ConstUse& const_use, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::StructConst& struct_const, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::FieldAccess& field_access, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Index& index_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Cast& cast_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::BinaryOp& binary, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Assignment& assignment, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Block& block_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::If& if_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Loop& loop_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::While& while_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Break& break_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Continue& continue_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Return& return_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::Call& call_expr, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::MethodCall& method_call, const semantic::ExprInfo& info);
-	Operand lower_expr_impl(const hir::UnaryOp& unary, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::ArrayLiteral& array_literal, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::ArrayRepeat& array_repeat, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Variable& variable, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::ConstUse& const_use, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::StructConst& struct_const, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::FieldAccess& field_access, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Index& index_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Cast& cast_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::BinaryOp& binary, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Assignment& assignment, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Block& block_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::If& if_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Loop& loop_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::While& while_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Break& break_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Continue& continue_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Return& return_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::Call& call_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::MethodCall& method_call, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const hir::UnaryOp& unary, const semantic::ExprInfo& info);
 
 	template <typename T>
-	Operand lower_expr_impl(const T& unsupported, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_expr_impl(const T& unsupported, const semantic::ExprInfo& info);
 
-	Operand lower_if_expr(const hir::If& if_expr, const semantic::ExprInfo& info);
-	Operand lower_short_circuit(const hir::BinaryOp& binary,
+	std::optional<Operand> lower_if_expr(const hir::If& if_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_short_circuit(const hir::BinaryOp& binary,
 				 const semantic::ExprInfo& info,
 				 bool is_and);
-	Operand lower_loop_expr(const hir::Loop& loop_expr, const semantic::ExprInfo& info);
-	Operand lower_while_expr(const hir::While& while_expr, const semantic::ExprInfo& info);
-	Operand lower_break_expr(const hir::Break& break_expr);
-	Operand lower_continue_expr(const hir::Continue& continue_expr);
-	Operand lower_return_expr(const hir::Return& return_expr);
+	std::optional<Operand> lower_loop_expr(const hir::Loop& loop_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_while_expr(const hir::While& while_expr, const semantic::ExprInfo& info);
+	std::optional<Operand> lower_break_expr(const hir::Break& break_expr);
+	std::optional<Operand> lower_continue_expr(const hir::Continue& continue_expr);
+	std::optional<Operand> lower_return_expr(const hir::Return& return_expr);
 };
 
 template <typename T>
@@ -172,7 +173,7 @@ Place FunctionLowerer::lower_place_impl(const T&, const semantic::ExprInfo&) {
 }
 
 template <typename T>
-Operand FunctionLowerer::lower_expr_impl(const T&, const semantic::ExprInfo&) {
+std::optional<Operand> FunctionLowerer::lower_expr_impl(const T&, const semantic::ExprInfo&) {
 	throw std::logic_error("Expression kind not supported yet in MIR lowering");
 }
 

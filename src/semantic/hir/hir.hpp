@@ -586,6 +586,7 @@ struct Function {
     std::optional<TypeAnnotation> return_type;
     std::unique_ptr<Block> body;
     std::vector<std::unique_ptr<Local>> locals; // NEW: Owning list of all locals
+    bool is_builtin = false; // NEW: Marks builtin/external functions
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
@@ -630,6 +631,7 @@ struct Method {
     std::unique_ptr<Block> body;
     std::unique_ptr<Local> self_local;
     std::vector<std::unique_ptr<Local>> locals;
+    bool is_builtin = false; // NEW: Marks builtin/external methods
     span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers

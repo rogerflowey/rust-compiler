@@ -18,9 +18,7 @@ bool is_unit_type(TypeId type);
 bool is_never_type(TypeId type);
 
 Constant make_bool_constant(bool value);
-Constant make_unit_constant();
 Operand make_constant_operand(const Constant& constant);
-Operand make_unit_operand();
 
 std::optional<type::PrimitiveKind> get_primitive_kind(TypeId type);
 bool is_signed_integer_type(TypeId type);
