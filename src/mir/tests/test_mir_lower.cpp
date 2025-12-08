@@ -195,16 +195,20 @@ TEST(MirLowerTest, LowersFunctionReturningLiteral) {
     mir::MirFunction mir_function = lower_function_for_test(function);
     ASSERT_EQ(mir_function.basic_blocks.size(), 1u);
     const auto& block = mir_function.basic_blocks.front();
-    ASSERT_TRUE(block.statements.empty());
+    ASSERT_EQ(block.statements.size(), 1u);
+    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(define_stmt.rvalue.value));
+    const auto& const_rval = std::get<mir::ConstantRValue>(define_stmt.rvalue.value);
+    EXPECT_EQ(const_rval.constant.type, bool_type);
+    ASSERT_TRUE(std::holds_alternative<mir::BoolConstant>(const_rval.constant.value));
+    EXPECT_TRUE(std::get<mir::BoolConstant>(const_rval.constant.value).value);
+    
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
     ASSERT_TRUE(ret.value.has_value());
     const auto& operand = ret.value.value();
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
-    const auto& constant = std::get<mir::Constant>(operand.value);
-    EXPECT_EQ(constant.type, bool_type);
-    ASSERT_TRUE(std::holds_alternative<mir::BoolConstant>(constant.value));
-    EXPECT_TRUE(std::get<mir::BoolConstant>(constant.value).value);
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(operand.value));
+    EXPECT_EQ(std::get<mir::TempId>(operand.value), define_stmt.dest);
 }
 
 TEST(MirLowerTest, LowersCharLiteral) {
@@ -222,14 +226,19 @@ TEST(MirLowerTest, LowersCharLiteral) {
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
+    ASSERT_EQ(block.statements.size(), 1u);
+    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(define_stmt.rvalue.value));
+    const auto& const_rval = std::get<mir::ConstantRValue>(define_stmt.rvalue.value);
+    ASSERT_TRUE(std::holds_alternative<mir::CharConstant>(const_rval.constant.value));
+    EXPECT_EQ(std::get<mir::CharConstant>(const_rval.constant.value).value, 'z');
+    
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
     ASSERT_TRUE(ret.value.has_value());
     const auto& operand = ret.value.value();
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
-    const auto& constant = std::get<mir::Constant>(operand.value);
-    ASSERT_TRUE(std::holds_alternative<mir::CharConstant>(constant.value));
-    EXPECT_EQ(std::get<mir::CharConstant>(constant.value).value, 'z');
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(operand.value));
+    EXPECT_EQ(std::get<mir::TempId>(operand.value), define_stmt.dest);
 }
 
 TEST(MirLowerTest, LowersStringLiteralWithNullTerminator) {
@@ -253,14 +262,11 @@ TEST(MirLowerTest, LowersStringLiteralWithNullTerminator) {
     const auto& lowered = module.functions.front();
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    EXPECT_TRUE(block.statements.empty());
-
-    ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
-    const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
-    ASSERT_TRUE(ret.value.has_value());
-    const auto& operand = ret.value.value();
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
-    const auto& constant = std::get<mir::Constant>(operand.value);
+    ASSERT_EQ(block.statements.size(), 1u);
+    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(define_stmt.rvalue.value));
+    const auto& const_rval = std::get<mir::ConstantRValue>(define_stmt.rvalue.value);
+    const auto& constant = const_rval.constant;
     EXPECT_EQ(constant.type, string_ref_type);
     ASSERT_TRUE(std::holds_alternative<mir::StringConstant>(constant.value));
     const auto& string_constant = std::get<mir::StringConstant>(constant.value);
@@ -270,6 +276,13 @@ TEST(MirLowerTest, LowersStringLiteralWithNullTerminator) {
     EXPECT_EQ(string_constant.data.size(), 6u);
     EXPECT_FALSE(string_constant.is_cstyle);
     EXPECT_EQ(std::string(string_constant.data.c_str()), "hello");
+    
+    ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
+    const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
+    ASSERT_TRUE(ret.value.has_value());
+    const auto& operand = ret.value.value();
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(operand.value));
+    EXPECT_EQ(std::get<mir::TempId>(operand.value), define_stmt.dest);
 }
 
 TEST(MirLowerTest, DeduplicatesIdenticalStringLiteralsAcrossFunctions) {
@@ -295,15 +308,20 @@ TEST(MirLowerTest, DeduplicatesIdenticalStringLiteralsAcrossFunctions) {
     for (const auto& lowered : module.functions) {
         ASSERT_FALSE(lowered.basic_blocks.empty());
         const auto& block = lowered.basic_blocks.front();
-        ASSERT_TRUE(block.statements.empty());
+        ASSERT_EQ(block.statements.size(), 1u);
+        const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
+        ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(define_stmt.rvalue.value));
+        const auto& const_rval = std::get<mir::ConstantRValue>(define_stmt.rvalue.value);
+        const auto& constant = const_rval.constant;
+        ASSERT_TRUE(std::holds_alternative<mir::StringConstant>(constant.value));
+        lowered_literals.push_back(std::get<mir::StringConstant>(constant.value));
+        
         ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
         const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
         ASSERT_TRUE(ret.value.has_value());
         const auto& operand = ret.value.value();
-        ASSERT_TRUE(std::holds_alternative<mir::Constant>(operand.value));
-        const auto& constant = std::get<mir::Constant>(operand.value);
-        ASSERT_TRUE(std::holds_alternative<mir::StringConstant>(constant.value));
-        lowered_literals.push_back(std::get<mir::StringConstant>(constant.value));
+        ASSERT_TRUE(std::holds_alternative<mir::TempId>(operand.value));
+        EXPECT_EQ(std::get<mir::TempId>(operand.value), define_stmt.dest);
     }
     ASSERT_EQ(lowered_literals.size(), 2u);
     EXPECT_EQ(lowered_literals[0].data, lowered_literals[1].data);
@@ -362,14 +380,15 @@ TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 2u);
 
-    const auto& assign_stmt = std::get<mir::AssignStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(assign_stmt.dest.base));
-    EXPECT_EQ(std::get<mir::LocalPlace>(assign_stmt.dest.base).id, 0u);
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(assign_stmt.src.value));
-    const auto& assigned_constant = std::get<mir::Constant>(assign_stmt.src.value);
-    EXPECT_EQ(assigned_constant.type, int_type);
-    ASSERT_TRUE(std::holds_alternative<mir::IntConstant>(assigned_constant.value));
-    EXPECT_EQ(std::get<mir::IntConstant>(assigned_constant.value).value, 1u);
+    // The let statement now emits an InitializeStatement for literal initializers
+    const auto& init_stmt = std::get<mir::InitializeStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(init_stmt.dest.base));
+    EXPECT_EQ(std::get<mir::LocalPlace>(init_stmt.dest.base).id, 0u);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(init_stmt.rvalue.value));
+    const auto& init_constant = std::get<mir::ConstantRValue>(init_stmt.rvalue.value);
+    EXPECT_EQ(init_constant.constant.type, int_type);
+    ASSERT_TRUE(std::holds_alternative<mir::IntConstant>(init_constant.constant.value));
+    EXPECT_EQ(std::get<mir::IntConstant>(init_constant.constant.value).value, 1u);
 
     const auto& load_stmt = std::get<mir::LoadStatement>(block.statements[1].value);
     ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(load_stmt.src.base));
@@ -441,20 +460,28 @@ TEST(MirLowerTest, LowersBinaryAddition) {
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    ASSERT_EQ(block.statements.size(), 1u);
+    ASSERT_EQ(block.statements.size(), 3u);
 
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::BinaryOpRValue>(define_stmt.rvalue.value));
-    const auto& binary = std::get<mir::BinaryOpRValue>(define_stmt.rvalue.value);
+    const auto& lhs_define = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lhs_define.rvalue.value));
+    
+    const auto& rhs_define = std::get<mir::DefineStatement>(block.statements[1].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(rhs_define.rvalue.value));
+    
+    const auto& binary_define = std::get<mir::DefineStatement>(block.statements[2].value);
+    ASSERT_TRUE(std::holds_alternative<mir::BinaryOpRValue>(binary_define.rvalue.value));
+    const auto& binary = std::get<mir::BinaryOpRValue>(binary_define.rvalue.value);
     EXPECT_EQ(binary.kind, mir::BinaryOpRValue::Kind::IAdd);
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(binary.lhs.value));
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(binary.rhs.value));
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(binary.lhs.value));
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(binary.rhs.value));
+    EXPECT_EQ(std::get<mir::TempId>(binary.lhs.value), lhs_define.dest);
+    EXPECT_EQ(std::get<mir::TempId>(binary.rhs.value), rhs_define.dest);
 
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
     ASSERT_TRUE(ret.value.has_value());
     ASSERT_TRUE(std::holds_alternative<mir::TempId>(ret.value->value));
-    EXPECT_EQ(std::get<mir::TempId>(ret.value->value), define_stmt.dest);
+    EXPECT_EQ(std::get<mir::TempId>(ret.value->value), binary_define.dest);
 }
 
 TEST(MirLowerTest, LowersSignedComparison) {
@@ -475,21 +502,32 @@ TEST(MirLowerTest, LowersSignedComparison) {
     function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
-    ASSERT_EQ(lowered.temp_types.size(), 1u);
-    EXPECT_EQ(lowered.temp_types[0], bool_type);
+    ASSERT_EQ(lowered.temp_types.size(), 3u);
+    EXPECT_EQ(lowered.temp_types[0], int_type);
+    EXPECT_EQ(lowered.temp_types[1], int_type);
+    EXPECT_EQ(lowered.temp_types[2], bool_type);
 
     const auto& block = lowered.basic_blocks.front();
-    ASSERT_EQ(block.statements.size(), 1u);
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::BinaryOpRValue>(define_stmt.rvalue.value));
-    const auto& binary = std::get<mir::BinaryOpRValue>(define_stmt.rvalue.value);
+    ASSERT_EQ(block.statements.size(), 3u);
+    
+    const auto& lhs_define = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lhs_define.rvalue.value));
+    
+    const auto& rhs_define = std::get<mir::DefineStatement>(block.statements[1].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(rhs_define.rvalue.value));
+    
+    const auto& cmp_define = std::get<mir::DefineStatement>(block.statements[2].value);
+    ASSERT_TRUE(std::holds_alternative<mir::BinaryOpRValue>(cmp_define.rvalue.value));
+    const auto& binary = std::get<mir::BinaryOpRValue>(cmp_define.rvalue.value);
     EXPECT_EQ(binary.kind, mir::BinaryOpRValue::Kind::ICmpLt);
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(binary.lhs.value));
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(binary.rhs.value));
 
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
     ASSERT_TRUE(ret.value.has_value());
     ASSERT_TRUE(std::holds_alternative<mir::TempId>(ret.value->value));
-    EXPECT_EQ(std::get<mir::TempId>(ret.value->value), define_stmt.dest);
+    EXPECT_EQ(std::get<mir::TempId>(ret.value->value), cmp_define.dest);
 }
 
 TEST(MirLowerTest, LowersCastExpression) {
@@ -514,16 +552,23 @@ TEST(MirLowerTest, LowersCastExpression) {
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    ASSERT_EQ(block.statements.size(), 1u);
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::CastRValue>(define_stmt.rvalue.value));
-    const auto& cast_rvalue = std::get<mir::CastRValue>(define_stmt.rvalue.value);
+    ASSERT_EQ(block.statements.size(), 2u);
+    
+    const auto& lit_define = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lit_define.rvalue.value));
+    
+    const auto& cast_define = std::get<mir::DefineStatement>(block.statements[1].value);
+    ASSERT_TRUE(std::holds_alternative<mir::CastRValue>(cast_define.rvalue.value));
+    const auto& cast_rvalue = std::get<mir::CastRValue>(cast_define.rvalue.value);
     EXPECT_EQ(cast_rvalue.target_type, usize_type);
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(cast_rvalue.value.value));
+    EXPECT_EQ(std::get<mir::TempId>(cast_rvalue.value.value), lit_define.dest);
+    
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
     ASSERT_TRUE(ret.value.has_value());
     ASSERT_TRUE(std::holds_alternative<mir::TempId>(ret.value->value));
-    EXPECT_EQ(std::get<mir::TempId>(ret.value->value), define_stmt.dest);
+    EXPECT_EQ(std::get<mir::TempId>(ret.value->value), cast_define.dest);
 }
 
 TEST(MirLowerTest, LowersConstUseExpression) {
@@ -1028,15 +1073,24 @@ TEST(MirLowerTest, LowersStructLiteralAggregate) {
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    ASSERT_EQ(block.statements.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<mir::DefineStatement>(block.statements[0].value));
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_EQ(block.statements.size(), 3u);
+    
+    const auto& lit1_define = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lit1_define.rvalue.value));
+    
+    const auto& lit2_define = std::get<mir::DefineStatement>(block.statements[1].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lit2_define.rvalue.value));
+    
+    ASSERT_TRUE(std::holds_alternative<mir::DefineStatement>(block.statements[2].value));
+    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[2].value);
     ASSERT_TRUE(std::holds_alternative<mir::AggregateRValue>(define_stmt.rvalue.value));
     const auto& aggregate = std::get<mir::AggregateRValue>(define_stmt.rvalue.value);
     EXPECT_EQ(aggregate.kind, mir::AggregateRValue::Kind::Struct);
     ASSERT_EQ(aggregate.elements.size(), 2u);
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[0].value));
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[1].value));
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(aggregate.elements[0].value));
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(aggregate.elements[1].value));
+    EXPECT_EQ(std::get<mir::TempId>(aggregate.elements[0].value), lit1_define.dest);
+    EXPECT_EQ(std::get<mir::TempId>(aggregate.elements[1].value), lit2_define.dest);
 }
 
 TEST(MirLowerTest, LowersArrayLiteralAggregate) {
@@ -1061,12 +1115,23 @@ TEST(MirLowerTest, LowersArrayLiteralAggregate) {
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    ASSERT_EQ(block.statements.size(), 1u);
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_EQ(block.statements.size(), 3u);
+    
+    const auto& lit1_define = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lit1_define.rvalue.value));
+    
+    const auto& lit2_define = std::get<mir::DefineStatement>(block.statements[1].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lit2_define.rvalue.value));
+    
+    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[2].value);
     ASSERT_TRUE(std::holds_alternative<mir::AggregateRValue>(define_stmt.rvalue.value));
     const auto& aggregate = std::get<mir::AggregateRValue>(define_stmt.rvalue.value);
     EXPECT_EQ(aggregate.kind, mir::AggregateRValue::Kind::Array);
     ASSERT_EQ(aggregate.elements.size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(aggregate.elements[0].value));
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(aggregate.elements[1].value));
+    EXPECT_EQ(std::get<mir::TempId>(aggregate.elements[0].value), lit1_define.dest);
+    EXPECT_EQ(std::get<mir::TempId>(aggregate.elements[1].value), lit2_define.dest);
 }
 
 TEST(MirLowerTest, LowersArrayRepeatAggregate) {
@@ -1091,12 +1156,17 @@ TEST(MirLowerTest, LowersArrayRepeatAggregate) {
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    ASSERT_EQ(block.statements.size(), 1u);
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_EQ(block.statements.size(), 2u);
+    
+    const auto& lit_define = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lit_define.rvalue.value));
+    
+    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[1].value);
     ASSERT_TRUE(std::holds_alternative<mir::ArrayRepeatRValue>(define_stmt.rvalue.value));
     const auto& repeat = std::get<mir::ArrayRepeatRValue>(define_stmt.rvalue.value);
     EXPECT_EQ(repeat.count, 3u);
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(repeat.value.value));
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(repeat.value.value));
+    EXPECT_EQ(std::get<mir::TempId>(repeat.value.value), lit_define.dest);
 }
 
 TEST(MirLowerTest, LowersMethodCallWithReceiver) {
@@ -1155,10 +1225,17 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
     const auto& method_mir = module.functions[0];
     const auto& caller_mir = module.functions[1];
     const auto& entry = caller_mir.basic_blocks.front();
-    ASSERT_EQ(entry.statements.size(), 2u);
-    const auto& aggregate_define = std::get<mir::DefineStatement>(entry.statements[0].value);
+    ASSERT_EQ(entry.statements.size(), 4u);
+    
+    const auto& field1_define = std::get<mir::DefineStatement>(entry.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(field1_define.rvalue.value));
+    
+    const auto& field2_define = std::get<mir::DefineStatement>(entry.statements[1].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(field2_define.rvalue.value));
+    
+    const auto& aggregate_define = std::get<mir::DefineStatement>(entry.statements[2].value);
     ASSERT_TRUE(std::holds_alternative<mir::AggregateRValue>(aggregate_define.rvalue.value));
-    const auto& call_stmt = std::get<mir::CallStatement>(entry.statements[1].value);
+    const auto& call_stmt = std::get<mir::CallStatement>(entry.statements[3].value);
     EXPECT_EQ(call_stmt.target.kind, mir::CallTarget::Kind::Internal);
     EXPECT_EQ(call_stmt.target.id, method_mir.id);
     ASSERT_EQ(call_stmt.args.size(), 1u);
@@ -1418,13 +1495,18 @@ TEST(MirLowerTest, LowersReferenceToRValueByMaterializingLocal) {
 
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    ASSERT_EQ(block.statements.size(), 2u);
-    const auto& assign = std::get<mir::AssignStatement>(block.statements[0].value);
+    ASSERT_EQ(block.statements.size(), 3u);
+    
+    const auto& lit_define = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lit_define.rvalue.value));
+    
+    const auto& assign = std::get<mir::AssignStatement>(block.statements[1].value);
     ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(assign.dest.base));
     EXPECT_EQ(std::get<mir::LocalPlace>(assign.dest.base).id, 0u);
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(assign.src.value));
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(assign.src.value));
+    EXPECT_EQ(std::get<mir::TempId>(assign.src.value), lit_define.dest);
 
-    const auto& define = std::get<mir::DefineStatement>(block.statements[1].value);
+    const auto& define = std::get<mir::DefineStatement>(block.statements[2].value);
     ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define.rvalue.value));
     const auto& ref_rvalue = std::get<mir::RefRValue>(define.rvalue.value);
     ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(ref_rvalue.place.base));
@@ -1464,12 +1546,18 @@ TEST(MirLowerTest, LowersMutableReferenceToRValueByMaterializingLocal) {
 
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    ASSERT_EQ(block.statements.size(), 2u);
-    const auto& assign = std::get<mir::AssignStatement>(block.statements[0].value);
+    ASSERT_EQ(block.statements.size(), 3u);
+    
+    const auto& lit_define = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(lit_define.rvalue.value));
+    
+    const auto& assign = std::get<mir::AssignStatement>(block.statements[1].value);
     ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(assign.dest.base));
     EXPECT_EQ(std::get<mir::LocalPlace>(assign.dest.base).id, 0u);
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(assign.src.value));
+    EXPECT_EQ(std::get<mir::TempId>(assign.src.value), lit_define.dest);
 
-    const auto& define = std::get<mir::DefineStatement>(block.statements[1].value);
+    const auto& define = std::get<mir::DefineStatement>(block.statements[2].value);
     ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define.rvalue.value));
     const auto& ref_rvalue = std::get<mir::RefRValue>(define.rvalue.value);
     ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(ref_rvalue.place.base));
@@ -1701,7 +1789,9 @@ TEST(MirLowerTest, DesugarsLetUnderscorePattern) {
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
-    EXPECT_TRUE(block.statements.empty());
+    ASSERT_EQ(block.statements.size(), 1u);
+    const auto& define = std::get<mir::DefineStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(define.rvalue.value));
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
     EXPECT_FALSE(ret.value.has_value());

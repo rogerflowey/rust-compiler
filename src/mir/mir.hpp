@@ -224,6 +224,11 @@ struct AssignStatement {
     Operand src;
 };
 
+struct InitializeStatement {
+    Place dest;
+    RValue rvalue;
+};
+
 struct CallTarget {
     enum class Kind { Internal, External };
     Kind kind = Kind::Internal;
@@ -236,7 +241,7 @@ struct CallStatement {
     std::vector<Operand> args;
 };
 
-using StatementVariant = std::variant<DefineStatement, LoadStatement, AssignStatement, CallStatement>;
+using StatementVariant = std::variant<DefineStatement, LoadStatement, AssignStatement, InitializeStatement, CallStatement>;
 
 struct Statement {
     StatementVariant value;

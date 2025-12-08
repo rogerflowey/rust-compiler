@@ -176,61 +176,25 @@ FunctionLowerer::materialize_place_base(const hir::Expr &base_expr,
 std::optional<Operand>
 FunctionLowerer::lower_expr_impl(const hir::Literal &literal,
                                  const semantic::ExprInfo &info) {
-  if (std::get_if<hir::Literal::String>(&literal.value)) {
-    if (!info.has_type || info.type == invalid_type_id) {
-      throw std::logic_error(
-          "String literal missing resolved type during MIR lowering");
-    }
-  }
-  Constant constant = lower_literal(literal, info.type);
-  return make_constant_operand(constant);
+  return emit_rvalue(build_literal_rvalue(literal, info), info.type);
 }
 
 std::optional<Operand>
 FunctionLowerer::lower_expr_impl(const hir::StructLiteral &struct_literal,
                                  const semantic::ExprInfo &info) {
-  const auto &fields = hir::helper::get_canonical_fields(struct_literal);
-  AggregateRValue aggregate;
-  aggregate.kind = AggregateRValue::Kind::Struct;
-  aggregate.elements.reserve(fields.initializers.size());
-  for (const auto &initializer : fields.initializers) {
-    if (!initializer) {
-      throw std::logic_error(
-          "Struct literal field missing during MIR lowering");
-    }
-    aggregate.elements.push_back(expect_operand(
-        lower_expr(*initializer), "Struct literal field must produce value"));
-  }
-  return emit_aggregate(std::move(aggregate), info.type);
+  return emit_rvalue(build_struct_aggregate(struct_literal), info.type);
 }
 
 std::optional<Operand>
 FunctionLowerer::lower_expr_impl(const hir::ArrayLiteral &array_literal,
                                  const semantic::ExprInfo &info) {
-  AggregateRValue aggregate;
-  aggregate.kind = AggregateRValue::Kind::Array;
-  aggregate.elements.reserve(array_literal.elements.size());
-  for (const auto &element : array_literal.elements) {
-    if (!element) {
-      throw std::logic_error(
-          "Array literal element missing during MIR lowering");
-    }
-    aggregate.elements.push_back(expect_operand(
-        lower_expr(*element), "Array element must produce value"));
-  }
-  return emit_aggregate(std::move(aggregate), info.type);
+  return emit_rvalue(build_array_aggregate(array_literal), info.type);
 }
 
 std::optional<Operand>
 FunctionLowerer::lower_expr_impl(const hir::ArrayRepeat &array_repeat,
                                  const semantic::ExprInfo &info) {
-  if (!array_repeat.value) {
-    throw std::logic_error("Array repeat missing value during MIR lowering");
-  }
-  size_t count = hir::helper::get_array_count(array_repeat);
-  Operand value = expect_operand(lower_expr(*array_repeat.value),
-                                 "Array repeat value must produce operand");
-  return emit_array_repeat(std::move(value), count, info.type);
+  return emit_rvalue(build_array_repeat_rvalue(array_repeat), info.type);
 }
 
 std::optional<Operand>
@@ -386,12 +350,22 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
           compound_rhs = binary->rhs.get();
         }
         if (compound_rhs) {
-          (void)lower_expr(*compound_rhs);
+          // For underscore assignment, try to avoid materializing pure values
+          // Only materialize if the value has side effects (i.e., not a pure RValue)
+          if (!lower_expr_as_rvalue(*compound_rhs)) {
+            (void)lower_expr(*compound_rhs);
+          }
         } else {
-          (void)lower_expr(*assignment.rhs);
+          // For underscore assignment, try to avoid materializing pure values
+          if (!lower_expr_as_rvalue(*assignment.rhs)) {
+            (void)lower_expr(*assignment.rhs);
+          }
         }
       } else {
-        (void)lower_expr(*assignment.rhs);
+        // For underscore assignment, try to avoid materializing pure values
+        if (!lower_expr_as_rvalue(*assignment.rhs)) {
+          (void)lower_expr(*assignment.rhs);
+        }
       }
     }
     return std::nullopt;

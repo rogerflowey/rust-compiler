@@ -246,6 +246,7 @@ void Emitter::emit_statement(const mir::Statement &statement) {
              },
              [&](const mir::LoadStatement &load) { emit_load(load); },
              [&](const mir::AssignStatement &assign) { emit_assign(assign); },
+             [&](const mir::InitializeStatement &init) { emit_initialize(init); },
              [&](const mir::CallStatement &call) { emit_call(call); }},
              statement.value);
 }
@@ -277,6 +278,49 @@ void Emitter::emit_assign(const mir::AssignStatement &statement) {
   current_block_builder_->emit_store(
       operand.type_name, operand.value_name,
       pointer_type_name(dest.pointee_type), dest.pointer);
+}
+
+void Emitter::emit_initialize(const mir::InitializeStatement &init) {
+  TranslatedPlace dest = translate_place(init.dest);
+  if (dest.pointee_type == mir::invalid_type_id) {
+    throw std::logic_error("Initialize dest missing pointee type during codegen");
+  }
+
+  mir::TypeId ty = dest.pointee_type;
+  std::string ty_name = module_.get_type_name(ty);
+
+  std::visit(
+      Overloaded{
+          [&](const mir::ConstantRValue &c) {
+            // Scalar or constant aggregate: materialize constant and store
+            TypedOperand op =
+                materialize_constant_operand(ty, c.constant, std::nullopt);
+            current_block_builder_->emit_store(
+                op.type_name, op.value_name, pointer_type_name(ty),
+                dest.pointer);
+          },
+
+          [&](const mir::AggregateRValue &agg) {
+            emit_aggregate_init_per_field(dest.pointer, ty, agg);
+          },
+
+          [&](const mir::ArrayRepeatRValue &arr) {
+            emit_array_repeat_init_per_element(dest.pointer, ty, arr);
+          },
+
+          [&](const auto &/*other*/) {
+            // Fallback: build into temp, then store. 
+            // Note: We cannot modify current_function_->temp_types (it's const),
+            // so we create a temporary SSA value using an alloca-like pattern.
+            // For now, treat this conservatively: build into temp via emit_rvalue_into,
+            // but we need a valid TempId. Since we can't extend temp_types,
+            // we'll materialize to a local allocation or use a workaround.
+            // Actually, the simpler approach: just emit store directly via the
+            // aggregate/cast path that already handles it.
+            throw std::logic_error(
+                "Initialize fallback unimplemented: must use aggregate/array/const");
+          }},
+      init.rvalue.value);
 }
 
 void Emitter::emit_call(const mir::CallStatement &statement) {
@@ -694,6 +738,95 @@ void Emitter::emit_field_access_rvalue_into(
     current_block_builder_->emit_extractvalue_into(
       llvmbuilder::temp_name(dest), base_type_name, get_temp(value.base),
       {static_cast<unsigned>(value.index)});
+}
+
+void Emitter::emit_aggregate_init_per_field(
+    const std::string &base_ptr,
+    mir::TypeId aggregate_type,
+    const mir::AggregateRValue &agg) {
+  std::string aggregate_type_name = module_.get_type_name(aggregate_type);
+
+  switch (agg.kind) {
+  case mir::AggregateRValue::Kind::Struct: {
+    // For each field: GEP -> store
+    for (std::size_t idx = 0; idx < agg.elements.size(); ++idx) {
+      auto elem_operand = get_typed_operand(agg.elements[idx]);
+
+      // Compute field pointer: gep base, 0, idx
+      std::vector<std::pair<std::string, std::string>> indices;
+      indices.emplace_back("i32", "0");
+      indices.emplace_back("i32", std::to_string(idx));
+
+      std::string field_ptr = current_block_builder_->emit_getelementptr(
+          aggregate_type_name, pointer_type_name(aggregate_type), base_ptr,
+          indices, true, "field");
+
+      // Store element
+      current_block_builder_->emit_store(
+          elem_operand.type_name, elem_operand.value_name,
+          pointer_type_name(elem_operand.type), field_ptr);
+    }
+    break;
+  }
+
+  case mir::AggregateRValue::Kind::Array: {
+    for (std::size_t idx = 0; idx < agg.elements.size(); ++idx) {
+      auto elem_operand = get_typed_operand(agg.elements[idx]);
+
+      std::vector<std::pair<std::string, std::string>> indices;
+      indices.emplace_back("i32", "0");
+      indices.emplace_back("i32", std::to_string(idx));
+
+      std::string elem_ptr = current_block_builder_->emit_getelementptr(
+          aggregate_type_name, pointer_type_name(aggregate_type), base_ptr,
+          indices, true, "elem");
+
+      current_block_builder_->emit_store(
+          elem_operand.type_name, elem_operand.value_name,
+          pointer_type_name(elem_operand.type), elem_ptr);
+    }
+    break;
+  }
+  }
+}
+
+void Emitter::emit_array_repeat_init_per_element(
+    const std::string &base_ptr,
+    mir::TypeId array_type_id,
+    const mir::ArrayRepeatRValue &value) {
+  const auto &resolved = type::get_type_from_id(array_type_id);
+  const auto *array_type = std::get_if<type::ArrayType>(&resolved.value);
+  if (!array_type) {
+    throw std::logic_error(
+        "Array repeat init requires array destination type");
+  }
+
+  std::string array_type_name = module_.get_type_name(array_type_id);
+
+  // Simple and effective optimization: zero repeat on zero-initializable type.
+  if (is_const_zero(value.value) &&
+      type::helper::type_helper::is_zero_initializable(
+          array_type->element_type)) {
+    current_block_builder_->emit_store(array_type_name, "zeroinitializer",
+                                       pointer_type_name(array_type_id),
+                                       base_ptr);
+    return;
+  }
+
+  auto element_operand = get_typed_operand(value.value);
+  for (std::size_t idx = 0; idx < value.count; ++idx) {
+    std::vector<std::pair<std::string, std::string>> indices;
+    indices.emplace_back("i32", "0");
+    indices.emplace_back("i32", std::to_string(idx));
+
+    std::string elem_ptr = current_block_builder_->emit_getelementptr(
+        array_type_name, pointer_type_name(array_type_id), base_ptr, indices,
+        true, "elem");
+
+    current_block_builder_->emit_store(
+        element_operand.type_name, element_operand.value_name,
+        pointer_type_name(element_operand.type), elem_ptr);
+  }
 }
 
 std::string Emitter::get_temp(mir::TempId temp) {

@@ -19,6 +19,18 @@
 
 namespace mir::detail {
 
+enum class PatternStoreMode {
+	Initialize,
+	Assign,
+};
+
+// Unified value type for pattern stores: either an Operand (normal assign)
+// or an RValue (for initializer lowering)
+struct PatternValue {
+	PatternStoreMode mode = PatternStoreMode::Assign;
+	std::variant<Operand, RValue> value;
+};
+
 struct FunctionLowerer {
 	enum class FunctionKind { Function, Method };
 
@@ -102,9 +114,22 @@ private:
 	void lower_statement(const hir::Stmt& stmt);
 	void lower_statement_impl(const hir::LetStmt& let_stmt);
 	void lower_statement_impl(const hir::ExprStmt& expr_stmt);
-	void lower_pattern_store(const hir::Pattern& pattern, Operand value);
-	void lower_pattern_store_impl(const hir::BindingDef& binding, const Operand& value);
-	void lower_pattern_store_impl(const hir::ReferencePattern& ref_pattern, const Operand& value);
+	std::optional<RValue> lower_expr_as_rvalue(const hir::Expr& expr);
+	std::optional<RValue> try_lower_pure_rvalue(const hir::Expr& expr,
+		const semantic::ExprInfo& info);
+	void lower_pattern_store(const hir::Pattern& pattern,
+	                         const PatternValue& pval);
+	void lower_pattern_store_impl(const hir::BindingDef& binding,
+	                              const PatternValue& pval);
+	void lower_pattern_store_impl(const hir::ReferencePattern& ref_pattern,
+	                              const PatternValue& pval);
+
+	// RValue building helpers - shared between try_lower_pure_rvalue and lower_expr_impl
+	AggregateRValue build_struct_aggregate(const hir::StructLiteral& struct_literal);
+	AggregateRValue build_array_aggregate(const hir::ArrayLiteral& array_literal);
+	ArrayRepeatRValue build_array_repeat_rvalue(const hir::ArrayRepeat& array_repeat);
+	ConstantRValue build_literal_rvalue(const hir::Literal& lit,
+		const semantic::ExprInfo& info);
 
 	LocalId require_local_id(const hir::Local* local) const;
 	Place make_local_place(const hir::Local* local) const;

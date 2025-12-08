@@ -58,6 +58,7 @@ private:
   void emit_define(const mir::DefineStatement &statement);
   void emit_load(const mir::LoadStatement &statement);
   void emit_assign(const mir::AssignStatement &statement);
+  void emit_initialize(const mir::InitializeStatement &statement);
   void emit_call(const mir::CallStatement &statement);
 
   // translation helpers: both emit and get_*
@@ -87,6 +88,16 @@ private:
                              const mir::CastRValue &value);
   void emit_field_access_rvalue_into(mir::TempId dest,
                                      const mir::FieldAccessRValue &value);
+
+  // per-field aggregate initialization helpers
+  void emit_aggregate_init_per_field(
+      const std::string &base_ptr,
+      mir::TypeId aggregate_type,
+      const mir::AggregateRValue &agg);
+  void emit_array_repeat_init_per_element(
+      const std::string &base_ptr,
+      mir::TypeId array_type_id,
+      const mir::ArrayRepeatRValue &value);
 
   // lookup helpers
   std::string get_temp(mir::TempId temp);
