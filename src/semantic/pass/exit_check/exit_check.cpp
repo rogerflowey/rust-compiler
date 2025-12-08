@@ -84,7 +84,7 @@ bool ExitCheckVisitor::is_main_function(const hir::Function& function, bool is_t
     if (!is_top_level) {
         return false;
     }
-    return function.name.name == "main";
+    return function.sig.name.name == "main";
 }
 
 bool ExitCheckVisitor::is_exit_call(const hir::Call& call) const {
@@ -97,7 +97,7 @@ bool ExitCheckVisitor::is_exit_call(const hir::Call& call) const {
         return false;
     }
 
-    return func_use->def->name.name == "exit";
+    return func_use->def->sig.name.name == "exit";
 }
 
 void ExitCheckVisitor::validate_main_context(Context& ctx) {
@@ -106,7 +106,7 @@ void ExitCheckVisitor::validate_main_context(Context& ctx) {
         throw SemanticError("main function must have an exit() call as the final statement", span);
     }
 
-    auto& block = *ctx.function->body;
+    auto& block = *ctx.function->body->block;
     const bool has_exit = !ctx.exit_calls.empty();
 
     const bool has_final_expr = block.final_expr.has_value() && block.final_expr.value() != nullptr;

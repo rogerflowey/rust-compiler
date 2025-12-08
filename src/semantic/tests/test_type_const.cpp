@@ -120,7 +120,7 @@ TEST(SemanticQueryTest, ResolvesAnnotationsAndConstants) {
     arena.functions.push_back(std::move(function_ast));
 
     std::vector<std::unique_ptr<hir::Pattern>> params;
-    std::vector<std::optional<hir::TypeAnnotation>> param_type_annotations;
+    std::vector<hir::TypeAnnotation> param_type_annotations;
     auto param_pattern = make_binding_pattern("param");
     // Type annotations for function parameters are handled at the function level
     params.push_back(std::move(param_pattern));
@@ -147,12 +147,14 @@ TEST(SemanticQueryTest, ResolvesAnnotationsAndConstants) {
     body->stmts.push_back(std::make_unique<hir::Stmt>(std::move(let_stmt)));
 
     hir::Function function;
-    function.params = std::move(params);
-    function.param_type_annotations = std::move(param_type_annotations);
-    function.return_type = hir::TypeAnnotation(
+    function.sig.params = std::move(params);
+    function.sig.param_type_annotations = std::move(param_type_annotations);
+    function.sig.return_type = hir::TypeAnnotation(
         semantic::get_typeID(semantic::Type{semantic::UnitType{}}));
-    function.body = std::move(body);
-    function.name = *function_ast_ptr->name;
+    hir::FunctionBody fn_body;
+    fn_body.block = std::move(body);
+    function.body = std::move(fn_body);
+    function.sig.name = *function_ast_ptr->name;
 
     program->items.push_back(std::make_unique<hir::Item>(std::move(function)));
     auto *function_ptr = &std::get<hir::Function>(program->items.back()->value);
@@ -225,7 +227,7 @@ TEST(SemanticQueryTest, ResolvesReferencePatterns) {
     arena.functions.push_back(std::move(function_ast));
 
     std::vector<std::unique_ptr<hir::Pattern>> params;
-    std::vector<std::optional<hir::TypeAnnotation>> param_type_annotations;
+    std::vector<hir::TypeAnnotation> param_type_annotations;
 
     // ref_param: &i32
     auto ref_param_pattern = make_binding_pattern("ref_param");
@@ -264,12 +266,14 @@ TEST(SemanticQueryTest, ResolvesReferencePatterns) {
     body->stmts.push_back(std::make_unique<hir::Stmt>(std::move(mut_ref_let_stmt)));
 
     hir::Function function;
-    function.params = std::move(params);
-    function.param_type_annotations = std::move(param_type_annotations);
-    function.return_type = hir::TypeAnnotation(
+    function.sig.params = std::move(params);
+    function.sig.param_type_annotations = std::move(param_type_annotations);
+    function.sig.return_type = hir::TypeAnnotation(
         semantic::get_typeID(semantic::Type{semantic::UnitType{}}));
-    function.body = std::move(body);
-    function.name = *function_ast_ptr->name;
+    hir::FunctionBody fn_body;
+    fn_body.block = std::move(body);
+    function.body = std::move(fn_body);
+    function.sig.name = *function_ast_ptr->name;
 
     program->items.push_back(std::make_unique<hir::Item>(std::move(function)));
     auto *function_ptr = &std::get<hir::Function>(program->items.back()->value);

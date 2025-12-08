@@ -567,46 +567,54 @@ struct ExprStmt {
 
 using StmtVariant = std::variant<LetStmt, ExprStmt>;
 
-struct Stmt {
-    StmtVariant value;
-    span::Span span = span::Span::invalid();
-    Stmt(StmtVariant&& val)
-        : value(std::move(val)) {}
+struct Stmt { 
+    StmtVariant value; 
+    span::Span span = span::Span::invalid(); 
+    Stmt(StmtVariant&& val) 
+        : value(std::move(val)) {} 
 
     ~Stmt();
     Stmt(Stmt&&) noexcept;
     Stmt& operator=(Stmt&&) noexcept;
+
+    // Disable copy to prevent dangling pointers
+    Stmt(const Stmt&) = delete;
+    Stmt& operator=(const Stmt&) = delete;
 };
 
 
-struct Function {
+struct FunctionSignature {
     ast::Identifier name;
-    std::vector<std::unique_ptr<Pattern>> params;// Changed
-    std::vector<std::optional<TypeAnnotation>> param_type_annotations; // NEW: Parameter type annotations
+    std::vector<std::unique_ptr<Pattern>> params;
+    std::vector<TypeAnnotation> param_type_annotations;
     std::optional<TypeAnnotation> return_type;
-    std::unique_ptr<Block> body;
-    std::vector<std::unique_ptr<Local>> locals; // NEW: Owning list of all locals
-    bool is_builtin = false; // NEW: Marks builtin/external functions
     span::Span span = span::Span::invalid();
-    
+
+    // Disable copy to prevent dangling pointers
+    FunctionSignature(const FunctionSignature&) = delete;
+    FunctionSignature& operator=(const FunctionSignature&) = delete;
+    FunctionSignature(FunctionSignature&&) noexcept = default;
+    FunctionSignature& operator=(FunctionSignature&&) noexcept = default;
+    FunctionSignature() = default;
+};
+
+struct FunctionBody {
+    std::unique_ptr<Block> block;
+    std::vector<std::unique_ptr<Local>> locals;
+};
+
+struct Function {
+    FunctionSignature sig;
+    std::optional<FunctionBody> body;
+    bool is_builtin = false; // Marks builtin/external functions
+    span::Span span = span::Span::invalid();
+
     // Disable copy to prevent dangling pointers
     Function(const Function&) = delete;
     Function& operator=(const Function&) = delete;
     Function(Function&&) noexcept = default;
     Function& operator=(Function&&) noexcept = default;
     Function() = default;
-        Function(std::vector<std::unique_ptr<Pattern>>&& params_,
-                         std::vector<std::optional<TypeAnnotation>>&& param_type_annotations_,
-                         std::optional<TypeAnnotation>&& return_type_,
-                         std::unique_ptr<Block>&& body_,
-                         std::vector<std::unique_ptr<Local>>&& locals_,
-                         ast::Identifier name_)
-                : name(std::move(name_)),
-                    params(std::move(params_)),
-          param_type_annotations(std::move(param_type_annotations_)),
-          return_type(std::move(return_type_)),
-          body(std::move(body_)),
-                    locals(std::move(locals_)) {}
 };
 
 struct Method {
@@ -622,38 +630,40 @@ struct Method {
         SelfParam& operator=(SelfParam&&) noexcept = default;
         SelfParam() = default;
     };
-    
-    ast::Identifier name;
-    SelfParam self_param;
-    std::vector<std::unique_ptr<Pattern>> params;// changed
-    std::vector<std::optional<TypeAnnotation>> param_type_annotations; // NEW: Parameter type annotations
-    std::optional<TypeAnnotation> return_type;
-    std::unique_ptr<Block> body;
-    std::unique_ptr<Local> self_local;
-    std::vector<std::unique_ptr<Local>> locals;
-    bool is_builtin = false; // NEW: Marks builtin/external methods
+
+    struct MethodSignature {
+        ast::Identifier name;
+        SelfParam self_param;
+        std::vector<std::unique_ptr<Pattern>> params;
+        std::vector<TypeAnnotation> param_type_annotations;
+        std::optional<TypeAnnotation> return_type;
+        span::Span span = span::Span::invalid();
+
+        // Disable copy to prevent dangling pointers
+        MethodSignature(const MethodSignature&) = delete;
+        MethodSignature& operator=(const MethodSignature&) = delete;
+        MethodSignature(MethodSignature&&) noexcept = default;
+        MethodSignature& operator=(MethodSignature&&) noexcept = default;
+        MethodSignature() = default;
+    };
+
+    struct MethodBody {
+        std::unique_ptr<Block> block;
+        std::unique_ptr<Local> self_local;
+        std::vector<std::unique_ptr<Local>> locals;
+    };
+
+    MethodSignature sig;
+    std::optional<MethodBody> body;
+    bool is_builtin = false; // Marks builtin/external methods
     span::Span span = span::Span::invalid();
-    
+
     // Disable copy to prevent dangling pointers
     Method(const Method&) = delete;
     Method& operator=(const Method&) = delete;
     Method(Method&&) noexcept = default;
     Method& operator=(Method&&) noexcept = default;
     Method() = default;
-            Method(ast::Identifier name_,
-                SelfParam&& self_param_,
-                std::vector<std::unique_ptr<Pattern>>&& params_,
-                std::vector<std::optional<TypeAnnotation>>&& param_type_annotations_,
-                std::optional<TypeAnnotation>&& return_type_,
-                std::unique_ptr<Block>&& body_)
-                : name(std::move(name_)),
-                    self_param(std::move(self_param_)),
-          params(std::move(params_)),
-          param_type_annotations(std::move(param_type_annotations_)),
-          return_type(std::move(return_type_)),
-          body(std::move(body_)),
-          self_local(nullptr),
-               locals() {}
 };
 
 

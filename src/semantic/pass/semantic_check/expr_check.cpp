@@ -34,7 +34,7 @@ T& mut_ptr(const T* ptr, const char* description) {
 }
 
 std::string get_function_display_name(const hir::Function &fn) {
-  return fn.name.name.empty() ? std::string{"<function>"} : fn.name.name;
+  return fn.sig.name.name.empty() ? std::string{"<function>"} : fn.sig.name.name;
 }
 
 std::string get_const_display_name(const hir::ConstDef &def) {
@@ -1050,16 +1050,16 @@ ExprInfo ExprChecker::check(hir::Call &expr, TypeExpectation) {
   // Check argument types
   const std::string func_name = get_function_display_name(function_def);
 
-  if (function_def.params.size() != expr.args.size()) {
+  if (function_def.sig.params.size() != expr.args.size()) {
     throw_in_context("Argument count mismatch when calling function '" +
                      func_name + "'", expr.span);
   }
 
   std::vector<ExprInfo> arg_infos;
   arg_infos.reserve(expr.args.size());
-  for (size_t i = 0; i < function_def.params.size(); ++i) {
+  for (size_t i = 0; i < function_def.sig.params.size(); ++i) {
     TypeId param_type =
-        context.type_query(*function_def.param_type_annotations[i]);
+        context.type_query(function_def.sig.param_type_annotations[i]);
     ExprInfo arg_info =
         check(*expr.args[i], TypeExpectation::exact(param_type));
     if (!arg_info.has_type) {
@@ -1115,7 +1115,7 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
   expr.method = method_def;
 
   // Check argument count matches method parameters
-  if (method_def->params.size() != expr.args.size()) {
+  if (method_def->sig.params.size() != expr.args.size()) {
     const std::string method_name = get_name(*method_def).name;
     throw_in_context("Method argument count mismatch for '" + method_name +
                      "'", expr.span);
@@ -1125,11 +1125,11 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
   TypeId expected_receiver_type = base_type;
   bool needs_auto_reference = false;
 
-  if (method_def->self_param.is_reference) {
+  if (method_def->sig.self_param.is_reference) {
     // Create reference type matching method's self parameter
     expected_receiver_type = get_typeID(
         Type{ReferenceType{.referenced_type = base_type,
-                           .is_mutable = method_def->self_param.is_mutable}});
+                           .is_mutable = method_def->sig.self_param.is_mutable}});
 
     // Only create an auto-reference when the receiver is not already assignable
     needs_auto_reference =
@@ -1141,7 +1141,7 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
   if (needs_auto_reference) {
     // Transform HIR to insert explicit reference operation
     expr.receiver = transform_helper::apply_reference(
-        std::move(expr.receiver), method_def->self_param.is_mutable);
+        std::move(expr.receiver), method_def->sig.self_param.is_mutable);
     final_receiver_info =
         check(*expr.receiver, TypeExpectation::exact(expected_receiver_type));
   }
@@ -1160,7 +1160,7 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
 
   for (size_t i = 0; i < expr.args.size(); ++i) {
     TypeId expected_param_type =
-        context.type_query(*method_def->param_type_annotations[i]);
+        context.type_query(method_def->sig.param_type_annotations[i]);
     ExprInfo arg_info =
         check(*expr.args[i], TypeExpectation::exact(expected_param_type));
     if (!arg_info.has_type) {

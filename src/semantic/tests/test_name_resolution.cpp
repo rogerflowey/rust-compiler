@@ -152,8 +152,11 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   main_block->stmts.push_back(
       std::make_unique<hir::Stmt>(make_expr_stmt(std::move(foo_expr))));
 
-    auto main_fn = hir::Function({}, {}, std::nullopt, std::move(main_block), {},
-                                                             *main_fn_ast_ptr->name);
+  hir::Function main_fn{};
+  main_fn.sig.name = *main_fn_ast_ptr->name;
+  hir::FunctionBody main_body;
+  main_body.block = std::move(main_block);
+  main_fn.body = std::move(main_body);
   program->items.push_back(
       std::make_unique<hir::Item>(hir::Function(std::move(main_fn))));
   auto *main_fn_ptr = &std::get<hir::Function>(program->items.back()->value);
@@ -167,8 +170,11 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   auto *assoc_fn_ast_ptr = assoc_fn_ast.get();
   arena.function_items.push_back(std::move(assoc_fn_ast));
 
-  auto assoc_fn =
-      hir::Function({}, {}, std::nullopt, nullptr, {}, *assoc_fn_ast_ptr->name);
+  hir::Function assoc_fn{};
+  assoc_fn.sig.name = *assoc_fn_ast_ptr->name;
+  hir::FunctionBody assoc_body;
+  assoc_body.block = std::make_unique<hir::Block>();
+  assoc_fn.body = std::move(assoc_body);
   auto assoc_item =
       std::make_unique<hir::AssociatedItem>(hir::Function(std::move(assoc_fn)));
   auto *assoc_fn_ptr = &std::get<hir::Function>(assoc_item->value);
@@ -192,17 +198,18 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   resolver.visit_program(*program);
 
   // Validate locals
-  ASSERT_EQ(main_fn_ptr->locals.size(), 2u);
-  EXPECT_EQ(main_fn_ptr->locals[0]->name.name, "foo");
-  EXPECT_EQ(main_fn_ptr->locals[1]->name.name, "color");
+  ASSERT_TRUE(main_fn_ptr->body.has_value());
+  ASSERT_EQ(main_fn_ptr->body->locals.size(), 2u);
+  EXPECT_EQ(main_fn_ptr->body->locals[0]->name.name, "foo");
+  EXPECT_EQ(main_fn_ptr->body->locals[1]->name.name, "color");
 
   // Validate first let statement
-  auto &foo_let = std::get<hir::LetStmt>(main_fn_ptr->body->stmts[0]->value);
+  auto &foo_let = std::get<hir::LetStmt>(main_fn_ptr->body->block->stmts[0]->value);
   auto &foo_binding = std::get<hir::BindingDef>(foo_let.pattern->value);
   auto *foo_local_ptr = std::get_if<hir::Local *>(&foo_binding.local);
   ASSERT_NE(foo_local_ptr, nullptr);
   ASSERT_NE(*foo_local_ptr, nullptr);
-  EXPECT_EQ(*foo_local_ptr, main_fn_ptr->locals[0].get());
+  EXPECT_EQ(*foo_local_ptr, main_fn_ptr->body->locals[0].get());
 
   ASSERT_TRUE(foo_let.type_annotation.has_value());
   auto *foo_type_node_ptr = std::get_if<std::unique_ptr<hir::TypeNode>>(
@@ -227,12 +234,12 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
   EXPECT_EQ(func_use->def, assoc_fn_ptr);
 
   // Validate second let statement -> enum variant
-  auto &color_let = std::get<hir::LetStmt>(main_fn_ptr->body->stmts[1]->value);
+  auto &color_let = std::get<hir::LetStmt>(main_fn_ptr->body->block->stmts[1]->value);
   auto &color_binding = std::get<hir::BindingDef>(color_let.pattern->value);
   auto *color_local_ptr = std::get_if<hir::Local *>(&color_binding.local);
   ASSERT_NE(color_local_ptr, nullptr);
   ASSERT_NE(*color_local_ptr, nullptr);
-  EXPECT_EQ(*color_local_ptr, main_fn_ptr->locals[1].get());
+  EXPECT_EQ(*color_local_ptr, main_fn_ptr->body->locals[1].get());
 
   auto *enum_variant =
       std::get_if<hir::EnumVariant>(&color_let.initializer->value);
@@ -242,10 +249,10 @@ TEST(NameResolutionTest, ResolvesLocalsAndAssociatedItems) {
 
   // Validate identifier expression resolves to variable
   auto &foo_expr_stmt =
-      std::get<hir::ExprStmt>(main_fn_ptr->body->stmts[2]->value);
+      std::get<hir::ExprStmt>(main_fn_ptr->body->block->stmts[2]->value);
   auto *variable = std::get_if<hir::Variable>(&foo_expr_stmt.expr->value);
   ASSERT_NE(variable, nullptr);
-  EXPECT_EQ(variable->local_id, main_fn_ptr->locals[0].get());
+  EXPECT_EQ(variable->local_id, main_fn_ptr->body->locals[0].get());
 
   // Validate impl table registration
     TypeDef type_def = struct_def_ptr;
@@ -318,8 +325,11 @@ TEST(NameResolutionTest, RejectsUseOfLoopScopedLetOutsideLoop) {
   fn_block->stmts.push_back(std::make_unique<hir::Stmt>(make_let_stmt(
       std::move(result_pattern), std::nullopt, std::move(tmp_expr))));
 
-  auto fn =
-      hir::Function({}, {}, std::nullopt, std::move(fn_block), {}, *fn_ast_ptr->name);
+  hir::Function fn{};
+  fn.sig.name = *fn_ast_ptr->name;
+  hir::FunctionBody fn_body;
+  fn_body.block = std::move(fn_block);
+  fn.body = std::move(fn_body);
   program->items.push_back(
       std::make_unique<hir::Item>(hir::Function(std::move(fn))));
 
@@ -369,16 +379,19 @@ TEST(NameResolutionTest, ResolvesMethodLocals) {
     auto self_param = hir::Method::SelfParam();
     self_param.is_reference = true;
     self_param.is_mutable = false;
-    
+
     std::vector<std::unique_ptr<hir::Pattern>> method_params;
-    std::vector<std::optional<hir::TypeAnnotation>> method_param_annotations;
-        auto method_item = std::make_unique<hir::AssociatedItem>(
-            hir::Method(*method_ast_ptr->name,
-                std::move(self_param),
-                std::move(method_params),
-                std::move(method_param_annotations),
-                std::nullopt,
-                std::move(method_block)));
+    std::vector<hir::TypeAnnotation> method_param_annotations;
+    hir::Method method{};
+    method.sig.name = *method_ast_ptr->name;
+    method.sig.self_param = std::move(self_param);
+    method.sig.params = std::move(method_params);
+    method.sig.param_type_annotations = std::move(method_param_annotations);
+    method.sig.return_type = std::nullopt;
+    hir::Method::MethodBody method_body{};
+    method_body.block = std::move(method_block);
+    method.body = std::move(method_body);
+    auto method_item = std::make_unique<hir::AssociatedItem>(std::move(method));
 
   auto impl = std::make_unique<hir::Item>(hir::Impl{
       std::nullopt, make_path_type_annotation("Foo"),
@@ -392,20 +405,21 @@ TEST(NameResolutionTest, ResolvesMethodLocals) {
   NameResolver resolver{impl_table};
   resolver.visit_program(*program);
 
-  ASSERT_EQ(method_ptr->locals.size(), 1u);
-  EXPECT_EQ(method_ptr->locals[0]->name.name, "tmp");
+  ASSERT_TRUE(method_ptr->body.has_value());
+  ASSERT_EQ(method_ptr->body->locals.size(), 1u);
+  EXPECT_EQ(method_ptr->body->locals[0]->name.name, "tmp");
 
-  auto &let_stmt = std::get<hir::LetStmt>(method_ptr->body->stmts[0]->value);
+  auto &let_stmt = std::get<hir::LetStmt>(method_ptr->body->block->stmts[0]->value);
   auto &binding = std::get<hir::BindingDef>(let_stmt.pattern->value);
   auto *local_ptr = std::get_if<hir::Local *>(&binding.local);
   ASSERT_NE(local_ptr, nullptr);
   ASSERT_NE(*local_ptr, nullptr);
-  EXPECT_EQ(*local_ptr, method_ptr->locals[0].get());
+  EXPECT_EQ(*local_ptr, method_ptr->body->locals[0].get());
 
-  auto &expr_stmt = std::get<hir::ExprStmt>(method_ptr->body->stmts[1]->value);
+  auto &expr_stmt = std::get<hir::ExprStmt>(method_ptr->body->block->stmts[1]->value);
   auto *variable = std::get_if<hir::Variable>(&expr_stmt.expr->value);
   ASSERT_NE(variable, nullptr);
-  EXPECT_EQ(variable->local_id, method_ptr->locals[0].get());
+  EXPECT_EQ(variable->local_id, method_ptr->body->locals[0].get());
 }
 
 } // namespace

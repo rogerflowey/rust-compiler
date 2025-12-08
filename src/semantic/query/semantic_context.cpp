@@ -111,11 +111,11 @@ void SemanticContext::bind_pattern_type(hir::Pattern& pattern, TypeId expected_t
 }
 
 TypeId SemanticContext::function_return_type(hir::Function& function) {
-    return ensure_return_type_annotation(function.return_type);
+    return ensure_return_type_annotation(function.sig.return_type);
 }
 
 TypeId SemanticContext::method_return_type(hir::Method& method) {
-    return ensure_return_type_annotation(method.return_type);
+    return ensure_return_type_annotation(method.sig.return_type);
 }
 
 TypeId SemanticContext::ensure_return_type_annotation(std::optional<hir::TypeAnnotation>& annotation) {

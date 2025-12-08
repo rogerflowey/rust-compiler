@@ -26,7 +26,7 @@ To create a new visitor for the HIR, you need to:
     public:
         // This will be called for every Function node in the HIR.
         void visit(hir::Function& function) {
-            std::cout << "Found a function: " << function.name << std::endl;
+            std::cout << "Found a function: " << function.sig.name << std::endl;
 
             // If you still want to visit the children of the function (i.e., its body),
             // you can explicitly call the base class's implementation.

@@ -123,31 +123,28 @@ public:
      * @param function The function to check
      * 
      * Validates parameter types, return type consistency, and body expressions.
-     */
+    */
     void visit(hir::Function& function) {
         // Check parameter type annotations
-        if (function.params.size() != function.param_type_annotations.size()) {
+        if (function.sig.params.size() != function.sig.param_type_annotations.size()) {
             throw std::logic_error("Function parameter count mismatch with type annotations");
         }
 
         TypeId return_type = context.function_return_type(function);
 
-        for (size_t i = 0; i < function.params.size(); ++i) {
-            if (!function.param_type_annotations[i]) {
-                throw std::logic_error("Function parameter missing type annotation");
-            }
-            TypeId param_type = context.type_query(*function.param_type_annotations[i]);
-            if (function.params[i]) {
-                context.bind_pattern_type(*function.params[i], param_type);
+        for (size_t i = 0; i < function.sig.params.size(); ++i) {
+            TypeId param_type = context.type_query(function.sig.param_type_annotations[i]);
+            if (function.sig.params[i]) {
+                context.bind_pattern_type(*function.sig.params[i], param_type);
             }
         }
 
         auto context_guard = expr_checker.enter_context("function", hir::helper::get_name(function).name);
 
         // Check function body
-        if (function.body) {
+        if (function.body && function.body->block) {
             auto info = expr_checker.check(
-                *function.body,
+                *function.body->block,
                 TypeExpectation::exact(return_type));
             
             // If function body can complete normally, check return type compatibility
@@ -167,31 +164,28 @@ public:
      * @param method The method to check
      * 
      * Validates self parameter, parameter types, return type consistency, and body expressions.
-     */
+    */
     void visit(hir::Method& method) {
         // Check parameter type annotations
-        if (method.params.size() != method.param_type_annotations.size()) {
+        if (method.sig.params.size() != method.sig.param_type_annotations.size()) {
             throw std::logic_error("Method parameter count mismatch with type annotations");
         }
-        
+
         TypeId return_type = context.method_return_type(method);
 
-        for (size_t i = 0; i < method.params.size(); ++i) {
-            if (!method.param_type_annotations[i]) {
-                throw std::logic_error("Method parameter missing type annotation");
-            }
-            TypeId param_type = context.type_query(*method.param_type_annotations[i]);
-            if (method.params[i]) {
-                context.bind_pattern_type(*method.params[i], param_type);
+        for (size_t i = 0; i < method.sig.params.size(); ++i) {
+            TypeId param_type = context.type_query(method.sig.param_type_annotations[i]);
+            if (method.sig.params[i]) {
+                context.bind_pattern_type(*method.sig.params[i], param_type);
             }
         }
 
         auto context_guard = expr_checker.enter_context("method", hir::helper::get_name(method).name);
 
         // Check method body
-        if (method.body) {
+        if (method.body && method.body->block) {
             auto info = expr_checker.check(
-                *method.body,
+                *method.body->block,
                 TypeExpectation::exact(return_type));
             
             // If method body can complete normally, check return type compatibility

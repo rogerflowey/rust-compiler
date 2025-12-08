@@ -15,7 +15,8 @@ protected:
     hir::Function exit_function;
 
     ExitCheckTest() {
-        exit_function.name = ast::Identifier{"exit"};
+        exit_function.sig.name = ast::Identifier{"exit"};
+        exit_function.body = std::nullopt;
     }
 
     ast::FunctionItem* make_function_ast(const std::string& name) {
@@ -47,20 +48,20 @@ protected:
 
 TEST_F(ExitCheckTest, MainWithExitAsFinalStatement) {
     hir::Function function{};
-    function.name = *make_function_ast("main")->name;
+    function.sig.name = *make_function_ast("main")->name;
 
     auto block = std::make_unique<hir::Block>();
     block->stmts.push_back(make_expr_stmt(make_exit_call_expr()));
-    function.body = std::move(block);
+    function.body = hir::FunctionBody{ .block = std::move(block) };
 
     EXPECT_NO_THROW(visitor.visit(function));
 }
 
 TEST_F(ExitCheckTest, MainMissingExit) {
     hir::Function function{};
-    function.name = *make_function_ast("main")->name;
+    function.sig.name = *make_function_ast("main")->name;
 
-    function.body = std::make_unique<hir::Block>();
+    function.body = hir::FunctionBody{ .block = std::make_unique<hir::Block>() };
 
     try {
         visitor.visit(function);
@@ -72,12 +73,12 @@ TEST_F(ExitCheckTest, MainMissingExit) {
 
 TEST_F(ExitCheckTest, MainExitNotFinalDueToExtraStmt) {
     hir::Function function{};
-    function.name = *make_function_ast("main")->name;
+    function.sig.name = *make_function_ast("main")->name;
 
     auto block = std::make_unique<hir::Block>();
     block->stmts.push_back(make_expr_stmt(make_exit_call_expr()));
     block->stmts.push_back(make_expr_stmt(make_literal_expr()));
-    function.body = std::move(block);
+    function.body = hir::FunctionBody{ .block = std::move(block) };
 
     try {
         visitor.visit(function);
@@ -89,13 +90,13 @@ TEST_F(ExitCheckTest, MainExitNotFinalDueToExtraStmt) {
 
 TEST_F(ExitCheckTest, MainExitNotFinalDueToFinalExpr) {
     hir::Function function{};
-    function.name = *make_function_ast("main")->name;
+    function.sig.name = *make_function_ast("main")->name;
 
     auto block = std::make_unique<hir::Block>();
     block->stmts.push_back(make_expr_stmt(make_exit_call_expr()));
     auto final_expr = make_literal_expr();
     block->final_expr = std::make_optional<std::unique_ptr<hir::Expr>>(std::move(final_expr));
-    function.body = std::move(block);
+    function.body = hir::FunctionBody{ .block = std::move(block) };
 
     try {
         visitor.visit(function);
@@ -107,11 +108,11 @@ TEST_F(ExitCheckTest, MainExitNotFinalDueToFinalExpr) {
 
 TEST_F(ExitCheckTest, ExitInNonMainFunction) {
     hir::Function function{};
-    function.name = *make_function_ast("helper")->name;
+    function.sig.name = *make_function_ast("helper")->name;
 
     auto block = std::make_unique<hir::Block>();
     block->stmts.push_back(make_expr_stmt(make_exit_call_expr()));
-    function.body = std::move(block);
+    function.body = hir::FunctionBody{ .block = std::move(block) };
 
     try {
         visitor.visit(function);
@@ -123,11 +124,13 @@ TEST_F(ExitCheckTest, ExitInNonMainFunction) {
 
 TEST_F(ExitCheckTest, ExitInMethod) {
     hir::Method method{};
-    method.name = *make_function_ast("main")->name;
+    method.sig.name = *make_function_ast("main")->name;
 
     auto block = std::make_unique<hir::Block>();
     block->stmts.push_back(make_expr_stmt(make_exit_call_expr()));
-    method.body = std::move(block);
+    hir::Method::MethodBody body{};
+    body.block = std::move(block);
+    method.body = std::move(body);
 
     try {
         visitor.visit(method);
