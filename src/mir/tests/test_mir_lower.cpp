@@ -385,16 +385,19 @@ TEST(MirLowerTest, RecordsFunctionParameters) {
     hir::Local* param_local_ptr = param_local.get();
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(int_type);
-    function.locals.push_back(std::move(param_local));
+    function.sig.name = ast::Identifier{"test_function"};
+    function.sig.return_type = hir::TypeAnnotation(int_type);
+    hir::FunctionBody body;
+    body.locals.push_back(std::move(param_local));
 
     hir::BindingDef param_binding;
     param_binding.local = param_local_ptr;
     auto param_pattern = std::make_unique<hir::Pattern>(hir::PatternVariant{std::move(param_binding)});
-    function.params.push_back(std::move(param_pattern));
-    function.param_type_annotations.push_back(hir::TypeAnnotation(int_type));
+    function.sig.params.push_back(std::move(param_pattern));
+    function.sig.param_type_annotations.push_back(hir::TypeAnnotation(int_type));
 
-    function.body = make_block_with_expr(make_int_literal_expr(0, int_type));
+    body.block = make_block_with_expr(make_int_literal_expr(0, int_type));
+    function.body = std::move(body);
 
     hir::Program program;
     program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
@@ -1059,10 +1062,12 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
 
     auto method_assoc = std::make_unique<hir::AssociatedItem>(hir::AssociatedItemVariant{hir::Method{}});
     auto& method = std::get<hir::Method>(method_assoc->value);
-    method.self_param.is_reference = false;
-    method.self_param.is_mutable = false;
-    method.return_type = hir::TypeAnnotation(int_type);
-    method.body = make_block_with_expr(make_int_literal_expr(11, int_type));
+    method.sig.self_param.is_reference = false;
+    method.sig.self_param.is_mutable = false;
+    method.sig.return_type = hir::TypeAnnotation(int_type);
+    hir::Method::MethodBody method_body;
+    method_body.block = make_block_with_expr(make_int_literal_expr(11, int_type));
+    method.body = std::move(method_body);
     const hir::Method* method_ptr = &method;
     impl.items.push_back(std::move(method_assoc));
 

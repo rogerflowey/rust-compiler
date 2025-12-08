@@ -35,23 +35,25 @@ struct FunctionDescriptor {
 void add_function_descriptor(const hir::Function& function,
 					 const std::string& scope,
 					 std::vector<FunctionDescriptor>& out) {
-	FunctionDescriptor descriptor;
-	descriptor.kind = FunctionDescriptor::Kind::Function;
-	descriptor.function = &function;
-	descriptor.key = &function;
-	descriptor.name = derive_function_name(function, scope);
-	out.push_back(std::move(descriptor));
+        FunctionDescriptor descriptor;
+        descriptor.kind = FunctionDescriptor::Kind::Function;
+        descriptor.function = &function;
+        descriptor.key = &function;
+        descriptor.name = derive_function_name(function, scope);
+        descriptor.is_external = !function.body.has_value();
+        out.push_back(std::move(descriptor));
 }
 
 void add_method_descriptor(const hir::Method& method,
 			       const std::string& scope,
 			       std::vector<FunctionDescriptor>& out) {
-	FunctionDescriptor descriptor;
-	descriptor.kind = FunctionDescriptor::Kind::Method;
-	descriptor.method = &method;
-	descriptor.key = &method;
-	descriptor.name = derive_method_name(method, scope);
-	out.push_back(std::move(descriptor));
+        FunctionDescriptor descriptor;
+        descriptor.kind = FunctionDescriptor::Kind::Method;
+        descriptor.method = &method;
+        descriptor.key = &method;
+        descriptor.name = derive_method_name(method, scope);
+        descriptor.is_external = !method.body.has_value();
+        out.push_back(std::move(descriptor));
 }
 
 std::vector<FunctionDescriptor> collect_function_descriptors(const hir::Program& program) {
@@ -187,27 +189,31 @@ void FunctionLowerer::initialize(FunctionId id, std::string name) {
 }
 
 const hir::Block* FunctionLowerer::get_body() const {
-	if (function_kind == FunctionKind::Function) {
-		return hir_function && hir_function->body ? hir_function->body.get() : nullptr;
-	}
-	return hir_method && hir_method->body ? hir_method->body.get() : nullptr;
+        if (function_kind == FunctionKind::Function) {
+                return (hir_function && hir_function->body)
+                        ? hir_function->body->block.get()
+                        : nullptr;
+        }
+        return (hir_method && hir_method->body)
+                ? hir_method->body->block.get()
+                : nullptr;
 }
 
 const std::vector<std::unique_ptr<hir::Local>>& FunctionLowerer::get_locals_vector() const {
-	if (function_kind == FunctionKind::Function) {
-		return hir_function->locals;
-	}
-	return hir_method->locals;
+        if (function_kind == FunctionKind::Function) {
+                return hir_function->body->locals;
+        }
+        return hir_method->body->locals;
 }
 
 TypeId FunctionLowerer::resolve_return_type() const {
-	const auto& annotation = (function_kind == FunctionKind::Function)
-		? hir_function->return_type
-		: hir_method->return_type;
-	if (annotation) {
-		return hir::helper::get_resolved_type(*annotation);
-	}
-	return get_unit_type();
+        const auto& annotation = (function_kind == FunctionKind::Function)
+                ? hir_function->sig.return_type
+                : hir_method->sig.return_type;
+        if (annotation) {
+                return hir::helper::get_resolved_type(*annotation);
+        }
+        return get_unit_type();
 }
 
 void FunctionLowerer::init_locals() {
@@ -229,59 +235,56 @@ void FunctionLowerer::init_locals() {
 		mir_function.locals.push_back(std::move(info));
 	};
 
-	if (function_kind == FunctionKind::Method && hir_method && hir_method->self_local) {
-		register_local(hir_method->self_local.get());
-	}
+        if (function_kind == FunctionKind::Method && hir_method && hir_method->body && hir_method->body->self_local) {
+                register_local(hir_method->body->self_local.get());
+        }
 
-	for (const auto& local_ptr : get_locals_vector()) {
-		if (local_ptr) {
-			register_local(local_ptr.get());
+        for (const auto& local_ptr : get_locals_vector()) {
+                if (local_ptr) {
+                        register_local(local_ptr.get());
 		}
 	}
 }
 
 void FunctionLowerer::collect_parameters() {
-	if (function_kind == FunctionKind::Method && hir_method) {
-		append_self_parameter();
-		append_explicit_parameters(hir_method->params, hir_method->param_type_annotations);
-		return;
-	}
-	if (function_kind == FunctionKind::Function && hir_function) {
-		append_explicit_parameters(hir_function->params, hir_function->param_type_annotations);
-	}
+        if (function_kind == FunctionKind::Method && hir_method) {
+                append_self_parameter();
+                append_explicit_parameters(hir_method->sig.params, hir_method->sig.param_type_annotations);
+                return;
+        }
+        if (function_kind == FunctionKind::Function && hir_function) {
+                append_explicit_parameters(hir_function->sig.params, hir_function->sig.param_type_annotations);
+        }
 }
 
 void FunctionLowerer::append_self_parameter() {
-	if (!hir_method) {
-		throw std::logic_error("Method context missing during MIR lowering");
-	}
-	if (!hir_method->self_local) {
-		return;
-	}
-	if (!hir_method->self_local->type_annotation) {
-		throw std::logic_error("Method self parameter missing resolved type during MIR lowering");
-	}
-	TypeId self_type = hir::helper::get_resolved_type(*hir_method->self_local->type_annotation);
-	append_parameter(hir_method->self_local.get(), self_type);
+        if (!hir_method) {
+                throw std::logic_error("Method context missing during MIR lowering");
+        }
+        if (!hir_method->body || !hir_method->body->self_local) {
+                return;
+        }
+        if (!hir_method->body->self_local->type_annotation) {
+                throw std::logic_error("Method self parameter missing resolved type during MIR lowering");
+        }
+        TypeId self_type = hir::helper::get_resolved_type(*hir_method->body->self_local->type_annotation);
+        append_parameter(hir_method->body->self_local.get(), self_type);
 }
 
 void FunctionLowerer::append_explicit_parameters(const std::vector<std::unique_ptr<hir::Pattern>>& params,
-			   const std::vector<std::optional<hir::TypeAnnotation>>& annotations) {
-	if (params.size() != annotations.size()) {
-		throw std::logic_error("Parameter/type annotation mismatch during MIR lowering");
-	}
-	for (std::size_t i = 0; i < params.size(); ++i) {
-		const auto& param = params[i];
-		if (!param) {
-			continue;
-		}
-		const auto& annotation = annotations[i];
-		if (!annotation) {
-			throw std::logic_error("Parameter missing resolved type during MIR lowering");
-		}
-		TypeId param_type = hir::helper::get_resolved_type(*annotation);
-		append_parameter(resolve_pattern_local(*param), param_type);
-	}
+                           const std::vector<hir::TypeAnnotation>& annotations) {
+        if (params.size() != annotations.size()) {
+                throw std::logic_error("Parameter/type annotation mismatch during MIR lowering");
+        }
+        for (std::size_t i = 0; i < params.size(); ++i) {
+                const auto& param = params[i];
+                if (!param) {
+                        continue;
+                }
+                const auto& annotation = annotations[i];
+                TypeId param_type = hir::helper::get_resolved_type(annotation);
+                append_parameter(resolve_pattern_local(*param), param_type);
+        }
 }
 
 void FunctionLowerer::append_parameter(const hir::Local* local, TypeId type) {
@@ -712,39 +715,35 @@ ExternalFunction lower_external_function(const FunctionDescriptor& descriptor) {
 	ext_fn.name = descriptor.name;
 	
 	std::vector<TypeId> param_types;
-	TypeId return_type = type::invalid_type_id;
-	
-	if (descriptor.kind == FunctionDescriptor::Kind::Function && descriptor.function) {
-		// Extract return type
-		if (descriptor.function->return_type) {
-			return_type = hir::helper::get_resolved_type(*descriptor.function->return_type);
-		} else {
-			return_type = type::invalid_type_id;
-		}
-		
-		// Extract parameter types from param_type_annotations
-		for (const auto& param_annotation : descriptor.function->param_type_annotations) {
-			if (param_annotation) {
-				TypeId param_type = hir::helper::get_resolved_type(*param_annotation);
-				param_types.push_back(param_type);
-			}
-		}
-	} else if (descriptor.kind == FunctionDescriptor::Kind::Method && descriptor.method) {
-		// Extract return type
-		if (descriptor.method->return_type) {
-			return_type = hir::helper::get_resolved_type(*descriptor.method->return_type);
-		} else {
-			return_type = type::invalid_type_id;
-		}
-		
-		// Extract parameter types from param_type_annotations
-		for (const auto& param_annotation : descriptor.method->param_type_annotations) {
-			if (param_annotation) {
-				TypeId param_type = hir::helper::get_resolved_type(*param_annotation);
-				param_types.push_back(param_type);
-			}
-		}
-	}
+        TypeId return_type = type::invalid_type_id;
+
+        if (descriptor.kind == FunctionDescriptor::Kind::Function && descriptor.function) {
+                // Extract return type
+                if (descriptor.function->sig.return_type) {
+                        return_type = hir::helper::get_resolved_type(*descriptor.function->sig.return_type);
+                } else {
+                        return_type = type::invalid_type_id;
+                }
+
+                // Extract parameter types from param_type_annotations
+                for (const auto& param_annotation : descriptor.function->sig.param_type_annotations) {
+                        TypeId param_type = hir::helper::get_resolved_type(param_annotation);
+                        param_types.push_back(param_type);
+                }
+        } else if (descriptor.kind == FunctionDescriptor::Kind::Method && descriptor.method) {
+                // Extract return type
+                if (descriptor.method->sig.return_type) {
+                        return_type = hir::helper::get_resolved_type(*descriptor.method->sig.return_type);
+                } else {
+                        return_type = type::invalid_type_id;
+                }
+
+                // Extract parameter types from param_type_annotations
+                for (const auto& param_annotation : descriptor.method->sig.param_type_annotations) {
+                        TypeId param_type = hir::helper::get_resolved_type(param_annotation);
+                        param_types.push_back(param_type);
+                }
+        }
 	
 	ext_fn.return_type = return_type;
 	ext_fn.param_types = std::move(param_types);
@@ -764,14 +763,14 @@ MirModule lower_program(const hir::Program& program) {
 		// Builtins are explicitly marked as external
 		if (descriptor.is_external) {
 			external_descriptors.push_back(descriptor);
-		} else {
-			// User-defined functions without body are also external
-			const hir::Block* body = nullptr;
-			if (descriptor.kind == FunctionDescriptor::Kind::Function && descriptor.function) {
-				body = descriptor.function->body.get();
-			} else if (descriptor.kind == FunctionDescriptor::Kind::Method && descriptor.method) {
-				body = descriptor.method->body.get();
-			}
+                } else {
+                        // User-defined functions without body are also external
+                        const hir::Block* body = nullptr;
+                        if (descriptor.kind == FunctionDescriptor::Kind::Function && descriptor.function) {
+                                body = descriptor.function->body ? descriptor.function->body->block.get() : nullptr;
+                        } else if (descriptor.kind == FunctionDescriptor::Kind::Method && descriptor.method) {
+                                body = descriptor.method->body ? descriptor.method->body->block.get() : nullptr;
+                        }
 			
 			if (body == nullptr) {
 				external_descriptors.push_back(descriptor);

@@ -190,46 +190,54 @@ public:
 	void visit(ReferenceType& ref_type) {
 		derived().visit_type_annotation(ref_type.referenced_type);
 	}
-	void visit(Local& local) {
-		visit_optional_type_annotation(local.type_annotation);
-	}
+        void visit(Local& local) {
+                visit_optional_type_annotation(local.type_annotation);
+        }
 
-	// Items
-	void visit(Function& function) {
-		for (auto& param : function.params) {
-			derived().visit_pattern(param);
-		}
-		for (auto& annotation : function.param_type_annotations) {
-			visit_optional_type_annotation(annotation);
-		}
-		visit_optional_type_annotation(function.return_type);
-		derived().visit_block(function.body);
-		for (auto& local : function.locals) {
-			if (local) {
-				derived().visit(*local);
-			}
-		}
-	}
+        // Items
+        void visit(Function& function) {
+                for (auto& param : function.sig.params) {
+                        derived().visit_pattern(param);
+                }
+                for (auto& annotation : function.sig.param_type_annotations) {
+                        visit_type_annotation(annotation);
+                }
+                visit_optional_type_annotation(function.sig.return_type);
+                if (function.body && function.body->block) {
+                        derived().visit_block(function.body->block);
+                }
+                if (function.body) {
+                        for (auto& local : function.body->locals) {
+                                if (local) {
+                                        derived().visit(*local);
+                                }
+                        }
+                }
+        }
 
-	void visit(Method& method) {
-		// self_param is a simple struct, no need to visit its members.
-		for (auto& param : method.params) {
-			derived().visit_pattern(param);
-		}
-		for (auto& annotation : method.param_type_annotations) {
-			visit_optional_type_annotation(annotation);
-		}
-		visit_optional_type_annotation(method.return_type);
-		derived().visit_block(method.body);
-		if (method.self_local) {
-			derived().visit(*method.self_local);
-		}
-		for (auto& local : method.locals) {
-			if (local) {
-				derived().visit(*local);
-			}
-		}
-	}
+        void visit(Method& method) {
+                // self_param is a simple struct, no need to visit its members.
+                for (auto& param : method.sig.params) {
+                        derived().visit_pattern(param);
+                }
+                for (auto& annotation : method.sig.param_type_annotations) {
+                        visit_type_annotation(annotation);
+                }
+                visit_optional_type_annotation(method.sig.return_type);
+                if (method.body && method.body->block) {
+                        derived().visit_block(method.body->block);
+                }
+                if (method.body) {
+                        if (method.body->self_local) {
+                                derived().visit(*method.body->self_local);
+                        }
+                        for (auto& local : method.body->locals) {
+                                if (local) {
+                                        derived().visit(*local);
+                                }
+                        }
+                }
+        }
 
 	void visit(StructDef& struct_def) {
 		for (auto& annotation : struct_def.field_type_annotations) {

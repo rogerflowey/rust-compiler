@@ -405,36 +405,35 @@ struct ItemConverter {
             throw std::logic_error("Function item missing name during HIR conversion");
         }
         std::vector<std::unique_ptr<hir::Pattern>> params;
-        std::vector<std::optional<hir::TypeAnnotation>> param_type_annotations;
+        std::vector<hir::TypeAnnotation> param_type_annotations;
         params.reserve(fn.params.size());
         param_type_annotations.reserve(fn.params.size());
-        
+
         for (const auto& p : fn.params) {
             auto pattern = convert_pattern(*p.first);
-            // Convert type annotation if present
-            std::optional<hir::TypeAnnotation> type_annotation;
-            if (p.second) {
-                type_annotation = hir::TypeAnnotation(convert_type(converter, *p.second));
+            if (!p.second) {
+                throw std::logic_error("Function parameter missing type annotation during HIR conversion");
             }
+            auto type_annotation = hir::TypeAnnotation(convert_type(converter, *p.second));
             params.push_back(std::move(pattern));
             param_type_annotations.push_back(std::move(type_annotation));
         }
 
-        hir::Function hir_function(
-            std::move(params),
-            std::move(param_type_annotations),
-            fn.return_type ? std::optional(convert_type(converter, **fn.return_type)) : std::nullopt,
-            nullptr, // Will be set after conversion
-            {}, // Initialized empty
-            *fn.name
-        );
+        hir::Function hir_function;
+        hir_function.sig.name = *fn.name;
+        hir_function.sig.params = std::move(params);
+        hir_function.sig.param_type_annotations = std::move(param_type_annotations);
+        hir_function.sig.return_type = fn.return_type ? std::optional(convert_type(converter, **fn.return_type)) : std::nullopt;
+        hir_function.sig.span = fn.span;
         hir_function.span = fn.span;
-        
+
         // Convert the body
         if (fn.body) {
-            hir_function.body = std::make_unique<hir::Block>(converter.convert_block(**fn.body));
+            hir::FunctionBody body{};
+            body.block = std::make_unique<hir::Block>(converter.convert_block(**fn.body));
+            hir_function.body = std::move(body);
         }
-        
+
         return hir_function;
     }
     hir::ItemVariant operator()(const ast::StructItem& s) const {
@@ -575,17 +574,16 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
         throw std::logic_error("Function item missing name during HIR conversion");
     }
     std::vector<std::unique_ptr<hir::Pattern>> params;
-    std::vector<std::optional<hir::TypeAnnotation>> param_type_annotations;
+    std::vector<hir::TypeAnnotation> param_type_annotations;
     params.reserve(fn_item->params.size());
     param_type_annotations.reserve(fn_item->params.size());
-    
+
     for (const auto& p : fn_item->params) {
         auto pattern = detail::convert_pattern(*p.first);
-        // Convert type annotation if present
-        std::optional<hir::TypeAnnotation> type_annotation;
-        if (p.second) {
-            type_annotation = hir::TypeAnnotation(detail::convert_type(*this, *p.second));
+        if (!p.second) {
+            throw std::logic_error("Function parameter missing type annotation during HIR conversion");
         }
+        auto type_annotation = hir::TypeAnnotation(detail::convert_type(*this, *p.second));
         params.push_back(std::move(pattern));
         param_type_annotations.push_back(std::move(type_annotation));
     }
@@ -599,38 +597,39 @@ std::unique_ptr<hir::AssociatedItem> AstToHirConverter::convert_associated_item(
         hir_self.is_mutable = self.is_mutable;
         hir_self.span = self.span;
 
-        hir::Method hir_method(
-            *fn_item->name,
-            std::move(hir_self),
-            std::move(params),
-            std::move(param_type_annotations),
-            std::move(return_type),
-            nullptr // Will be set after conversion
-        );
+        hir::Method hir_method;
+        hir_method.sig.name = *fn_item->name;
+        hir_method.sig.self_param = std::move(hir_self);
+        hir_method.sig.params = std::move(params);
+        hir_method.sig.param_type_annotations = std::move(param_type_annotations);
+        hir_method.sig.return_type = std::move(return_type);
+        hir_method.sig.span = fn_item->span;
         hir_method.span = fn_item->span;
-        
+
         // Convert the body
         if (fn_item->body) {
-            hir_method.body = std::make_unique<hir::Block>(convert_block(**fn_item->body));
+            hir::Method::MethodBody body{};
+            body.block = std::make_unique<hir::Block>(convert_block(**fn_item->body));
+            hir_method.body = std::move(body);
         }
-        
+
         return std::make_unique<hir::AssociatedItem>(std::move(hir_method));
     } else {
-        hir::Function hir_fn(
-            std::move(params),
-            std::move(param_type_annotations),
-            std::move(return_type),
-            nullptr, // Will be set after conversion
-            {}, // Initialized empty
-            *fn_item->name
-        );
+        hir::Function hir_fn;
+        hir_fn.sig.name = *fn_item->name;
+        hir_fn.sig.params = std::move(params);
+        hir_fn.sig.param_type_annotations = std::move(param_type_annotations);
+        hir_fn.sig.return_type = std::move(return_type);
+        hir_fn.sig.span = fn_item->span;
         hir_fn.span = fn_item->span;
-        
+
         // Convert the body
         if (fn_item->body) {
-            hir_fn.body = std::make_unique<hir::Block>(convert_block(**fn_item->body));
+            hir::FunctionBody body{};
+            body.block = std::make_unique<hir::Block>(convert_block(**fn_item->body));
+            hir_fn.body = std::move(body);
         }
-        
+
         return std::make_unique<hir::AssociatedItem>(std::move(hir_fn));
     }
 }

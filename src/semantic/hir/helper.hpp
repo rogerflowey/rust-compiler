@@ -14,7 +14,7 @@ namespace helper {
 
 
 inline ast::Identifier get_name(const Function& fn) {
-    return fn.name;
+    return fn.sig.name;
 }
 
 inline span::Span get_span(const Expr &expr) {
@@ -36,7 +36,7 @@ inline void set_span(std::unique_ptr<Expr> &expr, span::Span new_span) {
 }
 
 inline ast::Identifier get_name(const Method& method) {
-    return method.name;
+    return method.sig.name;
 }
 
 inline ast::Identifier get_name(const ConstDef& constant) {

@@ -138,29 +138,29 @@ protected:
         
         // Create test function (returns i32)
         test_function = std::make_unique<Function>();
-        test_function->return_type = i32_type;
-        
+        test_function->sig.return_type = i32_type;
+
         // Add one parameter to test function for argument count testing
         auto func_param_local = std::make_unique<Local>();
         func_param_local->name = ast::Identifier{"func_param"};
         func_param_local->is_mutable = false;
         func_param_local->type_annotation = i32_type;
-        
+
         auto binding_def = BindingDef();
         binding_def.local = func_param_local.get();
         auto func_param_pattern = std::make_unique<Pattern>(hir::PatternVariant{std::move(binding_def)});
-        test_function->params.push_back(std::move(func_param_pattern));
-        test_function->param_type_annotations.push_back(i32_type);
-        
+        test_function->sig.params.push_back(std::move(func_param_pattern));
+        test_function->sig.param_type_annotations.push_back(i32_type);
+
         // Create test function that returns unit type (for ReturnExpressionWithoutValue test)
         test_function_unit_return = std::make_unique<Function>();
-        test_function_unit_return->return_type = unit_type;
-        
+        test_function_unit_return->sig.return_type = unit_type;
+
         // Create test method
         test_method = std::make_unique<Method>();
-        test_method->self_param.is_reference = true;
-        test_method->self_param.is_mutable = false;
-        test_method->return_type = i32_type;
+        test_method->sig.self_param.is_reference = true;
+        test_method->sig.self_param.is_mutable = false;
+        test_method->sig.return_type = i32_type;
         
         // Create test enum
         test_enum_def = std::make_unique<EnumDef>();
@@ -540,37 +540,35 @@ protected:
     
     void setupMethodImpl() {
         // Assign method name directly on the HIR node
-        test_method->name = ast::Identifier{"test_method"};
-        
+        test_method->sig.name = ast::Identifier{"test_method"};
+
         // Create test method parameters
         auto method_param_local = std::make_unique<Local>();
         method_param_local->name = ast::Identifier{"method_param"};
         method_param_local->is_mutable = false;
         method_param_local->type_annotation = i32_type;
-        
+
         auto binding_def = BindingDef();
         binding_def.local = method_param_local.get();
         auto method_param_pattern = std::make_unique<Pattern>(hir::PatternVariant{std::move(binding_def)});
-        test_method->params.push_back(std::move(method_param_pattern));
-        test_method->param_type_annotations.push_back(i32_type);
-        
+        test_method->sig.params.push_back(std::move(method_param_pattern));
+        test_method->sig.param_type_annotations.push_back(i32_type);
+
         // Create and register impl block for the struct with test method
         test_impl = std::make_unique<Impl>();
         test_impl->trait = std::nullopt; // inherent impl
         test_impl->for_type = struct_type;
-        
+
         // Create associated item for the method
         auto method_copy = hir::Method();
-        method_copy.name = test_method->name;
-        method_copy.self_param.is_reference = test_method->self_param.is_reference;
-        method_copy.self_param.is_mutable = test_method->self_param.is_mutable;
-        method_copy.params = std::move(test_method->params);
-        method_copy.param_type_annotations = std::move(test_method->param_type_annotations);
-        method_copy.return_type = std::move(test_method->return_type);
+        method_copy.sig.name = test_method->sig.name;
+        method_copy.sig.self_param.is_reference = test_method->sig.self_param.is_reference;
+        method_copy.sig.self_param.is_mutable = test_method->sig.self_param.is_mutable;
+        method_copy.sig.params = std::move(test_method->sig.params);
+        method_copy.sig.param_type_annotations = std::move(test_method->sig.param_type_annotations);
+        method_copy.sig.return_type = std::move(test_method->sig.return_type);
         method_copy.body = std::move(test_method->body);
-        method_copy.self_local = std::move(test_method->self_local);
-        method_copy.locals = std::move(test_method->locals);
-        
+
         auto method_item = std::make_unique<AssociatedItem>(hir::AssociatedItemVariant{std::move(method_copy)});
         
         test_impl->items.push_back(std::move(method_item));

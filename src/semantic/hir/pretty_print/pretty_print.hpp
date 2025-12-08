@@ -1209,20 +1209,15 @@ inline void HirItemVisitor::operator()(const Function& i) const {
     p.out_ << " {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
-        p.print_field("name", i.name.name);
-        if (!i.params.empty()) {
-            p.print_list_field("params", i.params);
+        p.print_field("name", i.sig.name.name);
+        if (!i.sig.params.empty()) {
+            p.print_list_field("params", i.sig.params);
             p.prefix();
             p.out_ << "param_type_annotations: [\n";
             {
                 HirPrettyPrinter::IndentGuard guard2(p);
-                for (const auto& annotation : i.param_type_annotations) {
-                    if (annotation) {
-                        p.print_type_annotation(*annotation);
-                    } else {
-                        p.prefix();
-                        p.out_ << "nullopt\n";
-                    }
+                for (const auto& annotation : i.sig.param_type_annotations) {
+                    p.print_type_annotation(annotation);
                 }
             }
             p.prefix();
@@ -1230,22 +1225,32 @@ inline void HirItemVisitor::operator()(const Function& i) const {
         }
         p.prefix();
         p.out_ << "return_type: ";
-        if (i.return_type) {
+        if (i.sig.return_type) {
             p.out_ << "\n";
             {
                 HirPrettyPrinter::IndentGuard guard2(p);
-                p.print_type_annotation(*i.return_type);
+                p.print_type_annotation(*i.sig.return_type);
             }
         } else {
             p.out_ << "nullopt\n";
         }
-        p.print_ptr_field("body", i.body);
-        if (!i.locals.empty()) {
+        p.prefix();
+        p.out_ << "body: ";
+        if (i.body) {
+            p.out_ << "\n";
+            {
+                HirPrettyPrinter::IndentGuard guard2(p);
+                p.print_ptr_field("block", i.body->block);
+            }
+        } else {
+            p.out_ << "nullopt\n";
+        }
+        if (i.body && !i.body->locals.empty()) {
             p.prefix();
             p.out_ << "locals: [\n";
             {
                 HirPrettyPrinter::IndentGuard guard2(p);
-                for (const auto& local : i.locals) {
+                for (const auto& local : i.body->locals) {
                     if (local) {
                         p.prefix();
                         p.out_ << "Local@";
@@ -1283,24 +1288,19 @@ inline void HirItemVisitor::operator()(const Method& i) const {
     p.out_ << " {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
-        p.print_field("name", i.name.name);
+        p.print_field("name", i.sig.name.name);
         p.prefix();
         p.out_ << "self_param: SelfParam { is_reference: "
-               << (i.self_param.is_reference ? "true" : "false")
-               << ", is_mutable: " << (i.self_param.is_mutable ? "true" : "false") << " }\n";
-        if (!i.params.empty()) {
-            p.print_list_field("params", i.params);
+               << (i.sig.self_param.is_reference ? "true" : "false")
+               << ", is_mutable: " << (i.sig.self_param.is_mutable ? "true" : "false") << " }\n";
+        if (!i.sig.params.empty()) {
+            p.print_list_field("params", i.sig.params);
             p.prefix();
             p.out_ << "param_type_annotations: [\n";
             {
                 HirPrettyPrinter::IndentGuard guard2(p);
-                for (const auto& annotation : i.param_type_annotations) {
-                    if (annotation) {
-                        p.print_type_annotation(*annotation);
-                    } else {
-                        p.prefix();
-                        p.out_ << "nullopt\n";
-                    }
+                for (const auto& annotation : i.sig.param_type_annotations) {
+                    p.print_type_annotation(annotation);
                 }
             }
             p.prefix();
@@ -1308,22 +1308,51 @@ inline void HirItemVisitor::operator()(const Method& i) const {
         }
         p.prefix();
         p.out_ << "return_type: ";
-        if (i.return_type) {
+        if (i.sig.return_type) {
             p.out_ << "\n";
             {
                 HirPrettyPrinter::IndentGuard guard2(p);
-                p.print_type_annotation(*i.return_type);
+                p.print_type_annotation(*i.sig.return_type);
             }
         } else {
             p.out_ << "nullopt\n";
         }
-        p.print_ptr_field("body", i.body);
-        if (!i.locals.empty()) {
+        p.prefix();
+        p.out_ << "body: ";
+        if (i.body) {
+            p.out_ << "\n";
+            {
+                HirPrettyPrinter::IndentGuard guard2(p);
+                p.print_ptr_field("block", i.body->block);
+                p.prefix();
+                p.out_ << "self_local: " << (i.body->self_local ? "Some" : "None") << "\n";
+            }
+        } else {
+            p.out_ << "nullopt\n";
+        }
+        if (i.body && (!i.body->locals.empty() || i.body->self_local)) {
             p.prefix();
             p.out_ << "locals: [\n";
             {
                 HirPrettyPrinter::IndentGuard guard2(p);
-                for (const auto& local : i.locals) {
+                if (i.body->self_local) {
+                    p.prefix();
+                    p.out_ << "Self Local@";
+                    p.print_pointer(i.body->self_local.get(), "Local");
+                    p.out_ << " {\n";
+                    {
+                        HirPrettyPrinter::IndentGuard guard3(p);
+                        p.print_field("name", i.body->self_local->name.name);
+                        p.prefix();
+                        p.out_ << "is_mutable: " << (i.body->self_local->is_mutable ? "true" : "false") << "\n";
+                        if (i.body->self_local->type_annotation) {
+                            p.print_type_annotation(*i.body->self_local->type_annotation);
+                        }
+                    }
+                    p.prefix();
+                    p.out_ << "}\n";
+                }
+                for (const auto& local : i.body->locals) {
                     if (local) {
                         p.prefix();
                         p.out_ << "Local@";

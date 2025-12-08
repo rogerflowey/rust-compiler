@@ -258,16 +258,22 @@ public:
   void visit(hir::Function &func) {
     // function scope does not allow capture of outer bindings
     scopes.push(Scope{&scopes.top(), true});
-    local_owner_stack.push_back(&func.locals);
+    if (func.body) {
+      local_owner_stack.push_back(&func.body->locals);
+    }
 
     // the body will be treated as a pure block
     base().visit(func);
-    local_owner_stack.pop_back();
+    if (func.body) {
+      local_owner_stack.pop_back();
+    }
     scopes.pop();
   }
   void visit(hir::Method &method) {
     scopes.push(Scope{&scopes.top(), true});
-    local_owner_stack.push_back(&method.locals);
+    if (method.body) {
+      local_owner_stack.push_back(&method.body->locals);
+    }
 
 
     // add the Self declaration
@@ -292,12 +298,12 @@ public:
     
     // Build the self type, respecting the self_param.is_reference flag
     TypeId self_type;
-    if (method.self_param.is_reference) {
+    if (method.sig.self_param.is_reference) {
       // Self is a reference: &self or &mut self
       TypeId struct_type = get_typeID(Type{StructType{.id = *self_struct_id_opt}});
       self_type = get_typeID(Type{ReferenceType{
           .referenced_type = struct_type,
-          .is_mutable = method.self_param.is_mutable
+          .is_mutable = method.sig.self_param.is_mutable
       }});
     } else {
       // Self is owned: self or mut self (but mut self is not mutable as a binding)
@@ -306,16 +312,20 @@ public:
     
     auto self_local = std::make_unique<hir::Local>(hir::Local{
       ast::Identifier{"self"},
-      method.self_param.is_mutable,
+      method.sig.self_param.is_mutable,
       self_type
     });
-    self_local->span = method.self_param.span.is_valid() ? method.self_param.span : method.span;
-    
+    self_local->span = method.sig.self_param.span.is_valid() ? method.sig.self_param.span : method.span;
+
     auto *self_ptr = self_local.get();
-    method.self_local = std::move(self_local);
-    register_local(*self_ptr);
+    if (method.body) {
+      method.body->self_local = std::move(self_local);
+      register_local(*self_ptr);
+    }
     base().visit(method);
-    local_owner_stack.pop_back();
+    if (method.body) {
+      local_owner_stack.pop_back();
+    }
     scopes.pop();
   }
   void visit(hir::StructDef &struct_def) {

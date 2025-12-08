@@ -79,10 +79,10 @@ private:
 	TempId materialize_operand(const Operand& operand, TypeId type);
 	Operand make_temp_operand(TempId temp);
 	void emit_return(std::optional<Operand> value);
-	void collect_parameters();
-	void append_self_parameter();
-	void append_explicit_parameters(const std::vector<std::unique_ptr<hir::Pattern>>& params,
-	                           const std::vector<std::optional<hir::TypeAnnotation>>& annotations);
+        void collect_parameters();
+        void append_self_parameter();
+        void append_explicit_parameters(const std::vector<std::unique_ptr<hir::Pattern>>& params,
+                                   const std::vector<hir::TypeAnnotation>& annotations);
 	void append_parameter(const hir::Local* local, TypeId type);
 	const hir::Local* resolve_pattern_local(const hir::Pattern& pattern) const;
 	bool is_reachable() const;

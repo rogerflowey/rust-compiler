@@ -140,20 +140,19 @@ inline hir::Function make_builtin_function(std::string_view name,
                                            std::initializer_list<TypeId> param_types,
                                            TypeId return_type) {
     hir::Function fn{};
-    fn.name = ast::Identifier(std::string(name));
-    fn.params.reserve(param_types.size());
-    fn.param_type_annotations.reserve(param_types.size());
+    fn.sig.name = ast::Identifier(std::string(name));
+    fn.sig.params.reserve(param_types.size());
+    fn.sig.param_type_annotations.reserve(param_types.size());
 
     size_t index = 0;
     for (TypeId type : param_types) {
-        fn.params.push_back(make_param_pattern(index++));
-        fn.param_type_annotations.emplace_back(hir::TypeAnnotation{type});
+        fn.sig.params.push_back(make_param_pattern(index++));
+        fn.sig.param_type_annotations.emplace_back(hir::TypeAnnotation{type});
     }
 
-    fn.return_type = hir::TypeAnnotation{return_type};
-    fn.body = nullptr;
-    fn.locals.clear();
-    fn.is_builtin = true; // NEW: Mark as builtin
+    fn.sig.return_type = hir::TypeAnnotation{return_type};
+    fn.body = std::nullopt;
+    fn.is_builtin = true; // Marks as builtin
 
     return fn;
 }
@@ -164,24 +163,22 @@ inline hir::Method make_builtin_method(std::string_view name,
                                        std::initializer_list<TypeId> param_types,
                                        TypeId return_type) {
     hir::Method method{};
-    method.name = ast::Identifier(std::string(name));
-    method.self_param.is_reference = self_is_reference;
-    method.self_param.is_mutable = self_is_mutable;
+    method.sig.name = ast::Identifier(std::string(name));
+    method.sig.self_param.is_reference = self_is_reference;
+    method.sig.self_param.is_mutable = self_is_mutable;
 
-    method.params.reserve(param_types.size());
-    method.param_type_annotations.reserve(param_types.size());
+    method.sig.params.reserve(param_types.size());
+    method.sig.param_type_annotations.reserve(param_types.size());
 
     size_t index = 0;
     for (TypeId type : param_types) {
-        method.params.push_back(make_param_pattern(index++));
-        method.param_type_annotations.emplace_back(hir::TypeAnnotation{type});
+        method.sig.params.push_back(make_param_pattern(index++));
+        method.sig.param_type_annotations.emplace_back(hir::TypeAnnotation{type});
     }
 
-    method.return_type = hir::TypeAnnotation{return_type};
-    method.body = nullptr;
-    method.self_local.reset();
-    method.locals.clear();
-    method.is_builtin = true; // NEW: Mark as builtin
+    method.sig.return_type = hir::TypeAnnotation{return_type};
+    method.body = std::nullopt;
+    method.is_builtin = true; // Marks as builtin
 
     return method;
 }
