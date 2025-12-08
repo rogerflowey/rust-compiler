@@ -169,10 +169,10 @@ inline void TraitValidator::extract_trait_definition(hir::Trait& trait) {
     for (auto& item : trait.items) {
         std::visit(Overloaded{
             [&](hir::Function& fn) {
-                info.required_items.emplace(fn.name, TraitItemInfo(fn.name, &fn));
+                info.required_items.emplace(fn.sig.name, TraitItemInfo(fn.sig.name, &fn));
             },
             [&](hir::Method& method) {
-                info.required_items.emplace(method.name, TraitItemInfo(method.name, &method));
+                info.required_items.emplace(method.sig.name, TraitItemInfo(method.sig.name, &method));
             },
             [&](hir::ConstDef& constant) {
                 info.required_items.emplace(constant.name, TraitItemInfo(constant.name, &constant));
@@ -258,77 +258,67 @@ inline void TraitValidator::validate_trait_impl(hir::Impl& impl, const hir::Trai
 
 inline bool TraitValidator::validate_function_signature(const hir::Function& trait_fn, const hir::Function& impl_fn) {
     // Check parameter count
-    if (trait_fn.param_type_annotations.size() != impl_fn.param_type_annotations.size()) {
+    if (trait_fn.sig.param_type_annotations.size() != impl_fn.sig.param_type_annotations.size()) {
         return false;
     }
-    
+
     // Check return type TypeId equality
-    if (trait_fn.return_type && impl_fn.return_type) {
-        auto trait_return_type = resolve_type(*trait_fn.return_type);
-        auto impl_return_type = resolve_type(*impl_fn.return_type);
+    if (trait_fn.sig.return_type && impl_fn.sig.return_type) {
+        auto trait_return_type = resolve_type(*trait_fn.sig.return_type);
+        auto impl_return_type = resolve_type(*impl_fn.sig.return_type);
         if (trait_return_type != impl_return_type) {
             return false;
         }
-    } else if (trait_fn.return_type != impl_fn.return_type) {
+    } else if (trait_fn.sig.return_type != impl_fn.sig.return_type) {
         // One has return type, other doesn't
         return false;
     }
-    
+
     // Check parameter type TypeId equality
-    for (size_t i = 0; i < trait_fn.param_type_annotations.size(); ++i) {
-        if (trait_fn.param_type_annotations[i] && impl_fn.param_type_annotations[i]) {
-            auto trait_param_type = resolve_type(*trait_fn.param_type_annotations[i]);
-            auto impl_param_type = resolve_type(*impl_fn.param_type_annotations[i]);
-            if (trait_param_type != impl_param_type) {
-                return false;
-            }
-        } else if (trait_fn.param_type_annotations[i] != impl_fn.param_type_annotations[i]) {
-            // One parameter has type annotation, other doesn't
+    for (size_t i = 0; i < trait_fn.sig.param_type_annotations.size(); ++i) {
+        auto trait_param_type = resolve_type(trait_fn.sig.param_type_annotations[i]);
+        auto impl_param_type = resolve_type(impl_fn.sig.param_type_annotations[i]);
+        if (trait_param_type != impl_param_type) {
             return false;
         }
     }
-    
+
     return true;
 }
 
 inline bool TraitValidator::validate_method_signature(const hir::Method& trait_method, const hir::Method& impl_method) {
     // Check receiver type match
-    if (trait_method.self_param.is_reference != impl_method.self_param.is_reference ||
-        trait_method.self_param.is_mutable != impl_method.self_param.is_mutable) {
+    if (trait_method.sig.self_param.is_reference != impl_method.sig.self_param.is_reference ||
+        trait_method.sig.self_param.is_mutable != impl_method.sig.self_param.is_mutable) {
         return false;
     }
-    
+
     // Check parameter count
-    if (trait_method.param_type_annotations.size() != impl_method.param_type_annotations.size()) {
+    if (trait_method.sig.param_type_annotations.size() != impl_method.sig.param_type_annotations.size()) {
         return false;
     }
-    
+
     // Check return type TypeId equality
-    if (trait_method.return_type && impl_method.return_type) {
-        auto trait_return_type = resolve_type(*trait_method.return_type);
-        auto impl_return_type = resolve_type(*impl_method.return_type);
+    if (trait_method.sig.return_type && impl_method.sig.return_type) {
+        auto trait_return_type = resolve_type(*trait_method.sig.return_type);
+        auto impl_return_type = resolve_type(*impl_method.sig.return_type);
         if (trait_return_type != impl_return_type) {
             return false;
         }
-    } else if (trait_method.return_type != impl_method.return_type) {
+    } else if (trait_method.sig.return_type != impl_method.sig.return_type) {
         // One has return type, other doesn't
         return false;
     }
-    
+
     // Check parameter type TypeId equality
-    for (size_t i = 0; i < trait_method.param_type_annotations.size(); ++i) {
-        if (trait_method.param_type_annotations[i] && impl_method.param_type_annotations[i]) {
-            auto trait_param_type = resolve_type(*trait_method.param_type_annotations[i]);
-            auto impl_param_type = resolve_type(*impl_method.param_type_annotations[i]);
-            if (trait_param_type != impl_param_type) {
-                return false;
-            }
-        } else if (trait_method.param_type_annotations[i] != impl_method.param_type_annotations[i]) {
-            // One parameter has type annotation, other doesn't
+    for (size_t i = 0; i < trait_method.sig.param_type_annotations.size(); ++i) {
+        auto trait_param_type = resolve_type(trait_method.sig.param_type_annotations[i]);
+        auto impl_param_type = resolve_type(impl_method.sig.param_type_annotations[i]);
+        if (trait_param_type != impl_param_type) {
             return false;
         }
     }
-    
+
     return true;
 }
 
@@ -374,10 +364,10 @@ TraitValidator::find_impl_item(hir::Impl& impl, const ast::Identifier& name) {
 
         std::visit(Overloaded{
             [&](hir::Function& fn) {
-                item_name = &fn.name;
+                item_name = &fn.sig.name;
             },
             [&](hir::Method& method) {
-                item_name = &method.name;
+                item_name = &method.sig.name;
             },
             [&](hir::ConstDef& constant) {
                 item_name = &constant.name;

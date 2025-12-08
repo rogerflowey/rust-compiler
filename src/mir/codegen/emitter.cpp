@@ -1,5 +1,6 @@
 #include "mir/codegen/emitter.hpp"
 
+#include "lower/lower_common.hpp"
 #include "mir/codegen/rvalue.hpp"
 #include "semantic/utils.hpp"
 #include "type/helper.hpp"
@@ -352,25 +353,21 @@ void Emitter::emit_terminator(const mir::Terminator &terminator) {
                    block_builders_.at(switch_term.otherwise)->label(), cases);
              },
              [&](const mir::ReturnTerminator &ret) {
-               if (ret.value.has_value()) {
-                 auto operand = get_typed_operand(*ret.value);
-                 // Check if the return type is a unit type - if so, return void
-                 if (const auto* temp_id = std::get_if<mir::TempId>(&ret.value->value)) {
-                   mir::TypeId ret_type = current_function_->get_temp_type(*temp_id);
-                   if (std::get_if<type::UnitType>(&type::get_type_from_id(ret_type).value)) {
-                     current_block_builder_->emit_ret_void();
-                   } else {
-                     current_block_builder_->emit_ret(operand.type_name,
-                                                      operand.value_name);
-                   }
-                 } else {
-                   // Constant value
-                   current_block_builder_->emit_ret(operand.type_name,
-                                                    operand.value_name);
-                 }
-               } else {
-                 current_block_builder_->emit_ret_void();
-               }
+              if (mir::detail::is_unit_type(current_function_->return_type)) {
+                  // For unit-returning functions, we always just 'ret void'.
+                  current_block_builder_->emit_ret_void();
+                  return;
+              }
+            
+              // Non-unit / non-never function must have a value.
+              if (!ret.value) {
+                  throw std::logic_error(
+                      "Non-unit function has ReturnTerminator without value during codegen");
+              }
+            
+              auto operand = get_typed_operand(*ret.value);
+              current_block_builder_->emit_ret(operand.type_name,
+                                               operand.value_name);
              },
              [&](const mir::UnreachableTerminator &) {
                current_block_builder_->emit_unreachable();

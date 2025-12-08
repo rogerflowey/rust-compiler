@@ -564,7 +564,7 @@ TEST_F(HirConverterTest, ConvertsBlocksWithItemStatements) {
     ASSERT_EQ(hir_block.items.size(), 1u);
     auto* hir_function = std::get_if<hir::Function>(&hir_block.items.front()->value);
     ASSERT_NE(hir_function, nullptr);
-    EXPECT_EQ(hir_function->name.name, "nested");
+    EXPECT_EQ(hir_function->sig.name.name, "nested");
 
     ASSERT_EQ(hir_block.stmts.size(), 1u);
     auto* expr_stmt = std::get_if<hir::ExprStmt>(&hir_block.stmts.front()->value);
@@ -668,8 +668,8 @@ TEST_F(HirConverterTest, ConvertsFunctionItems) {
     
     auto* function = std::get_if<hir::Function>(&hir_item->value);
     ASSERT_NE(function, nullptr);
-    EXPECT_EQ(function->name.name, ast_fn_item->name->name);
-    ASSERT_NE(function->body, nullptr);
+    EXPECT_EQ(function->sig.name.name, ast_fn_item->name->name);
+    ASSERT_TRUE(function->body.has_value());
 }
 
 TEST_F(HirConverterTest, ConvertsStructItems) {
@@ -754,7 +754,7 @@ TEST_F(HirConverterTest, ConvertsTraitItems) {
 
     auto* func = std::get_if<hir::Function>(&trait_def->items[0]->value);
     ASSERT_NE(func, nullptr);
-    EXPECT_EQ(func->name.name, "my_fn");
+    EXPECT_EQ(func->sig.name.name, "my_fn");
 }
 
 TEST_F(HirConverterTest, ConvertsTraitImplItems) {
@@ -792,7 +792,7 @@ TEST_F(HirConverterTest, ConvertsTraitImplItems) {
     ASSERT_EQ(impl->items.size(), 1);
     auto* func = std::get_if<hir::Function>(&impl->items[0]->value);
     ASSERT_NE(func, nullptr);
-    EXPECT_EQ(func->name.name, "my_fn");
+    EXPECT_EQ(func->sig.name.name, "my_fn");
 }
 
 TEST_F(HirConverterTest, ConvertsInherentImplItems) {
@@ -829,7 +829,7 @@ TEST_F(HirConverterTest, ConvertsInherentImplItems) {
 
     auto* func = std::get_if<hir::Function>(&impl->items[0]->value);
     ASSERT_NE(func, nullptr);
-    EXPECT_EQ(func->name.name, "my_fn");
+    EXPECT_EQ(func->sig.name.name, "my_fn");
 }
 
 TEST_F(HirConverterTest, ConvertsInherentImplWithConstItem) {
@@ -875,10 +875,10 @@ TEST_F(HirConverterTest, ConvertsInherentImplWithMethod) {
 
     auto* assoc_method = std::get_if<hir::Method>(&impl->items[0]->value);
     ASSERT_NE(assoc_method, nullptr);
-    EXPECT_EQ(assoc_method->name.name, "my_method");
+    EXPECT_EQ(assoc_method->sig.name.name, "my_method");
     
-    EXPECT_TRUE(assoc_method->self_param.is_reference);
-    EXPECT_FALSE(assoc_method->self_param.is_mutable);
+    EXPECT_TRUE(assoc_method->sig.self_param.is_reference);
+    EXPECT_FALSE(assoc_method->sig.self_param.is_mutable);
 }
 
 TEST_F(HirConverterTest, ThrowsOnInvalidImplItem) {
@@ -913,7 +913,7 @@ TEST_F(HirConverterTest, ConvertsPrograms) {
     
     auto* function = std::get_if<hir::Function>(&hir_program->items[0]->value);
     ASSERT_NE(function, nullptr);
-    EXPECT_EQ(function->name.name, "my_func");
+    EXPECT_EQ(function->sig.name.name, "my_func");
     
     auto* struct_def = std::get_if<hir::StructDef>(&hir_program->items[1]->value);
     ASSERT_NE(struct_def, nullptr);

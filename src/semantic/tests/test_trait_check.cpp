@@ -48,29 +48,29 @@ protected:
         const std::string& name,
         std::vector<PrimitiveKind> param_types,
         std::optional<PrimitiveKind> return_type = std::nullopt) {
-        
+
         auto function = std::make_unique<hir::Function>();
         
         // Create a mock AST node for the function and keep it alive
         auto ast_node = std::make_unique<ast::FunctionItem>();
         ast_node->name = std::make_unique<ast::Identifier>(name);
-        function->name = *ast_node->name;
+        function->sig.name = *ast_node->name;
         ast_functions.push_back(std::move(ast_node));
-        
+
         // Set up parameter type annotations
         for (auto param_type : param_types) {
-            function->param_type_annotations.push_back(make_type_annotation(param_type));
-            function->params.push_back(nullptr); // We don't need actual patterns for this test
+            function->sig.param_type_annotations.push_back(make_type_annotation(param_type));
+            function->sig.params.push_back(nullptr); // We don't need actual patterns for this test
         }
-        
+
         // Set up return type annotation
         if (return_type) {
-            function->return_type = make_type_annotation(*return_type);
+            function->sig.return_type = make_type_annotation(*return_type);
         }
-        
+
         // Create a dummy body
-        function->body = std::make_unique<hir::Block>();
-        
+        function->body = hir::FunctionBody{ .block = std::make_unique<hir::Block>() };
+
         return function;
     }
     
@@ -81,33 +81,35 @@ protected:
         bool is_mut = false,
         std::vector<PrimitiveKind> param_types = {},
         std::optional<PrimitiveKind> return_type = std::nullopt) {
-        
+
         auto method = std::make_unique<hir::Method>();
         
         // Create a mock AST node for the method and keep it alive
         auto ast_node = std::make_unique<ast::FunctionItem>();
         ast_node->name = std::make_unique<ast::Identifier>(name);
-        method->name = *ast_node->name;
+        method->sig.name = *ast_node->name;
         ast_functions.push_back(std::move(ast_node));
-        
+
         // Set up self parameter
-        method->self_param.is_reference = is_ref;
-        method->self_param.is_mutable = is_mut;
-        
+        method->sig.self_param.is_reference = is_ref;
+        method->sig.self_param.is_mutable = is_mut;
+
         // Set up parameter type annotations
         for (auto param_type : param_types) {
-            method->param_type_annotations.push_back(make_type_annotation(param_type));
-            method->params.push_back(nullptr); // We don't need actual patterns for this test
+            method->sig.param_type_annotations.push_back(make_type_annotation(param_type));
+            method->sig.params.push_back(nullptr); // We don't need actual patterns for this test
         }
-        
+
         // Set up return type annotation
         if (return_type) {
-            method->return_type = make_type_annotation(*return_type);
+            method->sig.return_type = make_type_annotation(*return_type);
         }
-        
+
         // Create a dummy body
-        method->body = std::make_unique<hir::Block>();
-        
+        hir::Method::MethodBody body{};
+        body.block = std::make_unique<hir::Block>();
+        method->body = std::move(body);
+
         return method;
     }
     

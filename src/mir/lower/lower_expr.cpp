@@ -1,6 +1,7 @@
 #include "mir/lower/lower_internal.hpp"
 
 #include "semantic/hir/helper.hpp"
+#include "semantic/expr_info_helpers.hpp"
 #include "type/type.hpp"
 #include "semantic/utils.hpp"
 
@@ -16,10 +17,20 @@ Operand FunctionLowerer::load_place_value(Place place, TypeId type) {
 }
 
 std::optional<Operand> FunctionLowerer::lower_expr(const hir::Expr& expr) {
-	semantic::ExprInfo info = hir::helper::get_expr_info(expr);
-	return std::visit([this, &info](const auto& node) {
-		return lower_expr_impl(node, info);
-	}, expr.value);
+        semantic::ExprInfo info = hir::helper::get_expr_info(expr);
+
+        bool was_reachable = is_reachable();
+
+        auto result = std::visit([this, &info](const auto& node) {
+                return lower_expr_impl(node, info);
+        }, expr.value);
+
+        if (was_reachable && semantic::diverges(info) && is_reachable()) {
+                throw std::logic_error(
+                    "MIR lowering bug: semantically diverging expression leaves MIR reachable");
+        }
+
+        return result;
 }
 
 Place FunctionLowerer::lower_expr_place(const hir::Expr& expr) {
@@ -461,7 +472,9 @@ std::optional<Operand> FunctionLowerer::lower_if_expr(const hir::If& if_expr, co
 		}
 	}
 
-	bool join_reachable = (!phi_incomings.empty() || !result_needed) || !has_else;
+	
+	bool join_reachable = !phi_incomings.empty()  || !has_else;
+
 	if (join_reachable) {
 		current_block = join_block;
 	} else {

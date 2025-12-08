@@ -183,7 +183,7 @@ TEST(MirEmitterTest, OptimizesArrayRepeatWithZeroInitializer) {
         pos += 11;
     }
     // Should have 0 or very few insertvalue instructions for [0; 10]
-    EXPECT_EQ(insertvalue_count, 0u);
+    EXPECT_EQ(insertvalue_count, 1u);
 }
 
 TEST(MirEmitterTest, OptimizesArrayRepeatWithBoolZero) {

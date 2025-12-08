@@ -2,6 +2,7 @@
 #include "hir/helper.hpp"
 #include "hir/hir.hpp"
 #include "semantic/const/evaluator.hpp"
+#include "semantic/expr_info_helpers.hpp"
 #include "pass/semantic_check/expr_info.hpp"
 #include <cstddef>
 #include <type_traits>
@@ -34,7 +35,7 @@ T& mut_ptr(const T* ptr, const char* description) {
 }
 
 std::string get_function_display_name(const hir::Function &fn) {
-  return fn.name.name.empty() ? std::string{"<function>"} : fn.name.name;
+  return fn.sig.name.name.empty() ? std::string{"<function>"} : fn.sig.name.name;
 }
 
 std::string get_const_display_name(const hir::ConstDef &def) {
@@ -1050,16 +1051,16 @@ ExprInfo ExprChecker::check(hir::Call &expr, TypeExpectation) {
   // Check argument types
   const std::string func_name = get_function_display_name(function_def);
 
-  if (function_def.params.size() != expr.args.size()) {
+  if (function_def.sig.params.size() != expr.args.size()) {
     throw_in_context("Argument count mismatch when calling function '" +
                      func_name + "'", expr.span);
   }
 
   std::vector<ExprInfo> arg_infos;
   arg_infos.reserve(expr.args.size());
-  for (size_t i = 0; i < function_def.params.size(); ++i) {
+  for (size_t i = 0; i < function_def.sig.params.size(); ++i) {
     TypeId param_type =
-        context.type_query(*function_def.param_type_annotations[i]);
+        context.type_query(function_def.sig.param_type_annotations[i]);
     ExprInfo arg_info =
         check(*expr.args[i], TypeExpectation::exact(param_type));
     if (!arg_info.has_type) {
@@ -1076,11 +1077,14 @@ ExprInfo ExprChecker::check(hir::Call &expr, TypeExpectation) {
 
   EndpointSet endpoints = sequence_endpoints(arg_infos);
 
-  return ExprInfo{.type = context.function_return_type(function_def),
-                  .has_type = true,
-                  .is_mut = false,
-                  .is_place = false,
-                  .endpoints = std::move(endpoints)};
+  ExprInfo info{.type = context.function_return_type(function_def),
+                .has_type = true,
+                .is_mut = false,
+                .is_place = false,
+                .endpoints = std::move(endpoints)};
+
+  semantic::debug_check_divergence_invariant(info);
+  return info;
 }
 
 ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
@@ -1115,7 +1119,7 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
   expr.method = method_def;
 
   // Check argument count matches method parameters
-  if (method_def->params.size() != expr.args.size()) {
+  if (method_def->sig.params.size() != expr.args.size()) {
     const std::string method_name = get_name(*method_def).name;
     throw_in_context("Method argument count mismatch for '" + method_name +
                      "'", expr.span);
@@ -1125,11 +1129,11 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
   TypeId expected_receiver_type = base_type;
   bool needs_auto_reference = false;
 
-  if (method_def->self_param.is_reference) {
+  if (method_def->sig.self_param.is_reference) {
     // Create reference type matching method's self parameter
     expected_receiver_type = get_typeID(
         Type{ReferenceType{.referenced_type = base_type,
-                           .is_mutable = method_def->self_param.is_mutable}});
+                           .is_mutable = method_def->sig.self_param.is_mutable}});
 
     // Only create an auto-reference when the receiver is not already assignable
     needs_auto_reference =
@@ -1141,7 +1145,7 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
   if (needs_auto_reference) {
     // Transform HIR to insert explicit reference operation
     expr.receiver = transform_helper::apply_reference(
-        std::move(expr.receiver), method_def->self_param.is_mutable);
+        std::move(expr.receiver), method_def->sig.self_param.is_mutable);
     final_receiver_info =
         check(*expr.receiver, TypeExpectation::exact(expected_receiver_type));
   }
@@ -1160,7 +1164,7 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
 
   for (size_t i = 0; i < expr.args.size(); ++i) {
     TypeId expected_param_type =
-        context.type_query(*method_def->param_type_annotations[i]);
+        context.type_query(method_def->sig.param_type_annotations[i]);
     ExprInfo arg_info =
         check(*expr.args[i], TypeExpectation::exact(expected_param_type));
     if (!arg_info.has_type) {
@@ -1182,11 +1186,14 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
   EndpointSet endpoints = sequence_endpoints(eval_infos);
 
   // Return method's return type
-  return ExprInfo{.type = context.method_return_type(*method_def),
-                  .has_type = true,
-                  .is_mut = false,
-                  .is_place = false,
-                  .endpoints = std::move(endpoints)};
+  ExprInfo info{.type = context.method_return_type(*method_def),
+                .has_type = true,
+                .is_mut = false,
+                .is_place = false,
+                .endpoints = std::move(endpoints)};
+
+  semantic::debug_check_divergence_invariant(info);
+  return info;
 }
 
 ExprInfo ExprChecker::check(hir::If &expr, TypeExpectation exp) {
@@ -1207,11 +1214,14 @@ ExprInfo ExprChecker::check(hir::If &expr, TypeExpectation exp) {
         throw_in_context("Cannot infer type for if expression branch", expr.span);
       }
       auto endpoints = merge_endpoints({cond_info, then_info, else_info});
-      return ExprInfo{.type = invalid_type_id,
-                      .has_type = false,
-                      .is_mut = false,
-                      .is_place = false,
-                      .endpoints = endpoints};
+      ExprInfo info{.type = invalid_type_id,
+                    .has_type = false,
+                    .is_mut = false,
+                    .is_place = false,
+                    .endpoints = endpoints};
+
+      semantic::debug_check_divergence_invariant(info);
+      return info;
     }
 
     auto common_type = find_common_type(then_info.type, else_info.type);
@@ -1236,11 +1246,14 @@ ExprInfo ExprChecker::check(hir::If &expr, TypeExpectation exp) {
     }
 
     auto endpoints = merge_endpoints({cond_info, then_info, else_info});
-    return ExprInfo{.type = *common_type,
-                    .has_type = true,
-                    .is_mut = false,
-                    .is_place = false,
-                    .endpoints = endpoints};
+    ExprInfo info{.type = *common_type,
+                  .has_type = true,
+                  .is_mut = false,
+                  .is_place = false,
+                  .endpoints = endpoints};
+
+    semantic::debug_check_divergence_invariant(info);
+    return info;
   }
 
   auto unit_type = get_typeID(Type{UnitType{}});
@@ -1249,11 +1262,14 @@ ExprInfo ExprChecker::check(hir::If &expr, TypeExpectation exp) {
   }
   auto endpoints = merge_endpoints({cond_info, then_info});
   endpoints.insert(NormalEndpoint{});
-  return ExprInfo{.type = unit_type,
-                  .has_type = true,
-                  .is_mut = false,
-                  .is_place = false,
-                  .endpoints = endpoints};
+  ExprInfo info{.type = unit_type,
+                .has_type = true,
+                .is_mut = false,
+                .is_place = false,
+                .endpoints = endpoints};
+
+  semantic::debug_check_divergence_invariant(info);
+  return info;
 }
 
 ExprInfo ExprChecker::check(hir::Loop &expr, TypeExpectation exp) {
@@ -1308,11 +1324,14 @@ ExprInfo ExprChecker::check(hir::Loop &expr, TypeExpectation exp) {
     // produce a value through normal completion.
   }
 
-  return ExprInfo{.type = loop_type,
-                  .has_type = true,
-                  .is_mut = false,
-                  .is_place = false,
-                  .endpoints = endpoints};
+  ExprInfo info{.type = loop_type,
+                .has_type = true,
+                .is_mut = false,
+                .is_place = false,
+                .endpoints = endpoints};
+
+  semantic::debug_check_divergence_invariant(info);
+  return info;
 }
 
 ExprInfo ExprChecker::check(hir::While &expr, TypeExpectation exp) {
@@ -1345,11 +1364,14 @@ ExprInfo ExprChecker::check(hir::While &expr, TypeExpectation exp) {
     endpoints.insert(NormalEndpoint{});
   }
 
-  return ExprInfo{.type = *expr.break_type,
-                  .has_type = true,
-                  .is_mut = false,
-                  .is_place = false,
-                  .endpoints = endpoints};
+  ExprInfo info{.type = *expr.break_type,
+                .has_type = true,
+                .is_mut = false,
+                .is_place = false,
+                .endpoints = endpoints};
+
+  semantic::debug_check_divergence_invariant(info);
+  return info;
 }
 
 ExprInfo ExprChecker::check(hir::Break &expr, TypeExpectation) {
@@ -1411,19 +1433,35 @@ ExprInfo ExprChecker::check(hir::Break &expr, TypeExpectation) {
   endpoints.erase(NormalEndpoint{});
   endpoints.insert(BreakEndpoint{*expr.target, value_type});
 
-  return ExprInfo{.type = get_typeID(Type{NeverType{}}),
-                  .has_type = true,
-                  .is_mut = false,
-                  .is_place = false,
-                  .endpoints = std::move(endpoints)};
+  ExprInfo info{.type = get_typeID(Type{NeverType{}}),
+                .has_type = true,
+                .is_mut = false,
+                .is_place = false,
+                .endpoints = std::move(endpoints)};
+
+  if (semantic::has_normal_endpoint(info)) {
+    throw_in_context("Break expression should not have NormalEndpoint",
+                     expr.span);
+  }
+
+  semantic::debug_check_divergence_invariant(info);
+  return info;
 }
 
 ExprInfo ExprChecker::check(hir::Continue &expr, TypeExpectation) {
-  return ExprInfo{.type = get_typeID(Type{NeverType{}}),
-                  .has_type = true,
-                  .is_mut = false,
-                  .is_place = false,
-                  .endpoints = {ContinueEndpoint{*expr.target}}};
+  ExprInfo info{.type = get_typeID(Type{NeverType{}}),
+                .has_type = true,
+                .is_mut = false,
+                .is_place = false,
+                .endpoints = {ContinueEndpoint{*expr.target}}};
+
+  if (semantic::has_normal_endpoint(info)) {
+    throw_in_context("Continue expression should not have NormalEndpoint",
+                     expr.span);
+  }
+
+  semantic::debug_check_divergence_invariant(info);
+  return info;
 }
 
 ExprInfo ExprChecker::check(hir::Return &expr, TypeExpectation) {
@@ -1459,11 +1497,19 @@ ExprInfo ExprChecker::check(hir::Return &expr, TypeExpectation) {
   endpoints.erase(NormalEndpoint{});
   endpoints.insert(ReturnEndpoint{*expr.target, value_info.type});
 
-  return ExprInfo{.type = get_typeID(Type{NeverType{}}),
-                  .has_type = true,
-                  .is_mut = false,
-                  .is_place = false,
-                  .endpoints = std::move(endpoints)};
+  ExprInfo info{.type = get_typeID(Type{NeverType{}}),
+                .has_type = true,
+                .is_mut = false,
+                .is_place = false,
+                .endpoints = std::move(endpoints)};
+
+  if (semantic::has_normal_endpoint(info)) {
+    throw_in_context("Return expression should not have NormalEndpoint",
+                     expr.span);
+  }
+
+  semantic::debug_check_divergence_invariant(info);
+  return info;
 }
 
 // Block expressions
@@ -1553,12 +1599,15 @@ ExprInfo ExprChecker::check(hir::Block &expr, TypeExpectation exp) {
     throw_in_context("Block without final expression must be unit type", expr.span);
   }
 
-  return ExprInfo{.type = result_type,
-                  .has_type = has_type,
-                  .is_mut = false,
-                  .is_place = false,
-                  .endpoints = endpoints,
-                  .const_value = const_value};
+  ExprInfo info{.type = result_type,
+                .has_type = has_type,
+                .is_mut = false,
+                .is_place = false,
+                .endpoints = endpoints,
+                .const_value = const_value};
+
+  semantic::debug_check_divergence_invariant(info);
+  return info;
 }
 
 // Static variants

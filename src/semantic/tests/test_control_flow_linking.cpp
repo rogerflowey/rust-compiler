@@ -16,7 +16,7 @@ protected:
 TEST_F(ControlFlowLinkingTest, BasicFunctionWithReturn) {
     // Create a simple HIR function with a return statement directly
     hir::Function hir_func;
-    hir_func.name = ast::Identifier{"test_fn"};
+    hir_func.sig.name = ast::Identifier{"test_fn"};
     
     // Create a return expression
     auto return_expr_inner = hir::Return();
@@ -38,7 +38,9 @@ TEST_F(ControlFlowLinkingTest, BasicFunctionWithReturn) {
     auto block = std::make_unique<hir::Block>();
     
     block->stmts.push_back(std::move(expr_stmt));
-    hir_func.body = std::move(block);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(block);
+    hir_func.body = std::move(func_body);
     
     // Wrap in HIR item
     hir::Item hir_item(std::move(hir_func));
@@ -48,7 +50,7 @@ TEST_F(ControlFlowLinkingTest, BasicFunctionWithReturn) {
     auto& func = std::get<hir::Function>(hir_item.value);
     ASSERT_TRUE(func.body);
     
-    auto& stmt = func.body->stmts[0];
+    auto& stmt = func.body->block->stmts[0];
     ASSERT_TRUE(std::holds_alternative<hir::ExprStmt>(stmt->value));
     auto& expr_stmt_hir = std::get<hir::ExprStmt>(stmt->value);
     ASSERT_TRUE(expr_stmt_hir.expr);
@@ -69,7 +71,7 @@ TEST_F(ControlFlowLinkingTest, BasicFunctionWithReturn) {
 TEST_F(ControlFlowLinkingTest, BasicLoopWithBreakAndContinue) {
     // Create a simple HIR function with a loop containing break and continue
     hir::Function hir_func;
-    hir_func.name = ast::Identifier{"test_fn"};
+    hir_func.sig.name = ast::Identifier{"test_fn"};
     
     // Create break expression
     auto break_expr_inner = hir::Break();
@@ -116,7 +118,9 @@ TEST_F(ControlFlowLinkingTest, BasicLoopWithBreakAndContinue) {
     auto block = std::make_unique<hir::Block>();
     
     block->stmts.push_back(std::move(loop_stmt));
-    hir_func.body = std::move(block);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(block);
+    hir_func.body = std::move(func_body);
     
     // Wrap in HIR item
     hir::Item hir_item(std::move(hir_func));
@@ -127,7 +131,7 @@ TEST_F(ControlFlowLinkingTest, BasicLoopWithBreakAndContinue) {
     ASSERT_TRUE(func.body);
     
     // Find the loop and its statements
-    auto& stmt = func.body->stmts[0];
+    auto& stmt = func.body->block->stmts[0];
     ASSERT_TRUE(std::holds_alternative<hir::ExprStmt>(stmt->value));
     auto& expr_stmt_hir = std::get<hir::ExprStmt>(stmt->value);
     ASSERT_TRUE(expr_stmt_hir.expr);
