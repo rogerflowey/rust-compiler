@@ -283,10 +283,25 @@ public:
       throw_semantic_error("Self struct not registered when processing method",
                            method.span);
     }
+    
+    // Build the self type, respecting the self_param.is_reference flag
+    TypeId self_type;
+    if (method.self_param.is_reference) {
+      // Self is a reference: &self or &mut self
+      TypeId struct_type = get_typeID(Type{StructType{.id = *self_struct_id_opt}});
+      self_type = get_typeID(Type{ReferenceType{
+          .referenced_type = struct_type,
+          .is_mutable = method.self_param.is_mutable
+      }});
+    } else {
+      // Self is owned: self or mut self (but mut self is not mutable as a binding)
+      self_type = get_typeID(Type{StructType{.id = *self_struct_id_opt}});
+    }
+    
     auto self_local = std::make_unique<hir::Local>(hir::Local{
       ast::Identifier{"self"},
       method.self_param.is_mutable,
-      get_typeID(Type{StructType{.id = *self_struct_id_opt}})
+      self_type
     });
     self_local->span = method.self_param.span.is_valid() ? method.self_param.span : method.span;
     

@@ -556,6 +556,9 @@ void FunctionLowerer::lower_block(const hir::Block& hir_block) {
 			return;
 		}
 		std::optional<Operand> value = lower_expr(*expr_ptr);
+		if (!is_reachable()) {
+            return;
+        }
 		if (!value && !is_unit_type(mir_function.return_type) && !is_never_type(mir_function.return_type)) {
 			throw std::logic_error("Missing return value for function requiring return value");
 		}
