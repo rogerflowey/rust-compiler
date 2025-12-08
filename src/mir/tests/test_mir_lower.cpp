@@ -1,5 +1,6 @@
 #include "mir/lower/lower.hpp"
 #include "mir/lower/lower_common.hpp"
+#include "mir/lower/lower_internal.hpp"
 
 #include "mir/mir.hpp"
 #include "semantic/const/const.hpp"
@@ -158,6 +159,25 @@ std::unique_ptr<hir::Expr> make_func_use_expr(hir::Function* function) {
     return std::make_unique<hir::Expr>(hir::ExprVariant{std::move(func_use)});
 }
 
+// Test helper: Lower a single function in isolation (without the full program lowering context)
+mir::MirFunction lower_function_for_test(const hir::Function& function) {
+    // For testing purposes, we lower the function using the internal lowering machinery
+    // without requiring it to be part of a full program
+    
+    // Create an empty function map (no external dependencies in basic tests)
+    std::unordered_map<const void*, mir::FunctionRef> fn_map;
+    
+    // Create the lowerer directly with the function reference
+    mir::detail::FunctionLowerer lowerer(
+        function, 
+        fn_map, 
+        0,  // FunctionId = 0 for test
+        "test_function"
+    );
+    
+    return lowerer.lower();
+}
+
 } // namespace
 
 TEST(MirLowerTest, LowersFunctionReturningLiteral) {
@@ -170,7 +190,7 @@ TEST(MirLowerTest, LowersFunctionReturningLiteral) {
     body->final_expr = make_bool_literal_expr(true, bool_type);
     function.body = std::move(body);
 
-    mir::MirFunction mir_function = mir::lower_function(function);
+    mir::MirFunction mir_function = lower_function_for_test(function);
     ASSERT_EQ(mir_function.basic_blocks.size(), 1u);
     const auto& block = mir_function.basic_blocks.front();
     ASSERT_TRUE(block.statements.empty());
@@ -195,7 +215,7 @@ TEST(MirLowerTest, LowersCharLiteral) {
     body->final_expr = make_char_literal_expr('z', char_type);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
@@ -403,7 +423,7 @@ TEST(MirLowerTest, LowersBinaryAddition) {
         int_type);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
@@ -437,7 +457,7 @@ TEST(MirLowerTest, LowersSignedComparison) {
         bool_type);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.temp_types.size(), 1u);
     EXPECT_EQ(lowered.temp_types[0], bool_type);
 
@@ -472,7 +492,7 @@ TEST(MirLowerTest, LowersCastExpression) {
     body->final_expr = std::move(expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
@@ -506,7 +526,7 @@ TEST(MirLowerTest, LowersConstUseExpression) {
     body->final_expr = std::move(expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_TRUE(std::holds_alternative<mir::ReturnTerminator>(block.terminator.value));
@@ -541,7 +561,7 @@ TEST(MirLowerTest, LowersStructConstExpression) {
     body->final_expr = std::move(expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
@@ -573,7 +593,7 @@ TEST(MirLowerTest, LowersEnumVariantExpression) {
     body->final_expr = std::move(expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     EXPECT_EQ(lowered.return_type, usize_type);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
@@ -606,7 +626,7 @@ TEST(MirLowerTest, LowersIfExpressionWithPhi) {
     body->final_expr = std::move(if_expr_node);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 4u);
     const auto& entry = lowered.basic_blocks[0];
     ASSERT_TRUE(std::holds_alternative<mir::SwitchIntTerminator>(entry.terminator.value));
@@ -638,7 +658,7 @@ TEST(MirLowerTest, LowersShortCircuitAnd) {
     body->final_expr = std::move(and_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 3u);
 
     const mir::PhiNode* found_phi = nullptr;
@@ -667,7 +687,7 @@ TEST(MirLowerTest, LowersShortCircuitOr) {
     body->final_expr = std::move(or_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 3u);
     const auto& entry_block = lowered.basic_blocks.front();
     ASSERT_FALSE(entry_block.statements.empty());
@@ -710,7 +730,7 @@ TEST(MirLowerTest, LowersLoopWithBreakValue) {
     body->final_expr = std::move(loop_expr_node);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 3u);
     const auto& break_block = lowered.basic_blocks.back();
     ASSERT_EQ(break_block.phis.size(), 1u);
@@ -742,7 +762,7 @@ TEST(MirLowerTest, LowersWhileLoopControlFlow) {
     body->final_expr = std::move(while_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 4u);
     const auto& cond_block = lowered.basic_blocks[1];
     ASSERT_TRUE(std::holds_alternative<mir::SwitchIntTerminator>(cond_block.terminator.value));
@@ -863,7 +883,7 @@ TEST(MirLowerTest, LowersLoopWithContinue) {
     body->final_expr = std::move(loop_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 3u);
 
     const auto& loop_body_block = lowered.basic_blocks[1];
@@ -907,7 +927,7 @@ TEST(MirLowerTest, LowersNestedLoopBreakValue) {
     body->final_expr = std::move(outer_loop_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     size_t phi_count = 0;
     for (const auto& block : lowered.basic_blocks) {
         phi_count += block.phis.size();
@@ -956,7 +976,7 @@ TEST(MirLowerTest, LowersStructLiteralAggregate) {
     body->final_expr = std::move(literal_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
@@ -987,7 +1007,7 @@ TEST(MirLowerTest, LowersArrayLiteralAggregate) {
     body->final_expr = std::move(array_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
@@ -1015,7 +1035,7 @@ TEST(MirLowerTest, LowersArrayRepeatAggregate) {
     body->final_expr = std::move(array_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
@@ -1128,7 +1148,7 @@ TEST(MirLowerTest, LowersReferenceToLocalPlace) {
     body->final_expr = std::move(ref_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     const mir::DefineStatement* ref_define = nullptr;
@@ -1209,7 +1229,7 @@ TEST(MirLowerTest, LowersReferenceToFieldPlace) {
     body->final_expr = std::move(ref_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.locals.size(), 1u);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
@@ -1284,7 +1304,7 @@ TEST(MirLowerTest, LowersReferenceToIndexedPlace) {
     body->final_expr = std::move(ref_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     const auto& block = lowered.basic_blocks.front();
     const mir::DefineStatement* ref_define = nullptr;
     for (const auto& stmt : block.statements) {
@@ -1326,7 +1346,7 @@ TEST(MirLowerTest, LowersReferenceToRValueByMaterializingLocal) {
     body->final_expr = std::move(ref_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.locals.size(), 1u);
     EXPECT_EQ(lowered.locals[0].type, int_type);
     EXPECT_EQ(lowered.locals[0].debug_name.rfind("_ref_tmp", 0), 0u);
@@ -1370,7 +1390,7 @@ TEST(MirLowerTest, LowersMutableReferenceToRValueByMaterializingLocal) {
     body->final_expr = std::move(ref_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.locals.size(), 1u);
     EXPECT_EQ(lowered.locals[0].type, int_type);
     EXPECT_EQ(lowered.locals[0].debug_name.rfind("_ref_mut_tmp", 0), 0u);
@@ -1444,7 +1464,7 @@ TEST(MirLowerTest, LowersAssignmentToIndexedPlace) {
     body->final_expr = std::move(assignment_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     const mir::AssignStatement* indexed_assign = nullptr;
@@ -1525,7 +1545,7 @@ TEST(MirLowerTest, LowersAssignmentToFieldPlace) {
     body->final_expr = std::move(assignment_expr);
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     const auto& block = lowered.basic_blocks.front();
     const mir::AssignStatement* field_assign = nullptr;
     for (const auto& stmt : block.statements) {
@@ -1566,7 +1586,7 @@ TEST(MirLowerTest, DesugarsAssignmentToUnderscore) {
     body->stmts.push_back(std::move(stmt));
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     EXPECT_TRUE(block.statements.empty());
@@ -1603,7 +1623,7 @@ TEST(MirLowerTest, DesugarsLetUnderscorePattern) {
     body->stmts.push_back(std::move(stmt));
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     EXPECT_TRUE(block.statements.empty());
@@ -1641,7 +1661,7 @@ TEST(MirLowerTest, DesugarsCompoundAssignmentToUnderscore) {
     body->stmts.push_back(std::move(stmt));
     function.body = std::move(body);
 
-    mir::MirFunction lowered = mir::lower_function(function);
+    mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     EXPECT_TRUE(block.statements.empty());

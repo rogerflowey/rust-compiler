@@ -461,7 +461,9 @@ std::optional<Operand> FunctionLowerer::lower_if_expr(const hir::If& if_expr, co
 		}
 	}
 
-	bool join_reachable = (!phi_incomings.empty() || !result_needed) || !has_else;
+	
+	bool join_reachable = !phi_incomings.empty()  || !has_else;
+
 	if (join_reachable) {
 		current_block = join_block;
 	} else {

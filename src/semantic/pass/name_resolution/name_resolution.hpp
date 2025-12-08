@@ -41,7 +41,14 @@ class NameResolver : public hir::HirVisitorBase<NameResolver> {
   std::vector<hir::Local *> pending_locals;
 
   // Private methods for skeleton registration (integrated from StructEnumSkeletonRegistrationPass)
+  // These are idempotent - they can be called multiple times safely
   void register_struct_skeleton(hir::StructDef& struct_def) {
+    auto &tc = type::TypeContext::get_instance();
+    // Check if already registered (idempotent)
+    if (tc.try_get_struct_id(&struct_def)) {
+      return;
+    }
+    
     // Create skeleton StructInfo with invalid field types
     // Field types will be resolved later in StructEnumRegistrationPass
     type::StructInfo struct_info;
@@ -56,10 +63,16 @@ class NameResolver : public hir::HirVisitorBase<NameResolver> {
     }
 
     // Register the skeleton (establishes struct ID)
-    type::TypeContext::get_instance().register_struct(std::move(struct_info), &struct_def);
+    tc.register_struct(std::move(struct_info), &struct_def);
   }
 
   void register_enum_skeleton(hir::EnumDef& enum_def) {
+    auto &tc = type::TypeContext::get_instance();
+    // Check if already registered (idempotent)
+    if (tc.try_get_enum_id(&enum_def)) {
+      return;
+    }
+    
     // Create skeleton EnumInfo with variant names
     type::EnumInfo enum_info;
     enum_info.name = enum_def.name.name;
@@ -70,25 +83,7 @@ class NameResolver : public hir::HirVisitorBase<NameResolver> {
     }
 
     // Register the skeleton (establishes enum ID)
-    type::TypeContext::get_instance().register_enum(std::move(enum_info), &enum_def);
-  }
-
-  void register_struct_enum_skeletons(hir::Program& program) {
-    // Register all struct and enum definitions with skeleton info
-    // This must happen BEFORE name resolution so that impl table lookups can use struct/enum IDs
-    for (auto& item_ptr : program.items) {
-      std::visit(
-          [this](auto& item_variant) {
-            using Item = std::decay_t<decltype(item_variant)>;
-            if constexpr (std::is_same_v<Item, hir::StructDef>) {
-              register_struct_skeleton(item_variant);
-            } else if constexpr (std::is_same_v<Item, hir::EnumDef>) {
-              register_enum_skeleton(item_variant);
-            }
-          },
-          item_ptr->value
-      );
-    }
+    tc.register_enum(std::move(enum_info), &enum_def);
   }
 
   std::vector<std::unique_ptr<hir::Local>> *current_locals() {
@@ -199,6 +194,19 @@ public:
       return; // impl do not need define
     }
 
+    // Register type skeletons for struct/enum definitions
+    // This happens alongside name registration to ensure consistency
+    std::visit(
+        [this](auto &v) {
+          using T = std::decay_t<decltype(v)>;
+          if constexpr (std::is_same_v<T, hir::StructDef>) {
+            register_struct_skeleton(v);
+          } else if constexpr (std::is_same_v<T, hir::EnumDef>) {
+            register_enum_skeleton(v);
+          }
+        },
+        item.value);
+
     // Get the name directly from the ItemVariant
     auto name = hir::helper::get_name(item.value);
 
@@ -219,11 +227,9 @@ public:
   }
 
   void visit_program(hir::Program &program) {
-    // Phase 1: Register struct/enum skeletons (allocate IDs)
-    // This must happen before visiting items so name resolution can use struct/enum IDs
-    register_struct_enum_skeletons(program);
-
-    // Phase 2: Perform name resolution
+    // Type registration now happens in define_item(), alongside symbol definition,
+    // ensuring consistent semantics across all scopes.
+    
     scopes.push(Scope{&get_predefined_scope(), true}); // the global scope
 
     for (auto &item : program.items) {

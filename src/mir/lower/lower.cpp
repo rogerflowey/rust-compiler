@@ -5,6 +5,7 @@
 #include "mir/lower/lower_const.hpp"
 
 #include "semantic/hir/helper.hpp"
+#include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/symbol/predefined.hpp"
 #include "type/type.hpp"
 
@@ -56,7 +57,7 @@ void add_method_descriptor(const hir::Method& method,
 std::vector<FunctionDescriptor> collect_function_descriptors(const hir::Program& program) {
 	std::vector<FunctionDescriptor> descriptors;
 	
-	// Phase 2: Collect predefined scope functions first (builtins)
+	// Phase 1: Collect predefined scope functions first (builtins)
 	const semantic::Scope& predefined = semantic::get_predefined_scope();
 	for (const auto& [name, symbol] : predefined.get_items_local()) {
 		if (auto* fn_ptr = std::get_if<hir::Function*>(&symbol)) {
@@ -70,30 +71,56 @@ std::vector<FunctionDescriptor> collect_function_descriptors(const hir::Program&
 		}
 	}
 	
-	// Collect from program (user-defined)
-	for (const auto& item_ptr : program.items) {
-		if (!item_ptr) {
-			continue;
+	// Phase 2: Walk the HIR to find *all* other functions/methods (including nested)
+	struct Collector : hir::HirVisitorBase<Collector> {
+		const hir::Program* program;
+		std::vector<FunctionDescriptor>& out;
+		std::string current_scope;
+
+		using Base = hir::HirVisitorBase<Collector>;
+		using Base::visit;
+		using Base::visit_block;
+
+		Collector(const hir::Program& p, std::vector<FunctionDescriptor>& out)
+			: program(&p), out(out) {}
+
+		void visit_program(hir::Program& p) {
+			current_scope.clear();
+			Base::visit_program(p);
 		}
-		if (auto* function = std::get_if<hir::Function>(&item_ptr->value)) {
-			add_function_descriptor(*function, std::string{}, descriptors);
-			continue;
+
+		void visit(hir::Function& f) {
+			// Top-level or local function
+			add_function_descriptor(f, current_scope, out);
+			Base::visit(f);
 		}
-		if (auto* impl = std::get_if<hir::Impl>(&item_ptr->value)) {
-			TypeId impl_type = hir::helper::get_resolved_type(impl->for_type);
-			std::string scope = type_name(impl_type);
-			for (const auto& assoc_item : impl->items) {
-				if (!assoc_item) {
-					continue;
-				}
-				if (auto* method = std::get_if<hir::Method>(&assoc_item->value)) {
-					add_method_descriptor(*method, scope, descriptors);
-				} else if (auto* assoc_fn = std::get_if<hir::Function>(&assoc_item->value)) {
-					add_function_descriptor(*assoc_fn, scope, descriptors);
-				}
-			}
+
+		void visit(hir::Impl& impl) {
+			// Update scope to type name for methods / assoc fns
+			TypeId impl_type = hir::helper::get_resolved_type(impl.for_type);
+			std::string saved_scope = current_scope;
+			current_scope = type_name(impl_type);
+
+			Base::visit(impl);
+
+			current_scope = std::move(saved_scope);
 		}
-	}
+
+		void visit(hir::Method& m) {
+			add_method_descriptor(m, current_scope, out);
+			Base::visit(m);
+		}
+
+		void visit_block(hir::Block& block) {
+			// Items inside blocks will be visited through Base::visit_block
+			Base::visit_block(block);
+		}
+	};
+
+	Collector collector{program, descriptors};
+	// Cast away const to use visitor (visitor modifies nothing that affects semantics)
+	collector.visit_program(const_cast<hir::Program&>(program));
+
 	return descriptors;
 }
 
@@ -552,8 +579,7 @@ void FunctionLowerer::lower_block(const hir::Block& hir_block) {
 	if (hir_block.final_expr) {
 		const auto& expr_ptr = *hir_block.final_expr;
 		if (!expr_ptr) {
-			emit_return(std::nullopt);
-			return;
+			throw std::logic_error("Ownership violated: Final expression");
 		}
 		std::optional<Operand> value = lower_expr(*expr_ptr);
 		if (!is_reachable()) {
@@ -680,22 +706,6 @@ LocalId FunctionLowerer::create_synthetic_local(TypeId type,
 }
 
 } // namespace detail
-
-MirFunction lower_function(const hir::Function& function,
-	       const std::unordered_map<const void*, FunctionId>& id_map,
-	       FunctionId id) {
-	// Convert old FunctionId map to new FunctionRef map (this is only for backwards compatibility)
-	(void)id_map;  // Unused in new design
-	std::unordered_map<const void*, mir::FunctionRef> fn_map;
-	// Not used in this path since we don't call external functions from standalone lowering
-	FunctionLowerer lowerer(function, fn_map, id, derive_function_name(function, std::string{}));
-	return lowerer.lower();
-}
-
-MirFunction lower_function(const hir::Function& function) {
-	std::unordered_map<const void*, mir::FunctionRef> fn_map;
-	return FunctionLowerer(function, fn_map, 0, derive_function_name(function, std::string{})).lower();
-}
 
 ExternalFunction lower_external_function(const FunctionDescriptor& descriptor) {
 	ExternalFunction ext_fn;
