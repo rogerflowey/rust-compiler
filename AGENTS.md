@@ -31,6 +31,36 @@ cmake --build build/ninja-debug
 ctest --test-dir build/ninja-debug --verbose
 ```
 
+- **Semantic Pipeline** (analyze without code generation)
+
+```bash
+./build/ninja-debug/cmd/semantic_pipeline <input.rx>
+```
+
+- **IR Pipeline** (full compilation to LLVM IR)
+
+```bash
+./build/ninja-debug/cmd/ir_pipeline <input.rx> [output.ll]
+```
+
+- **Test Semantic Pass**
+
+```bash
+python3 scripts/test.py semantic-1
+```
+
+- **Test IR Pipeline**
+
+```bash
+python3 scripts/test_ir_pipeline.py IR-1 --preserve-intermediates
+```
+
+- **Run IR E2E Tests**
+
+```bash
+python3 test/ir/run_ir_e2e.py
+```
+
 ## Documentation System Overview
 
 The RCompiler documentation system is organized into two complementary tiers:
