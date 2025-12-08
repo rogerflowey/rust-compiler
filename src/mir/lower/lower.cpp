@@ -4,6 +4,7 @@
 #include "mir/lower/lower_common.hpp"
 #include "mir/lower/lower_const.hpp"
 
+#include "semantic/expr_info_helpers.hpp"
 #include "semantic/hir/helper.hpp"
 #include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/symbol/predefined.hpp"
@@ -649,12 +650,20 @@ void FunctionLowerer::lower_statement_impl(const hir::LetStmt& let_stmt) {
 }
 
 void FunctionLowerer::lower_statement_impl(const hir::ExprStmt& expr_stmt) {
-	if (!is_reachable()) {
-		return;
-	}
-	if (expr_stmt.expr) {
-		(void)lower_expr(*expr_stmt.expr);
-	}
+        if (!is_reachable()) {
+                return;
+        }
+        if (expr_stmt.expr) {
+                semantic::ExprInfo info = hir::helper::get_expr_info(*expr_stmt.expr);
+                bool expect_fallthrough = semantic::has_normal_endpoint(info);
+
+                (void)lower_expr(*expr_stmt.expr);
+
+                if (!expect_fallthrough && is_reachable()) {
+                        throw std::logic_error(
+                            "ExprStmt divergence mismatch: semantically diverging expression leaves block reachable");
+                }
+        }
 }
 
 void FunctionLowerer::lower_pattern_store(const hir::Pattern& pattern, Operand value) {
