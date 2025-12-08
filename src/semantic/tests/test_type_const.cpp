@@ -184,8 +184,8 @@ TEST(SemanticQueryTest, ResolvesAnnotationsAndConstants) {
     EXPECT_EQ(len_value->value, 4u);
 
     // Function parameter binding's local gets TypeId from LetStmt annotation
-    ASSERT_FALSE(function_ptr->params.empty());
-    auto &resolved_param_binding = std::get<hir::BindingDef>(function_ptr->params[0]->value);
+    ASSERT_FALSE(function_ptr->sig.params.empty());
+    auto &resolved_param_binding = std::get<hir::BindingDef>(function_ptr->sig.params[0]->value);
     auto *param_local_ptr = std::get_if<hir::Local*>(&resolved_param_binding.local);
     ASSERT_NE(param_local_ptr, nullptr);
     ASSERT_NE(*param_local_ptr, nullptr);
@@ -193,9 +193,9 @@ TEST(SemanticQueryTest, ResolvesAnnotationsAndConstants) {
     EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*(*param_local_ptr)->type_annotation));
 
     // Let statement annotation and initializer are finalized
-    ASSERT_NE(function_ptr->body, nullptr);
-    ASSERT_EQ(function_ptr->body->stmts.size(), 1u);
-    auto *let_stmt_ptr = std::get_if<hir::LetStmt>(&function_ptr->body->stmts[0]->value);
+    ASSERT_TRUE(function_ptr->body.has_value());
+    ASSERT_EQ(function_ptr->body->block->stmts.size(), 1u);
+    auto *let_stmt_ptr = std::get_if<hir::LetStmt>(&function_ptr->body->block->stmts[0]->value);
     ASSERT_NE(let_stmt_ptr, nullptr);
     ASSERT_TRUE(let_stmt_ptr->type_annotation.has_value());
     EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*let_stmt_ptr->type_annotation));
@@ -287,10 +287,10 @@ TEST(SemanticQueryTest, ResolvesReferencePatterns) {
     semantic_checker.check_program(*program);
 
     // Check that parameter patterns have resolved types
-    ASSERT_EQ(function_ptr->params.size(), 2u);
+    ASSERT_EQ(function_ptr->sig.params.size(), 2u);
     
     // First parameter (ref_param: &i32)
-    auto &ref_param_binding = std::get<hir::BindingDef>(function_ptr->params[0]->value);
+    auto &ref_param_binding = std::get<hir::BindingDef>(function_ptr->sig.params[0]->value);
     auto *ref_param_local_ptr = std::get_if<hir::Local*>(&ref_param_binding.local);
     ASSERT_NE(ref_param_local_ptr, nullptr);
     ASSERT_NE(*ref_param_local_ptr, nullptr);
@@ -298,7 +298,7 @@ TEST(SemanticQueryTest, ResolvesReferencePatterns) {
     EXPECT_TRUE(std::holds_alternative<semantic::TypeId>((*(*ref_param_local_ptr)->type_annotation)));
 
     // Second parameter (mut_ref_param: &mut i32)
-    auto &mut_ref_param_binding = std::get<hir::BindingDef>(function_ptr->params[1]->value);
+    auto &mut_ref_param_binding = std::get<hir::BindingDef>(function_ptr->sig.params[1]->value);
     auto *mut_ref_param_local_ptr = std::get_if<hir::Local*>(&mut_ref_param_binding.local);
     ASSERT_NE(mut_ref_param_local_ptr, nullptr);
     ASSERT_NE(*mut_ref_param_local_ptr, nullptr);
@@ -306,10 +306,10 @@ TEST(SemanticQueryTest, ResolvesReferencePatterns) {
     EXPECT_TRUE(std::holds_alternative<semantic::TypeId>((*(*mut_ref_param_local_ptr)->type_annotation)));
 
     // Check that let statement patterns have resolved types
-    ASSERT_EQ(function_ptr->body->stmts.size(), 2u);
+    ASSERT_EQ(function_ptr->body->block->stmts.size(), 2u);
 
     // First let statement (let ref_binding: &i32 = ref_param)
-    auto *ref_let_stmt_ptr = std::get_if<hir::LetStmt>(&function_ptr->body->stmts[0]->value);
+    auto *ref_let_stmt_ptr = std::get_if<hir::LetStmt>(&function_ptr->body->block->stmts[0]->value);
     ASSERT_NE(ref_let_stmt_ptr, nullptr);
     ASSERT_TRUE(ref_let_stmt_ptr->type_annotation.has_value());
     EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*ref_let_stmt_ptr->type_annotation));
@@ -322,7 +322,7 @@ TEST(SemanticQueryTest, ResolvesReferencePatterns) {
     EXPECT_TRUE(std::holds_alternative<semantic::TypeId>((*(*ref_local_ptr)->type_annotation)));
 
     // Second let statement (let mut_ref_binding: &mut i32 = mut_ref_param)
-    auto *mut_ref_let_stmt_ptr = std::get_if<hir::LetStmt>(&function_ptr->body->stmts[1]->value);
+    auto *mut_ref_let_stmt_ptr = std::get_if<hir::LetStmt>(&function_ptr->body->block->stmts[1]->value);
     ASSERT_NE(mut_ref_let_stmt_ptr, nullptr);
     ASSERT_TRUE(mut_ref_let_stmt_ptr->type_annotation.has_value());
     EXPECT_TRUE(std::holds_alternative<semantic::TypeId>(*mut_ref_let_stmt_ptr->type_annotation));

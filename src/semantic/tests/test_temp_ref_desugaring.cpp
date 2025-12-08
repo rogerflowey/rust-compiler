@@ -30,7 +30,7 @@ TEST_F(TempRefDesugaringTest, ReferenceLiteralLeavesExpressionIntact) {
   EXPECT_FALSE(std::get<hir::Reference>(unary.op).is_mutable);
   ASSERT_TRUE(unary.rhs);
   EXPECT_TRUE(std::holds_alternative<hir::Literal>(unary.rhs->value));
-  EXPECT_TRUE(!test_function->body || test_function->body->locals.empty());
+  EXPECT_TRUE((!test_function->body || test_function->body->locals.empty()));
 }
 
 TEST_F(TempRefDesugaringTest, MutableReferenceLiteralLeavesExpressionIntact) {
@@ -50,7 +50,7 @@ TEST_F(TempRefDesugaringTest, MutableReferenceLiteralLeavesExpressionIntact) {
   EXPECT_TRUE(std::get<hir::Reference>(unary.op).is_mutable);
   ASSERT_TRUE(unary.rhs);
   EXPECT_TRUE(std::holds_alternative<hir::Literal>(unary.rhs->value));
-  EXPECT_TRUE(!test_function->body || test_function->body->locals.empty());
+  EXPECT_TRUE((!test_function->body || test_function->body->locals.empty()));
 }
 
 } // namespace

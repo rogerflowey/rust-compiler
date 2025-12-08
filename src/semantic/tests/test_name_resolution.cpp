@@ -282,8 +282,11 @@ TEST(NameResolutionTest, ReportsUseBeforeBindingInLet) {
   block->stmts.push_back(std::make_unique<hir::Stmt>(
       make_let_stmt(std::move(pattern), std::nullopt, std::move(initializer))));
 
-  auto fn =
-      hir::Function({}, {}, std::nullopt, std::move(block), {}, *fn_ast_ptr->name);
+  auto fn = hir::Function();
+  fn.sig.name = *fn_ast_ptr->name;
+  hir::FunctionBody fn_body;
+  fn_body.block = std::move(block);
+  fn.body = std::move(fn_body);
   program->items.push_back(
       std::make_unique<hir::Item>(hir::Function(std::move(fn))));
 

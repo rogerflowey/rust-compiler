@@ -184,11 +184,13 @@ TEST(MirLowerTest, LowersFunctionReturningLiteral) {
     TypeId bool_type = make_type(type::PrimitiveKind::BOOL);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(bool_type);
+    function.sig.return_type = hir::TypeAnnotation(bool_type);
 
     auto body = std::make_unique<hir::Block>();
     body->final_expr = make_bool_literal_expr(true, bool_type);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction mir_function = lower_function_for_test(function);
     ASSERT_EQ(mir_function.basic_blocks.size(), 1u);
@@ -209,11 +211,13 @@ TEST(MirLowerTest, LowersCharLiteral) {
     TypeId char_type = make_type(type::PrimitiveKind::CHAR);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(char_type);
+    function.sig.return_type = hir::TypeAnnotation(char_type);
 
     auto body = std::make_unique<hir::Block>();
     body->final_expr = make_char_literal_expr('z', char_type);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -232,11 +236,13 @@ TEST(MirLowerTest, LowersStringLiteralWithNullTerminator) {
     TypeId string_ref_type = make_string_ref_type();
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(string_ref_type);
+    function.sig.return_type = hir::TypeAnnotation(string_ref_type);
 
     auto body = std::make_unique<hir::Block>();
     body->final_expr = make_string_literal_expr("hello", string_ref_type);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     hir::Program program;
     program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
@@ -271,8 +277,10 @@ TEST(MirLowerTest, DeduplicatesIdenticalStringLiteralsAcrossFunctions) {
 
     auto make_function_item = [&](const char* literal_value) {
         hir::Function function;
-        function.return_type = hir::TypeAnnotation(string_ref_type);
-        function.body = make_block_with_expr(make_string_literal_expr(literal_value, string_ref_type));
+        function.sig.return_type = hir::TypeAnnotation(string_ref_type);
+        hir::FunctionBody func_body;
+        func_body.block = make_block_with_expr(make_string_literal_expr(literal_value, string_ref_type));
+        function.body = std::move(func_body);
         return std::make_unique<hir::Item>(std::move(function));
     };
 
@@ -312,8 +320,7 @@ TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
     hir::Local* local_ptr = local.get();
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(int_type);
-    function.locals.push_back(std::move(local));
+    function.sig.return_type = hir::TypeAnnotation(int_type);
 
     hir::BindingDef binding;
     binding.local = local_ptr;
@@ -337,7 +344,10 @@ TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
     final_expr->expr_info = make_value_info(int_type, true);
     body->final_expr = std::move(final_expr);
 
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.locals.push_back(std::move(local));
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     hir::Program program;
     program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
@@ -387,8 +397,8 @@ TEST(MirLowerTest, RecordsFunctionParameters) {
     hir::Function function;
     function.sig.name = ast::Identifier{"test_function"};
     function.sig.return_type = hir::TypeAnnotation(int_type);
-    hir::FunctionBody body;
-    body.locals.push_back(std::move(param_local));
+    hir::FunctionBody func_body;
+    func_body.locals.push_back(std::move(param_local));
 
     hir::BindingDef param_binding;
     param_binding.local = param_local_ptr;
@@ -396,8 +406,8 @@ TEST(MirLowerTest, RecordsFunctionParameters) {
     function.sig.params.push_back(std::move(param_pattern));
     function.sig.param_type_annotations.push_back(hir::TypeAnnotation(int_type));
 
-    body.block = make_block_with_expr(make_int_literal_expr(0, int_type));
-    function.body = std::move(body);
+    func_body.block = make_block_with_expr(make_int_literal_expr(0, int_type));
+    function.body = std::move(func_body);
 
     hir::Program program;
     program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
@@ -416,7 +426,7 @@ TEST(MirLowerTest, LowersBinaryAddition) {
     TypeId int_type = make_type(type::PrimitiveKind::I32);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(int_type);
+    function.sig.return_type = hir::TypeAnnotation(int_type);
 
     auto body = std::make_unique<hir::Block>();
     body->final_expr = make_binary_expr(
@@ -424,7 +434,9 @@ TEST(MirLowerTest, LowersBinaryAddition) {
         make_int_literal_expr(1, int_type),
         make_int_literal_expr(2, int_type),
         int_type);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -450,7 +462,7 @@ TEST(MirLowerTest, LowersSignedComparison) {
     TypeId bool_type = make_type(type::PrimitiveKind::BOOL);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(bool_type);
+    function.sig.return_type = hir::TypeAnnotation(bool_type);
 
     auto body = std::make_unique<hir::Block>();
     body->final_expr = make_binary_expr(
@@ -458,7 +470,9 @@ TEST(MirLowerTest, LowersSignedComparison) {
         make_int_literal_expr(1, int_type),
         make_int_literal_expr(2, int_type),
         bool_type);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.temp_types.size(), 1u);
@@ -483,7 +497,7 @@ TEST(MirLowerTest, LowersCastExpression) {
     TypeId usize_type = make_type(type::PrimitiveKind::USIZE);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(usize_type);
+    function.sig.return_type = hir::TypeAnnotation(usize_type);
 
     hir::Cast cast_expr;
     cast_expr.expr = make_int_literal_expr(5, int_type);
@@ -493,7 +507,9 @@ TEST(MirLowerTest, LowersCastExpression) {
 
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -518,7 +534,7 @@ TEST(MirLowerTest, LowersConstUseExpression) {
     const_owner->const_value = semantic::ConstVariant{semantic::IntConst{42}};
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(int_type);
+    function.sig.return_type = hir::TypeAnnotation(int_type);
 
     hir::ConstUse const_use;
     const_use.def = const_owner.get();
@@ -527,7 +543,9 @@ TEST(MirLowerTest, LowersConstUseExpression) {
 
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -552,7 +570,7 @@ TEST(MirLowerTest, LowersStructConstExpression) {
     assoc_const->const_value = semantic::ConstVariant{semantic::IntConst{7}};
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(int_type);
+    function.sig.return_type = hir::TypeAnnotation(int_type);
 
     hir::StructConst struct_const;
     struct_const.struct_def = struct_def.get();
@@ -562,7 +580,9 @@ TEST(MirLowerTest, LowersStructConstExpression) {
 
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -584,7 +604,7 @@ TEST(MirLowerTest, LowersEnumVariantExpression) {
     TypeId usize_type = make_type(type::PrimitiveKind::USIZE);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(enum_type);
+    function.sig.return_type = hir::TypeAnnotation(enum_type);
 
     hir::EnumVariant enum_variant;
     enum_variant.enum_def = enum_def.get();
@@ -594,7 +614,9 @@ TEST(MirLowerTest, LowersEnumVariantExpression) {
 
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     EXPECT_EQ(lowered.return_type, usize_type);
@@ -624,10 +646,12 @@ TEST(MirLowerTest, LowersIfExpressionWithPhi) {
     if_expr_node->expr_info = make_value_info(int_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(int_type);
+    function.sig.return_type = hir::TypeAnnotation(int_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(if_expr_node);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 4u);
@@ -656,10 +680,12 @@ TEST(MirLowerTest, LowersShortCircuitAnd) {
     auto and_expr = make_binary_expr(hir::LogicalAnd{}, std::move(lhs), std::move(rhs), bool_type);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(bool_type);
+    function.sig.return_type = hir::TypeAnnotation(bool_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(and_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 3u);
@@ -685,10 +711,12 @@ TEST(MirLowerTest, LowersShortCircuitOr) {
     auto or_expr = make_binary_expr(hir::LogicalOr{}, std::move(lhs), std::move(rhs), bool_type);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(bool_type);
+    function.sig.return_type = hir::TypeAnnotation(bool_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(or_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 3u);
@@ -728,10 +756,12 @@ TEST(MirLowerTest, LowersLoopWithBreakValue) {
     loop_expr_node->expr_info = make_value_info(int_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(int_type);
+    function.sig.return_type = hir::TypeAnnotation(int_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(loop_expr_node);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 3u);
@@ -760,10 +790,12 @@ TEST(MirLowerTest, LowersWhileLoopControlFlow) {
     while_expr->expr_info = make_value_info(unit_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(unit_type);
+    function.sig.return_type = hir::TypeAnnotation(unit_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(while_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 4u);
@@ -778,14 +810,16 @@ TEST(MirLowerTest, LowersDirectFunctionCall) {
 
     auto callee_item = std::make_unique<hir::Item>(hir::Function{});
     auto& callee = std::get<hir::Function>(callee_item->value);
-    callee.return_type = hir::TypeAnnotation(int_type);
+    callee.sig.return_type = hir::TypeAnnotation(int_type);
     auto callee_body = std::make_unique<hir::Block>();
     callee_body->final_expr = make_int_literal_expr(7, int_type);
-    callee.body = std::move(callee_body);
+    hir::FunctionBody callee_func_body;
+    callee_func_body.block = std::move(callee_body);
+    callee.body = std::move(callee_func_body);
 
     auto caller_item = std::make_unique<hir::Item>(hir::Function{});
     auto& caller = std::get<hir::Function>(caller_item->value);
-    caller.return_type = hir::TypeAnnotation(int_type);
+    caller.sig.return_type = hir::TypeAnnotation(int_type);
 
     hir::Call call_expr;
     call_expr.callee = make_func_use_expr(&callee);
@@ -795,7 +829,9 @@ TEST(MirLowerTest, LowersDirectFunctionCall) {
 
     auto caller_body = std::make_unique<hir::Block>();
     caller_body->final_expr = std::move(call_expr_node);
-    caller.body = std::move(caller_body);
+    hir::FunctionBody caller_func_body;
+    caller_func_body.block = std::move(caller_body);
+    caller.body = std::move(caller_func_body);
 
     hir::Program program;
     program.items.push_back(std::move(callee_item));
@@ -824,14 +860,16 @@ TEST(MirLowerTest, LowerFunctionUsesProvidedIdMapForCalls) {
 
     auto callee_item = std::make_unique<hir::Item>(hir::Function{});
     auto& callee = std::get<hir::Function>(callee_item->value);
-    callee.return_type = hir::TypeAnnotation(int_type);
+    callee.sig.return_type = hir::TypeAnnotation(int_type);
     auto callee_body = std::make_unique<hir::Block>();
     callee_body->final_expr = make_int_literal_expr(11, int_type);
-    callee.body = std::move(callee_body);
+    hir::FunctionBody callee_fb;
+    callee_fb.block = std::move(callee_body);
+    callee.body = std::move(callee_fb);
 
     auto caller_item = std::make_unique<hir::Item>(hir::Function{});
     auto& caller = std::get<hir::Function>(caller_item->value);
-    caller.return_type = hir::TypeAnnotation(int_type);
+    caller.sig.return_type = hir::TypeAnnotation(int_type);
 
     hir::Call call_expr;
     call_expr.callee = make_func_use_expr(&callee);
@@ -841,7 +879,9 @@ TEST(MirLowerTest, LowerFunctionUsesProvidedIdMapForCalls) {
 
     auto caller_body = std::make_unique<hir::Block>();
     caller_body->final_expr = std::move(call_expr_node);
-    caller.body = std::move(caller_body);
+    hir::FunctionBody caller_fb;
+    caller_fb.block = std::move(caller_body);
+    caller.body = std::move(caller_fb);
 
     hir::Program program;
     program.items.push_back(std::move(callee_item));
@@ -881,10 +921,12 @@ TEST(MirLowerTest, LowersLoopWithContinue) {
     loop_expr->expr_info = make_value_info(unit_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(unit_type);
+    function.sig.return_type = hir::TypeAnnotation(unit_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(loop_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_GE(lowered.basic_blocks.size(), 3u);
@@ -925,10 +967,12 @@ TEST(MirLowerTest, LowersNestedLoopBreakValue) {
     outer_loop_expr->expr_info = make_value_info(int_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(int_type);
+    function.sig.return_type = hir::TypeAnnotation(int_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(outer_loop_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     size_t phi_count = 0;
@@ -974,10 +1018,12 @@ TEST(MirLowerTest, LowersStructLiteralAggregate) {
     literal_expr->expr_info = make_value_info(struct_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(struct_type);
+    function.sig.return_type = hir::TypeAnnotation(struct_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(literal_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -1005,10 +1051,12 @@ TEST(MirLowerTest, LowersArrayLiteralAggregate) {
     array_expr->expr_info = make_value_info(array_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(array_type);
+    function.sig.return_type = hir::TypeAnnotation(array_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(array_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -1033,10 +1081,12 @@ TEST(MirLowerTest, LowersArrayRepeatAggregate) {
     array_expr->expr_info = make_value_info(array_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(array_type);
+    function.sig.return_type = hir::TypeAnnotation(array_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(array_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -1088,10 +1138,12 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
 
     auto caller_item = std::make_unique<hir::Item>(hir::Function{});
     auto& caller = std::get<hir::Function>(caller_item->value);
-    caller.return_type = hir::TypeAnnotation(int_type);
+    caller.sig.return_type = hir::TypeAnnotation(int_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(method_call_expr);
-    caller.body = std::move(body);
+    hir::FunctionBody caller_body;
+    caller_body.block = std::move(body);
+    caller.body = std::move(caller_body);
 
     hir::Program program;
     program.items.push_back(std::move(struct_item));
@@ -1146,12 +1198,14 @@ TEST(MirLowerTest, LowersReferenceToLocalPlace) {
     ref_expr->expr_info = make_value_info(ref_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(ref_type);
-    function.locals.push_back(std::move(local));
+    function.sig.return_type = hir::TypeAnnotation(ref_type);
     auto body = std::make_unique<hir::Block>();
     body->stmts.push_back(std::move(let_stmt_node));
     body->final_expr = std::move(ref_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    func_body.locals.push_back(std::move(local));
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -1227,12 +1281,14 @@ TEST(MirLowerTest, LowersReferenceToFieldPlace) {
     ref_expr->expr_info = make_value_info(ref_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(ref_type);
-    function.locals.push_back(std::move(local));
+    function.sig.return_type = hir::TypeAnnotation(ref_type);
     auto body = std::make_unique<hir::Block>();
     body->stmts.push_back(std::move(let_stmt_node));
     body->final_expr = std::move(ref_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    func_body.locals.push_back(std::move(local));
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.locals.size(), 1u);
@@ -1302,12 +1358,14 @@ TEST(MirLowerTest, LowersReferenceToIndexedPlace) {
     ref_expr->expr_info = make_value_info(ref_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(ref_type);
-    function.locals.push_back(std::move(local));
+    function.sig.return_type = hir::TypeAnnotation(ref_type);
     auto body = std::make_unique<hir::Block>();
     body->stmts.push_back(std::move(let_stmt_node));
     body->final_expr = std::move(ref_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    func_body.locals.push_back(std::move(local));
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     const auto& block = lowered.basic_blocks.front();
@@ -1346,10 +1404,12 @@ TEST(MirLowerTest, LowersReferenceToRValueByMaterializingLocal) {
     ref_expr->expr_info = make_value_info(ref_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(ref_type);
+    function.sig.return_type = hir::TypeAnnotation(ref_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(ref_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.locals.size(), 1u);
@@ -1390,10 +1450,12 @@ TEST(MirLowerTest, LowersMutableReferenceToRValueByMaterializingLocal) {
     ref_expr->expr_info = make_value_info(ref_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(ref_type);
+    function.sig.return_type = hir::TypeAnnotation(ref_type);
     auto body = std::make_unique<hir::Block>();
     body->final_expr = std::move(ref_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.locals.size(), 1u);
@@ -1462,12 +1524,14 @@ TEST(MirLowerTest, LowersAssignmentToIndexedPlace) {
     assignment_expr->expr_info = make_value_info(unit_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(unit_type);
-    function.locals.push_back(std::move(local));
+    function.sig.return_type = hir::TypeAnnotation(unit_type);
     auto body = std::make_unique<hir::Block>();
     body->stmts.push_back(std::move(let_stmt_node));
     body->final_expr = std::move(assignment_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    func_body.locals.push_back(std::move(local));
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -1543,12 +1607,14 @@ TEST(MirLowerTest, LowersAssignmentToFieldPlace) {
     assignment_expr->expr_info = make_value_info(unit_type, false);
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(unit_type);
-    function.locals.push_back(std::move(local));
+    function.sig.return_type = hir::TypeAnnotation(unit_type);
     auto body = std::make_unique<hir::Block>();
     body->stmts.push_back(std::move(let_stmt_node));
     body->final_expr = std::move(assignment_expr);
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    func_body.locals.push_back(std::move(local));
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     const auto& block = lowered.basic_blocks.front();
@@ -1586,10 +1652,12 @@ TEST(MirLowerTest, DesugarsAssignmentToUnderscore) {
     auto stmt = std::make_unique<hir::Stmt>(hir::StmtVariant{std::move(expr_stmt)});
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(unit_type);
+    function.sig.return_type = hir::TypeAnnotation(unit_type);
     auto body = std::make_unique<hir::Block>();
     body->stmts.push_back(std::move(stmt));
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -1622,11 +1690,13 @@ TEST(MirLowerTest, DesugarsLetUnderscorePattern) {
     auto stmt = std::make_unique<hir::Stmt>(hir::StmtVariant{std::move(let_stmt)});
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(unit_type);
-    function.locals.push_back(std::move(local));
+    function.sig.return_type = hir::TypeAnnotation(unit_type);
+    // locals: std::move(local
     auto body = std::make_unique<hir::Block>();
     body->stmts.push_back(std::move(stmt));
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
@@ -1661,10 +1731,12 @@ TEST(MirLowerTest, DesugarsCompoundAssignmentToUnderscore) {
     auto stmt = std::make_unique<hir::Stmt>(hir::StmtVariant{std::move(expr_stmt)});
 
     hir::Function function;
-    function.return_type = hir::TypeAnnotation(unit_type);
+    function.sig.return_type = hir::TypeAnnotation(unit_type);
     auto body = std::make_unique<hir::Block>();
     body->stmts.push_back(std::move(stmt));
-    function.body = std::move(body);
+    hir::FunctionBody func_body;
+    func_body.block = std::move(body);
+    function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
