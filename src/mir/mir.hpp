@@ -282,7 +282,7 @@ struct Terminator {
 struct BasicBlock {
     std::vector<PhiNode> phis;
     std::vector<Statement> statements;
-    Terminator terminator{ReturnTerminator{std::nullopt}};
+    Terminator terminator{UnreachableTerminator{}};
 };
 
 struct ExternalFunction {

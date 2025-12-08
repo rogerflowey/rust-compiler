@@ -355,16 +355,19 @@ void Emitter::emit_terminator(const mir::Terminator &terminator) {
              [&](const mir::ReturnTerminator &ret) {
               if (mir::detail::is_unit_type(current_function_->return_type)) {
                   // For unit-returning functions, we always just 'ret void'.
+                  if(ret.value){
+                    std::cerr<<"WARNING: Unit type function have return with value, ignored\n";
+                  }
                   current_block_builder_->emit_ret_void();
                   return;
               }
             
               // Non-unit / non-never function must have a value.
               if (!ret.value) {
+
                   throw std::logic_error(
-                      "Non-unit function has ReturnTerminator without value during codegen");
-              }
-            
+                      "Non-unit function has ReturnTerminator without value during codegen:");
+                  }
               auto operand = get_typed_operand(*ret.value);
               current_block_builder_->emit_ret(operand.type_name,
                                                operand.value_name);
