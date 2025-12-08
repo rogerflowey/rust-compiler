@@ -204,7 +204,7 @@ public:
                 }
                 visit_optional_type_annotation(function.sig.return_type);
                 if (function.body && function.body->block) {
-                        derived().visit_block(function.body->block);
+                        derived().visit_block(*function.body->block);
                 }
                 if (function.body) {
                         for (auto& local : function.body->locals) {
@@ -225,7 +225,7 @@ public:
                 }
                 visit_optional_type_annotation(method.sig.return_type);
                 if (method.body && method.body->block) {
-                        derived().visit_block(method.body->block);
+                        derived().visit_block(*method.body->block);
                 }
                 if (method.body) {
                         if (method.body->self_local) {
