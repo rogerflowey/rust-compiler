@@ -600,9 +600,20 @@ void Emitter::emit_array_repeat_rvalue_into(mir::TempId dest,
   // Optimization: use zeroinitializer if:
   // 1. count is 0, OR
   // 2. value is zero and element type is zero-initializable
-  if (value.count == 0 || 
-      (is_const_zero(value.value) && type::helper::type_helper::is_zero_initializable(array_type->element_type))) {
-    materialize_constant_into_temp(dest, aggregate_type, "zeroinitializer");
+  if (value.count > 0 &&
+    is_const_zero(value.value) &&
+    type::helper::type_helper::is_zero_initializable(array_type->element_type)) {
+
+    auto element_operand = get_typed_operand(value.value); // e.g., i1 0
+    // Start from zeroinitializer and insert the same zero at index 0.
+    // The result is still a fully zero array, but now it has a name (%tN).
+    current_block_builder_->emit_insertvalue_into(
+        llvmbuilder::temp_name(dest),
+        aggregate_type,
+        "zeroinitializer",                   // <--- constant operand, no alloca
+        element_operand.type_name,
+        element_operand.value_name,
+        {0});
     return;
   }
 

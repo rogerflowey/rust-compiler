@@ -43,6 +43,9 @@ ctest --test-dir build/ninja-debug --verbose
 ./build/ninja-debug/cmd/ir_pipeline <input.rx> [output.ll]
 ```
 
+
+
+## Test System
 - **Test Semantic Pass**
 
 ```bash
@@ -50,16 +53,20 @@ python3 scripts/test.py semantic-1
 ```
 
 - **Test IR Pipeline**
+This is in RCompiler-Testcases, which is the targeted testcases for IR pipeline.
 
 ```bash
 python3 scripts/test_ir_pipeline.py IR-1 --preserve-intermediates
 ```
+** Warning**: This will run for a long time, use `--filter` if you want to run specific testcases.
 
 - **Run IR E2E Tests**
+These are in test/ir/src, self-written testcases to help debug
 
 ```bash
 python3 test/ir/run_ir_e2e.py
 ```
+
 
 ## Documentation System Overview
 
