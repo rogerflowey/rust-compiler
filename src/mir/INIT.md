@@ -1,280 +1,201 @@
-Gotcha, that helps a lot. Let me rewrite the plan in terms of what you *actually* want:
+Gotcha, that clarifies a lot. Let’s rewrite the plan to match exactly what you want:
 
-* **One layer** of logic in the lowerer that:
+* **Lowerer**: does the *structural* destructuring, at the **place** level.
+* **Emitter**: still handles *how* to implement each `Initialize`, but **does not** have to rediscover struct structure.
+* **Array repeat**: kept as a single `Initialize{ place, ArrayRepeatRValue }`.
+* **Array literal**: no special handling (for now).
+* **Struct literal**: always recursively destructed “as far as possible”.
 
-  * operates on **HIR expr + place + type**, and
-  * emits a **series of `Initialize` statements**, *destructing the place*,
-* With **clear rules** for:
-
-  * struct literals,
-  * array literals,
-  * array repeats,
-* And then the **emitter** decides *how* to realize each `Initialize` (loop vs unrolled, memset, etc.) without guessing where temps came from.
-
-Here’s a design doc in that shape, minimal code, mostly behavior and contracts.
+I’ll keep this as a short design note, light on code.
 
 ---
 
-## Structural Initialization: Place-Destructing Lowerer, Strategy-Choosing Emitter
+## 1. High-level idea
 
-**Status:** Revised plan
-**Key idea:**
-The lowerer does *place destructuring* and emits a **series of `Initialize` statements** on sub-places; the emitter chooses how to implement each `Initialize` based on the attached RValue.
+We add a *place-directed initialization* path to the **lowerer**:
 
----
-
-### 1. High-Level Shape
-
-We introduce a concept:
-
-> **Place-directed initialization pass in the lowerer**:
+> Given a HIR expr `E`, a MIR place `P`, and a type `T`,
+> the lowerer emits **a series of `InitializeStatement`s** that:
 >
-> Given:
->
-> * a destination **place** `P`,
-> * its **type** `T`,
-> * and an initializer **HIR expr** `E`,
->
-> lowerer emits **one or more** `Initialize{ dest: Place, rvalue: RValue }` statements that:
->
-> * recursively follow the *shape* of `T` and `E`, and
-> * stop at well-defined cut points (struct vs array vs repeat).
+> * recursively destruct **places** for struct types,
+> * but leave **arrays** at the “array” level (especially array repeat),
+> * and stop when there is nothing meaningful left to destruct.
 
-Crucially:
+So:
 
-* The **lowerer**:
+* For **struct literals**, we *split* the destination place into its fields and emit multiple `Initialize`s, one per field (recursively).
+* For **array repeat**, we emit a single `Initialize` with an `ArrayRepeatRValue` for the whole array.
+* For **array literal**, we *don’t* destruct (for now): just treat it like today (one `Initialize` or fallback path).
 
-  * **does** recursively *destructure the place* (struct fields, sometimes array elements).
-  * **does not** unroll “execution strategies” like loops or memsets.
-* The **emitter**:
+The **emitter** then:
 
-  * sees each `Initialize { place, rvalue }`,
-  * decides whether to do:
-
-    * direct stores,
-    * `insertvalue`,
-    * loops,
-    * `zeroinitializer` / memset, etc.
-
-No “temp → RValue backtracking” is needed; all structure comes directly from lowering on HIR.
+* Sees many smaller, simple `Initialize`s.
+* Still chooses the strategy for **each** `Initialize` (e.g. unroll, loop, zeroinit), but doesn’t have to decode nested structs.
 
 ---
 
-### 2. Core Contracts
+## 2. Responsibilities split
 
-#### 2.1 Lowerer responsibilities
+### Lowerer
 
-When the lowerer knows:
+When we’re in a context that is **initializing a place** (e.g. `let x: T = expr;` with a simple binding):
 
-* “I am initializing this **place** of type `T` from this **expr**”,
+1. We know:
 
-it:
+   * the local → MIR `Place`,
+   * the type `T`,
+   * the initializer HIR `Expr`.
 
-1. **Destructs the place** based on type and expression kind:
+2. We run a **destruct-init** routine that:
 
-   * For **struct types**, it always walks fields and creates further `Initialize` on sub-places (see §3.3).
-   * For **array types**, it sometimes walks elements (§3.2), sometimes not.
-   * For **array repeats**, it stops at the “array repeat” level (§3.1).
+   * For a **struct literal** with type `T`:
 
-2. Emits a **sequence of `Initialize` for sub-places** that cannot be further structurally decomposed under our rules.
+     * For each field `i` of `T`:
 
-3. Does not unroll runtime loops or decide about repetition strategy; it only describes “what should be written where” in a structured way.
+       * Compute sub-place `P.field(i)`.
+       * Compute the corresponding field initializer expr `Eᵢ`.
+       * Recursively apply **destruct-init** on `(Eᵢ, P.field(i), field_typeᵢ)`.
+     * This yields multiple `InitializeStatement`s, each targeting a field place.
 
-#### 2.2 Emitter responsibilities
+   * For an **array repeat** `[value; N]` with array type `T = [U; N]`:
 
-For each `Initialize { dest: Place, rvalue: RValue }`:
+     * Build a single `ArrayRepeatRValue` describing:
 
-* Use:
+       * element operand (lowered once),
+       * count `N`.
+     * Emit **one** `InitializeStatement{ dest = P, rvalue = ArrayRepeatRValue }`.
+     * No per-element unrolling here.
 
-  * the **destination type**,
-  * the **shape** of the RValue (`Constant`, `Aggregate`, `ArrayRepeat`),
-* To choose:
+   * For an **array literal** `[e0, e1, ...]`:
 
-  * per-field/element `store`,
-  * building a small aggregate in registers then storing once,
-  * explicit loop for large repeats,
-  * `zeroinitializer` / memset for zero repeats,
-  * etc.
+     * For now, do **not** special-case it.
+     * Either:
 
-The emitter is free to use different strategies for:
+       * leave it in the existing “expr → RValue” path, or
+       * treat it as a leaf when destructing and just emit one `Initialize` for the whole array.
 
-* array-repeat,
-* small constant arrays,
-* nested aggregates,
+   * For **non-literal / non-structural** expressions:
 
-without the lowerer changing.
+     * Treat them as leaf: lower to an `RValue` or `Operand` and emit a single `Initialize` (or fall back to assign).
 
----
+**Important:** the recursion is **on places**, not on temps:
 
-### 3. Behavior per RValue kind
+* We never try to “chase” a `TempId` to find an RValue.
+* All structural reasoning happens while we still have the **HIR expr** and know exactly which **place** we’re writing.
 
-This is the heart of what you specified:
+### Emitter
 
-> * array repeat should be destructed to the array repeat level
-> * array literal: no destruct
-> * struct literal: always destruct as far as possible
+Emitter sees something like:
 
-We phrase that as precise lowering rules.
+* Many `InitializeStatement { dest = local.field1, rvalue = <something simple> }`,
+* Some `InitializeStatement { dest = some_array_place, rvalue = ArrayRepeatRValue{ … } }`,
+* Possibly some larger `Initialize` for arrays or weird expressions we didn’t destruct.
 
-#### 3.1 Array repeat (`[expr; N]`)
+Emitter responsibilities:
 
-**Rule: stop at “array repeat” level.**
+* For each `Initialize`, choose implementation:
 
-Given a destination place `P` of type `[T; N]` and expr `E` that is an array repeat:
+  * For scalar / small aggregates: maybe build in regs or just store constant.
+  * For `ArrayRepeatRValue`: decide whether to:
 
-* Lowerer emits **exactly one** `Initialize` for that place:
-
-  * `Initialize { dest = P, rvalue = ArrayRepeatRValue{ value = ..., count = N } }`.
-
-* It does **not**:
-
-  * create per-element places,
-  * emit N separate `Initialize`/`Assign`,
-  * generate any loops.
-
-Within `ArrayRepeatRValue`:
-
-* The `value` itself is lowered to an `Operand` / small RValue (as today).
-* If that value is constant-zero and `T` is zero-initializable, the emitter can later detect this and apply a `zeroinitializer`/memset policy.
-
-So for something like:
-
-```rust
-dist: [i32; 100] = [2147483647; 100];
-```
-
-lowerer will end with a single `Initialize` on the `dist` field place with an `ArrayRepeatRValue`. Emitter decides how to implement the 100 stores.
-
-#### 3.2 Array literal (`[e0, e1, ..., eN-1]`)
-
-start from always not destructing it, i.e. keep the array literal rvalue same as array repeat. Later we might decide to destruct if there is array with aggregated, but not now
-
-#### 3.3 Struct literal
-
-> “struct literal should always be destructed until it cannot”
-
-Here we go fully **place-destructing**:
-
-* Given struct type `S` and expr `E` that is a struct literal:
-
-  * We **never** emit an `Initialize` for the whole `S` struct in one go.
-  * Instead, we:
-
-    * derive field places `P.field[i]` via projections,
-    * match literal fields to those indices (using your canonical field helper),
-    * recursively initialize each field place from its field expr.
-
-* Recursion continues until:
-
-  * we hit a scalar/leaf expression, or
-  * an expression that is not a simple literal/aggregate (e.g. an `if`, method call, etc.), at which point we emit a leaf `Initialize`/`Assign` for that field.
-
-Struct aggregates do **not** survive as `AggregateRValue` for any output `Initialize`. Structs are always “flattened” in terms of MIR places.
+    * unroll a few stores,
+    * emit a loop,
+    * take a zeroinit shortcut, etc.
+* It no longer needs to recover nested struct layout: the lowerer already emitted field-level inits as separate statements.
 
 ---
 
-#### 3.4 scalar literals
+## 3. Behavior per expr kind (summary)
 
-Keep them as constant in the Operand, so emitter can optimize based on the value's constness. Do not use the old define and use style for const anymore.
+When doing **place-directed destruct-init**:
 
-### 4. Patterns and HIR
+1. **Struct literal**
 
-> “I think we can also think pattern as operating on expr, or it will cause trouble when we try to optimize it like what we done for a single struct?”
+   * Always destruct recursively, field by field.
+   * If a field expression is itself a struct literal, recurse again.
+   * Stop when:
 
-Yes: with this design, the *interesting* work happens when we know:
+     * the expression is not a struct literal, **or**
+     * the type is no longer a struct.
 
-* the pattern binds some place(s),
-* the type(s) of those places,
-* and the exact initializer HIR expr.
+2. **Array repeat**
 
-For now:
+   * Do **not** unroll.
+   * Build an `ArrayRepeatRValue` describing the whole array.
+   * Emit a **single** `Initialize` for the array place.
 
-* We only have **simple binding patterns** (plus `_`), so we only need the special case:
+3. **Array literal**
 
-  * resolve local → place,
-  * grab local type,
-  * run the **place-destructing init** against the initializer expr.
+   * For now, treat as **leaf**:
 
-Longer-term (tuple/struct/array patterns):
+     * One `Initialize` for the whole array,
+     * Using existing array aggregate lowering.
+   * No per-element place destructuring yet.
 
-* The pattern layer will:
+4. **Scalars / other exprs (if, loop, call, etc.)**
 
-  * break a big place into sub-places according to the pattern and type,
-  * pair those sub-places with sub-expressions (if the initializer has matching structure),
-  * and call the same place-destructing init logic for each.
+   * Treat as **leaf**:
 
-The key point: **patterns operate on HIR exprs**, not on MIR temps, so they can reuse the same structural init machinery and avoid temp→RValue hacks.
-
----
-
-### 5. No Temp → RValue Maps
-
-One explicit anti-goal:
-
-* We **do not** track “this `TempId` came from that `RValue`” to reopen structure later.
-
-Instead:
-
-* All structural decisions are made while:
-
-  * we still have HIR expressions, and
-  * we know the destination place and type.
-
-The emitter treats MIR as a simple IR where structure is reflected only by:
-
-* `Initialize` onto specific places, with specific RValue shapes (`Constant`, `Aggregate`, `ArrayRepeat`),
-* and doesn’t need to chase def-use chains to reconstruct aggregate shapes.
+     * Lower to `RValue`/`Operand`,
+     * Emit a single `Initialize` for the place (or fall back to `Assign` if needed).
 
 ---
 
-### 6. Change Plan (Targeted)
+## 4. Patterns and this design
 
-1. **Introduce “place-destructing init” helper in the lowerer.**
+Right now, the only interesting pattern is:
 
-   Conceptually:
+* A simple binding (`let x: T = expr;`), plus `_` as discard.
+
+To make this play nicely with the new strategy:
+
+* For `BindingDef` (non `_`):
+
+  * Resolve the `Local` to a `Place`,
+  * Get the type `T`,
+  * Get the initializer `Expr`,
+  * Run **place-directed destruct-init** on that triple.
+
+* For `_`:
+
+  * Just lower the expr for side effects as today, ignore initialization.
+
+Later, if you add more pattern kinds, you still have the core primitive:
+
+* “Given a destination place and sub-expr + type, emit a series of `Initialize`s that destruct the place as per rules above.”
+
+Patterns can then be layered on top of that primitive, but the **destruct-init semantics are always defined in terms of HIR expr + place + type**, not temps.
+
+---
+
+## 5. Change plan (tight version)
+
+1. **Define a place-directed init helper in the lowerer** (conceptually):
 
    * Takes `(expr, dest_place, dest_type)`.
-   * Applies the rules above (`struct`, `array literal` with heuristics, `array repeat`).
-   * Emits one or more `Initialize` statements for sub-places.
+   * Implements the per-expr-kind behavior above:
 
-2. **Use it from `let` with simple binding patterns.**
+     * struct → recurse & split into multiple `Initialize`s,
+     * array repeat → one `Initialize` with `ArrayRepeatRValue`,
+     * array literal & others → leaf.
 
-   * When pattern is a local binding (non-`_`), do:
+2. **Integrate into `LetStmt` lowering for simple binding patterns**:
 
-     * resolve place + type,
-     * call the helper.
-   * Whatever cannot be handled structurally by that helper falls back to:
+   * Before building a big `RValue` for the whole initializer, check:
 
-     * existing `lower_expr` + `Assign` / `Initialize` with simpler RValues.
+     * “Is this pattern a simple binding?”
+     * If yes, call the new helper on `(expr, binding’s place, binding’s type)`.
+   * After that, you still keep the existing fallback path for everything else.
 
-3. **Implement struct literal behavior first.**
+3. **Emitter**:
 
-   * Always destruct fields into per-field `Initialize` or leaf operations.
-   * This is the cleanest part and already improves big structs like your `Graph`.
+   * Keep `emit_initialize`, but simplify expectations:
 
-4. **Implement array literal behavior with heuristics.**
+     * It now sees more, smaller, field-level `Initialize`s.
+     * It handles `ArrayRepeatRValue` as “entire array init”.
+   * No need for temp→RValue maps.
 
-   * Add the “small + aggregate → destruct” and “small const scalar → keep aggregate” split.
-   * Keep the exact thresholds configurable / tweakable.
+4. **Leave array literals alone for now.**
 
-5. **Implement array repeat behavior.**
-
-   * Ensure lowering stops at array-repeat level:
-
-     * single `Initialize` with `ArrayRepeatRValue` per destination place.
-   * Do not unroll in lowerer.
-
-6. **Adjust emitter to treat:**
-
-   * Structs: there should no longer be struct `AggregateRValue` in top-level `Initialize` → emitter only sees field-level inits.
-   * Arrays: may still see `AggregateRValue` or `ArrayRepeatRValue` at the array place.
-   * Leaf constants, scalar RValues: same as before.
-
-7. **Tests.**
-
-   * Verify big examples like the `Graph` with combined struct/array/repeat behave as expected.
-   * Inspect generated IR for:
-
-     * better field-wise initialization,
-     * no giant insertvalue chains where we don’t want them,
-     * array repeat represented as a single logical operation.
+   * They still go through existing aggregate handling.
+   * You can revise them later if you want per-element place destructuring.
