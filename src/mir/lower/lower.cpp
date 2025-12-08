@@ -595,7 +595,12 @@ void FunctionLowerer::lower_block(const hir::Block& hir_block) {
 		return;
 	}
 
-	if (mir_function.return_type == get_unit_type() || is_never_type(mir_function.return_type)) {
+	// Only emit implicit return if code is still reachable
+	if (!is_reachable()) {
+		return;
+	}
+
+	if (mir_function.return_type == get_unit_type()) {
 		emit_return(std::nullopt);
 	} else {
 		throw std::logic_error("Missing final expression for non-unit function");
