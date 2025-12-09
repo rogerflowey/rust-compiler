@@ -4,6 +4,7 @@
 
 #include "mir/mir.hpp"
 #include "semantic/const/const.hpp"
+#include "semantic/hir/helper.hpp"
 #include "semantic/pass/semantic_check/expr_info.hpp"
 #include "type/type.hpp"
 
@@ -55,8 +56,14 @@ TypeId make_struct_type_and_register(hir::StructDef* def) {
     // Register the struct skeleton first
     type::StructInfo struct_info;
     struct_info.name = def->name.name;
-    for (const auto& field : def->fields) {
-        struct_info.fields.push_back(type::StructFieldInfo{.name = field.name.name, .type = type::invalid_type_id});
+    for (std::size_t idx = 0; idx < def->fields.size(); ++idx) {
+        TypeId field_type = type::invalid_type_id;
+        if (idx < def->field_type_annotations.size()) {
+            field_type = hir::helper::get_resolved_type(def->field_type_annotations[idx]);
+        }
+        const auto& field = def->fields[idx];
+        struct_info.fields.push_back(
+            type::StructFieldInfo{.name = field.name.name, .type = field_type});
     }
     type::TypeContext::get_instance().register_struct(std::move(struct_info), def);
     return make_struct_type(def);
@@ -402,6 +409,143 @@ TEST(MirLowerTest, LowersLetAndFinalVariableExpr) {
     const auto& operand = ret.value.value();
     ASSERT_TRUE(std::holds_alternative<mir::TempId>(operand.value));
     EXPECT_EQ(std::get<mir::TempId>(operand.value), load_stmt.dest);
+}
+
+TEST(MirLowerTest, SplitsStructLiteralInitializationByField) {
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+
+    auto struct_item = std::make_unique<hir::Item>(hir::StructDef{});
+    auto& struct_def = std::get<hir::StructDef>(struct_item->value);
+    struct_def.fields.push_back(semantic::Field{.name = ast::Identifier{"a"}, .type = std::nullopt});
+    struct_def.fields.push_back(semantic::Field{.name = ast::Identifier{"b"}, .type = std::nullopt});
+    struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
+    struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
+    TypeId struct_type = make_struct_type_and_register(&struct_def);
+
+    auto local = std::make_unique<hir::Local>();
+    local->name = ast::Identifier{"p"};
+    local->is_mutable = false;
+    local->type_annotation = hir::TypeAnnotation(struct_type);
+    hir::Local* local_ptr = local.get();
+
+    hir::BindingDef binding;
+    binding.local = local_ptr;
+    auto pattern = std::make_unique<hir::Pattern>(hir::PatternVariant{std::move(binding)});
+
+    hir::StructLiteral literal;
+    literal.struct_path = &struct_def;
+    hir::StructLiteral::CanonicalFields canonical;
+    canonical.initializers.push_back(make_int_literal_expr(1, int_type));
+    canonical.initializers.push_back(make_int_literal_expr(2, int_type));
+    literal.fields = std::move(canonical);
+    auto literal_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(literal)});
+    literal_expr->expr_info = make_value_info(struct_type, false);
+
+    hir::LetStmt let_stmt;
+    let_stmt.pattern = std::move(pattern);
+    let_stmt.type_annotation = hir::TypeAnnotation(struct_type);
+    let_stmt.initializer = std::move(literal_expr);
+    auto let_stmt_node = std::make_unique<hir::Stmt>(hir::StmtVariant{std::move(let_stmt)});
+
+    hir::Variable variable;
+    variable.local_id = local_ptr;
+    auto final_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(variable)});
+    final_expr->expr_info = make_value_info(struct_type, true);
+
+    auto body = std::make_unique<hir::Block>();
+    body->stmts.push_back(std::move(let_stmt_node));
+    body->final_expr = std::move(final_expr);
+
+    hir::FunctionBody func_body;
+    func_body.locals.push_back(std::move(local));
+    func_body.block = std::move(body);
+
+    hir::Function function;
+    function.sig.return_type = hir::TypeAnnotation(struct_type);
+    function.body = std::move(func_body);
+
+    hir::Program program;
+    program.items.push_back(std::move(struct_item));
+    program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
+
+    mir::MirModule module = mir::lower_program(program);
+    ASSERT_EQ(module.functions.size(), 1u);
+    const auto& lowered = module.functions.front();
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+
+    ASSERT_EQ(block.statements.size(), 3u);
+    const auto& first_init = std::get<mir::InitializeStatement>(block.statements[0].value);
+    ASSERT_EQ(first_init.dest.projections.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<mir::FieldProjection>(first_init.dest.projections[0]));
+    EXPECT_EQ(std::get<mir::FieldProjection>(first_init.dest.projections[0]).index, 0u);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(first_init.rvalue.value));
+
+    const auto& second_init = std::get<mir::InitializeStatement>(block.statements[1].value);
+    ASSERT_EQ(second_init.dest.projections.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<mir::FieldProjection>(second_init.dest.projections[0]));
+    EXPECT_EQ(std::get<mir::FieldProjection>(second_init.dest.projections[0]).index, 1u);
+    ASSERT_TRUE(std::holds_alternative<mir::ConstantRValue>(second_init.rvalue.value));
+
+    ASSERT_TRUE(std::holds_alternative<mir::LoadStatement>(block.statements[2].value));
+}
+
+TEST(MirLowerTest, EmitsArrayRepeatInitializeForArrayBindings) {
+    TypeId int_type = make_type(type::PrimitiveKind::I32);
+    TypeId array_type = type::get_typeID(type::Type{type::ArrayType{int_type, 3}});
+
+    auto local = std::make_unique<hir::Local>();
+    local->name = ast::Identifier{"arr"};
+    local->is_mutable = false;
+    local->type_annotation = hir::TypeAnnotation(array_type);
+    hir::Local* local_ptr = local.get();
+
+    hir::BindingDef binding;
+    binding.local = local_ptr;
+    auto pattern = std::make_unique<hir::Pattern>(hir::PatternVariant{std::move(binding)});
+
+    hir::ArrayRepeat array_repeat;
+    array_repeat.value = make_int_literal_expr(7, int_type);
+    array_repeat.count = static_cast<size_t>(3);
+    auto repeat_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(array_repeat)});
+    repeat_expr->expr_info = make_value_info(array_type, false);
+
+    hir::LetStmt let_stmt;
+    let_stmt.pattern = std::move(pattern);
+    let_stmt.type_annotation = hir::TypeAnnotation(array_type);
+    let_stmt.initializer = std::move(repeat_expr);
+    auto let_stmt_node = std::make_unique<hir::Stmt>(hir::StmtVariant{std::move(let_stmt)});
+
+    hir::Variable variable;
+    variable.local_id = local_ptr;
+    auto final_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(variable)});
+    final_expr->expr_info = make_value_info(array_type, true);
+
+    auto body = std::make_unique<hir::Block>();
+    body->stmts.push_back(std::move(let_stmt_node));
+    body->final_expr = std::move(final_expr);
+
+    hir::FunctionBody func_body;
+    func_body.locals.push_back(std::move(local));
+    func_body.block = std::move(body);
+
+    hir::Function function;
+    function.sig.return_type = hir::TypeAnnotation(array_type);
+    function.body = std::move(func_body);
+
+    hir::Program program;
+    program.items.push_back(std::make_unique<hir::Item>(std::move(function)));
+
+    mir::MirModule module = mir::lower_program(program);
+    ASSERT_EQ(module.functions.size(), 1u);
+    const auto& lowered = module.functions.front();
+    ASSERT_EQ(lowered.basic_blocks.size(), 1u);
+    const auto& block = lowered.basic_blocks.front();
+
+    ASSERT_EQ(block.statements.size(), 2u);
+    const auto& init_stmt = std::get<mir::InitializeStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::ArrayRepeatRValue>(init_stmt.rvalue.value));
+    ASSERT_TRUE(std::holds_alternative<mir::LoadStatement>(block.statements[1].value));
 }
 
 TEST(MirLowerTest, RecordsFunctionParameters) {

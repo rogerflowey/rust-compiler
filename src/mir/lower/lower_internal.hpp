@@ -6,6 +6,7 @@
 
 #include "semantic/hir/hir.hpp"
 #include "semantic/pass/semantic_check/expr_info.hpp"
+#include "type/helper.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -19,20 +20,8 @@
 
 namespace mir::detail {
 
-enum class PatternStoreMode {
-	Initialize,
-	Assign,
-};
-
-// Unified value type for pattern stores: either an Operand (normal assign)
-// or an RValue (for initializer lowering)
-struct PatternValue {
-	PatternStoreMode mode = PatternStoreMode::Assign;
-	std::variant<Operand, RValue> value;
-};
-
 struct FunctionLowerer {
-	enum class FunctionKind { Function, Method };
+        enum class FunctionKind { Function, Method };
 
 	FunctionLowerer(const hir::Function& function,
 		   const std::unordered_map<const void*, mir::FunctionRef>& fn_map,
@@ -112,17 +101,19 @@ private:
 	void lower_block(const hir::Block& hir_block);
 	std::optional<Operand> lower_block_expr(const hir::Block& block, TypeId expected_type);
 	void lower_statement(const hir::Stmt& stmt);
-	void lower_statement_impl(const hir::LetStmt& let_stmt);
-	void lower_statement_impl(const hir::ExprStmt& expr_stmt);
-	std::optional<RValue> lower_expr_as_rvalue(const hir::Expr& expr);
-	std::optional<RValue> try_lower_pure_rvalue(const hir::Expr& expr,
-		const semantic::ExprInfo& info);
-	void lower_pattern_store(const hir::Pattern& pattern,
-	                         const PatternValue& pval);
-	void lower_pattern_store_impl(const hir::BindingDef& binding,
-	                              const PatternValue& pval);
-	void lower_pattern_store_impl(const hir::ReferencePattern& ref_pattern,
-	                              const PatternValue& pval);
+        void lower_statement_impl(const hir::LetStmt& let_stmt);
+        void lower_statement_impl(const hir::ExprStmt& expr_stmt);
+        std::optional<RValue> lower_expr_as_rvalue(const hir::Expr& expr);
+        std::optional<RValue> try_lower_pure_rvalue(const hir::Expr& expr,
+                const semantic::ExprInfo& info);
+        void lower_place_directed_init(const hir::Expr& expr, Place dest, TypeId dest_type);
+        void lower_struct_literal_init(const hir::StructLiteral& literal, Place dest, TypeId dest_type);
+        void emit_leaf_initialize(const hir::Expr& expr, Place dest);
+        void emit_initialize_statement(Place dest, RValue rvalue);
+        void lower_let_pattern(const hir::Pattern& pattern, const hir::Expr& init_expr);
+        void lower_binding_let(const hir::BindingDef& binding, const hir::Expr& init_expr);
+        void lower_reference_let(const hir::ReferencePattern& ref_pattern,
+                                 const hir::Expr& init_expr);
 
 	// RValue building helpers - shared between try_lower_pure_rvalue and lower_expr_impl
 	AggregateRValue build_struct_aggregate(const hir::StructLiteral& struct_literal);
