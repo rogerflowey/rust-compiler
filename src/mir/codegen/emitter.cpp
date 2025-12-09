@@ -296,9 +296,27 @@ void Emitter::emit_assign(const mir::AssignStatement &statement) {
 }
 
 void Emitter::emit_init_statement(const mir::InitStatement &statement) {
-  // TODO: Implement InitStatement emission
-  // For now, stub that throws
-  throw std::logic_error("emit_init_statement not yet implemented");
+  // Translate the destination place to get base pointer and pointee type
+  TranslatedPlace dest = translate_place(statement.dest);
+  if (dest.pointee_type == mir::invalid_type_id) {
+    throw std::logic_error("Init destination missing pointee type during codegen");
+  }
+
+  // Dispatch based on the InitPattern variant
+  std::visit(Overloaded{
+      [&](const mir::InitStruct &init_struct) {
+        emit_init_struct(dest.pointer, dest.pointee_type, init_struct);
+      },
+      [&](const mir::InitArrayLiteral &init_array) {
+        emit_init_array_literal(dest.pointer, dest.pointee_type, init_array);
+      },
+      [&](const mir::InitArrayRepeat &init_array_repeat) {
+        emit_init_array_repeat(dest.pointer, dest.pointee_type, init_array_repeat);
+      },
+      [&](const mir::InitGeneral &) {
+        throw std::logic_error("InitGeneral not yet supported in emitter");
+      }
+  }, statement.pattern.value);
 }
 
 void Emitter::emit_call(const mir::CallStatement &statement) {
@@ -718,141 +736,6 @@ void Emitter::emit_field_access_rvalue_into(
       {static_cast<unsigned>(value.index)});
 }
 
-void Emitter::emit_aggregate_init_per_field(
-    const std::string &base_ptr,
-    mir::TypeId aggregate_type,
-    const mir::AggregateRValue &agg) {
-  std::string aggregate_type_name = module_.get_type_name(aggregate_type);
-
-  switch (agg.kind) {
-  case mir::AggregateRValue::Kind::Struct: {
-    // For each field: GEP -> store
-    for (std::size_t idx = 0; idx < agg.elements.size(); ++idx) {
-      auto elem_operand = get_typed_operand(agg.elements[idx]);
-
-      // Compute field pointer: gep base, 0, idx
-      std::vector<std::pair<std::string, std::string>> indices;
-      indices.emplace_back("i32", "0");
-      indices.emplace_back("i32", std::to_string(idx));
-
-      std::string field_ptr = current_block_builder_->emit_getelementptr(
-          aggregate_type_name, pointer_type_name(aggregate_type), base_ptr,
-          indices, true, "field");
-
-      // Store element
-      current_block_builder_->emit_store(
-          elem_operand.type_name, elem_operand.value_name,
-          pointer_type_name(elem_operand.type), field_ptr);
-    }
-    break;
-  }
-
-  case mir::AggregateRValue::Kind::Array: {
-    for (std::size_t idx = 0; idx < agg.elements.size(); ++idx) {
-      auto elem_operand = get_typed_operand(agg.elements[idx]);
-
-      std::vector<std::pair<std::string, std::string>> indices;
-      indices.emplace_back("i32", "0");
-      indices.emplace_back("i32", std::to_string(idx));
-
-      std::string elem_ptr = current_block_builder_->emit_getelementptr(
-          aggregate_type_name, pointer_type_name(aggregate_type), base_ptr,
-          indices, true, "elem");
-
-      current_block_builder_->emit_store(
-          elem_operand.type_name, elem_operand.value_name,
-          pointer_type_name(elem_operand.type), elem_ptr);
-    }
-    break;
-  }
-  }
-}
-
-void Emitter::emit_array_repeat_init_per_element(
-    const std::string &base_ptr,
-    mir::TypeId array_type_id,
-    const mir::ArrayRepeatRValue &value) {
-  const auto &resolved = type::get_type_from_id(array_type_id);
-  const auto *array_type = std::get_if<type::ArrayType>(&resolved.value);
-  if (!array_type) {
-    throw std::logic_error(
-        "Array repeat init requires array destination type");
-  }
-
-  std::string array_type_name = module_.get_type_name(array_type_id);
-
-  // Fast path: zero-initializable & value is zero -> whole array = zeroinitializer
-  if (is_const_zero(value.value) &&
-      type::helper::type_helper::is_zero_initializable(
-          array_type->element_type)) {
-    current_block_builder_->emit_store(
-        array_type_name,
-        "zeroinitializer",
-        pointer_type_name(array_type_id),
-        base_ptr);
-    return;
-  }
-
-  // If count == 0, nothing to do.
-  if (value.count == 0) {
-    return;
-  }
-
-  // 1) Evaluate the element value once
-  auto element_operand = get_typed_operand(value.value);
-
-  // 2) Compute pointer to element 0: gep [N x T]* base, 0, 0
-  std::vector<std::pair<std::string, std::string>> indices;
-  indices.emplace_back("i32", "0");
-  indices.emplace_back("i32", "0");
-
-  std::string elem0_ptr = current_block_builder_->emit_getelementptr(
-      array_type_name,
-      pointer_type_name(array_type_id),
-      base_ptr,
-      indices,
-      /*inbounds=*/true,
-      "elem0");
-
-  // elem0_ptr has type "T*"
-  std::string elem_ptr_type = pointer_type_name(array_type->element_type);
-
-  // 3) Store the first element
-  current_block_builder_->emit_store(
-      element_operand.type_name,       // value type (T)
-      element_operand.value_name,      // SSA name
-      elem_ptr_type,                   // pointer type (T*)
-      elem0_ptr);
-
-  // If there is only one element, we're done.
-  if (value.count <= 1) {
-    return;
-  }
-
-  // 4) Compute sizeof(T) using the GEP-null trick
-  std::string elem_size = emit_sizeof_bytes(array_type->element_type); // i64
-
-  // 5) Bitcast elem0_ptr to i8*
-  std::string byte_ptr = current_block_builder_->emit_cast(
-      "bitcast",
-      elem_ptr_type,    // from T*
-      elem0_ptr,
-      "i8*",            // to i8*
-      "repeat.ptr");
-
-  // 6) Call the builtin: void @__builtin_array_repeat_copy(i8* first_elem, i64 elem_size, i64 count)
-  std::vector<std::pair<std::string, std::string>> args;
-  args.emplace_back("i8*", byte_ptr);
-  args.emplace_back("i64",  elem_size);
-  args.emplace_back("i64",  std::to_string(value.count));
-
-  current_block_builder_->emit_call(
-      "void",
-      "__builtin_array_repeat_copy",
-      args,
-      /*hint=*/"");
-}
-
 std::string Emitter::get_temp(mir::TempId temp) {
   return llvmbuilder::temp_name(temp);
 }
@@ -971,6 +854,200 @@ std::string Emitter::emit_sizeof_bytes(mir::TypeId type) {
       gep,
       "i64",             // integer type for size
       "sizeof");
+}
+
+// ===== InitPattern-based initialization helpers =====
+
+void Emitter::emit_init_struct(const std::string &base_ptr,
+                                mir::TypeId struct_type,
+                                const mir::InitStruct &init_struct) {
+  std::string struct_type_name = module_.get_type_name(struct_type);
+
+  // For each field in the struct:
+  for (std::size_t field_idx = 0; field_idx < init_struct.fields.size(); ++field_idx) {
+    const auto &leaf = init_struct.fields[field_idx];
+
+    // Skip Omitted leaves (already initialized by other statements)
+    if (leaf.kind == mir::InitLeaf::Kind::Omitted) {
+      continue;
+    }
+
+    // Get the operand value
+    auto operand = get_typed_operand(leaf.operand);
+
+    // Compute field pointer: gep struct, 0, field_idx
+    std::vector<std::pair<std::string, std::string>> indices;
+    indices.emplace_back("i32", "0");
+    indices.emplace_back("i32", std::to_string(field_idx));
+
+    std::string field_ptr = current_block_builder_->emit_getelementptr(
+        struct_type_name,
+        pointer_type_name(struct_type),
+        base_ptr,
+        indices,
+        /*inbounds=*/true,
+        "field");
+
+    // Store the operand into the field
+    current_block_builder_->emit_store(
+        operand.type_name,
+        operand.value_name,
+        pointer_type_name(operand.type),
+        field_ptr);
+  }
+}
+
+void Emitter::emit_init_array_literal(const std::string &base_ptr,
+                                      mir::TypeId array_type,
+                                      const mir::InitArrayLiteral &init_array) {
+  std::string array_type_name = module_.get_type_name(array_type);
+
+  // For each element in the array literal:
+  for (std::size_t elem_idx = 0; elem_idx < init_array.elements.size(); ++elem_idx) {
+    const auto &leaf = init_array.elements[elem_idx];
+
+    // Skip Omitted leaves (already initialized by other statements)
+    if (leaf.kind == mir::InitLeaf::Kind::Omitted) {
+      continue;
+    }
+
+    // Get the operand value
+    auto operand = get_typed_operand(leaf.operand);
+
+    // Compute element pointer: gep array, 0, elem_idx
+    std::vector<std::pair<std::string, std::string>> indices;
+    indices.emplace_back("i32", "0");
+    indices.emplace_back("i32", std::to_string(elem_idx));
+
+    std::string elem_ptr = current_block_builder_->emit_getelementptr(
+        array_type_name,
+        pointer_type_name(array_type),
+        base_ptr,
+        indices,
+        /*inbounds=*/true,
+        "elem");
+
+    // Store the operand into the element
+    current_block_builder_->emit_store(
+        operand.type_name,
+        operand.value_name,
+        pointer_type_name(operand.type),
+        elem_ptr);
+  }
+}
+
+void Emitter::emit_init_array_repeat(const std::string &base_ptr,
+                                     mir::TypeId array_type,
+                                     const mir::InitArrayRepeat &init_array_repeat) {
+  const auto &resolved = type::get_type_from_id(array_type);
+  const auto *array_type_info = std::get_if<type::ArrayType>(&resolved.value);
+  if (!array_type_info) {
+    throw std::logic_error(
+        "Array repeat init requires array destination type");
+  }
+
+  const auto &element_leaf = init_array_repeat.element;
+  const std::size_t count = init_array_repeat.count;
+
+  // If count == 0, nothing to do
+  if (count == 0) {
+    return;
+  }
+
+  // Handle Omitted leaf: assume element[0] is already initialized
+  if (element_leaf.kind == mir::InitLeaf::Kind::Omitted) {
+    // Bitcast base_ptr to i8*
+    std::string byte_ptr = current_block_builder_->emit_cast(
+        "bitcast",
+        pointer_type_name(array_type),
+        base_ptr,
+        "i8*",
+        "repeat.ptr");
+
+    // Emit sizeof(element_type)
+    std::string elem_size = emit_sizeof_bytes(array_type_info->element_type);
+
+    // Call __builtin_array_repeat_copy(elem0_ptr, elem_size, count)
+    // Note: we're passing the base pointer directly since elem[0] is already at that location
+    std::vector<std::pair<std::string, std::string>> args;
+    args.emplace_back("i8*", byte_ptr);
+    args.emplace_back("i64", elem_size);
+    args.emplace_back("i64", std::to_string(count));
+
+    current_block_builder_->emit_call(
+        "void",
+        "__builtin_array_repeat_copy",
+        args,
+        "");
+    return;
+  }
+
+  // Handle Operand leaf
+  auto element_operand = get_typed_operand(element_leaf.operand);
+
+  // Optimize: if the operand is zero and element type is zero-initializable,
+  // use zeroinitializer
+  if (is_const_zero(element_leaf.operand) &&
+      type::helper::type_helper::is_zero_initializable(array_type_info->element_type)) {
+    std::string array_type_name = module_.get_type_name(array_type);
+    current_block_builder_->emit_store(
+        array_type_name,
+        "zeroinitializer",
+        pointer_type_name(array_type),
+        base_ptr);
+    return;
+  }
+
+  // Standard path: store element[0], then use __builtin_array_repeat_copy for the rest
+
+  // 1) Compute pointer to element 0: gep [count x T]* base, 0, 0
+  std::vector<std::pair<std::string, std::string>> indices;
+  indices.emplace_back("i32", "0");
+  indices.emplace_back("i32", "0");
+
+  std::string array_type_name = module_.get_type_name(array_type);
+  std::string elem0_ptr = current_block_builder_->emit_getelementptr(
+      array_type_name,
+      pointer_type_name(array_type),
+      base_ptr,
+      indices,
+      /*inbounds=*/true,
+      "elem0");
+
+  // 2) Store the element value at element[0]
+  current_block_builder_->emit_store(
+      element_operand.type_name,
+      element_operand.value_name,
+      pointer_type_name(array_type_info->element_type),
+      elem0_ptr);
+
+  // If count == 1, we're done
+  if (count == 1) {
+    return;
+  }
+
+  // 3) Compute sizeof(element_type)
+  std::string elem_size = emit_sizeof_bytes(array_type_info->element_type);
+
+  // 4) Bitcast elem0_ptr to i8*
+  std::string byte_ptr = current_block_builder_->emit_cast(
+      "bitcast",
+      pointer_type_name(array_type_info->element_type),
+      elem0_ptr,
+      "i8*",
+      "repeat.ptr");
+
+  // 5) Call __builtin_array_repeat_copy(elem0_ptr, elem_size, count)
+  std::vector<std::pair<std::string, std::string>> args;
+  args.emplace_back("i8*", byte_ptr);
+  args.emplace_back("i64", elem_size);
+  args.emplace_back("i64", std::to_string(count));
+
+  current_block_builder_->emit_call(
+      "void",
+      "__builtin_array_repeat_copy",
+      args,
+      "");
 }
 
 } // namespace codegen

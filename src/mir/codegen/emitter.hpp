@@ -89,15 +89,16 @@ private:
   void emit_field_access_rvalue_into(mir::TempId dest,
                                      const mir::FieldAccessRValue &value);
 
-  // per-field aggregate initialization helpers
-  void emit_aggregate_init_per_field(
-      const std::string &base_ptr,
-      mir::TypeId aggregate_type,
-      const mir::AggregateRValue &agg);
-  void emit_array_repeat_init_per_element(
-      const std::string &base_ptr,
-      mir::TypeId array_type_id,
-      const mir::ArrayRepeatRValue &value);
+  // InitPattern-based initialization helpers
+  void emit_init_struct(const std::string &base_ptr,
+                        mir::TypeId struct_type,
+                        const mir::InitStruct &init_struct);
+  void emit_init_array_literal(const std::string &base_ptr,
+                               mir::TypeId array_type,
+                               const mir::InitArrayLiteral &init_array);
+  void emit_init_array_repeat(const std::string &base_ptr,
+                              mir::TypeId array_type,
+                              const mir::InitArrayRepeat &init_array_repeat);
 
   // lookup helpers
   std::string get_temp(mir::TempId temp);

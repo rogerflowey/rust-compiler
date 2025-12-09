@@ -248,7 +248,7 @@ struct InitArrayRepeat {
     std::size_t count = 0;
 };
 
-struct InitGeneral {
+struct InitGeneral { // Unused currently
     InitLeaf value;
 };
 
