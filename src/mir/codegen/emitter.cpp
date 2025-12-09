@@ -97,6 +97,21 @@ Emitter::Emitter(mir::MirModule &module, std::string target_triple,
 std::string Emitter::emit() {
   emit_globals();
   
+  // Register builtin array repeat copy function if not already present
+  bool has_array_repeat_builtin = false;
+  for (const auto &ext_fn : mir_module_.external_functions) {
+    if (ext_fn.name == "__builtin_array_repeat_copy") {
+      has_array_repeat_builtin = true;
+      break;
+    }
+  }
+  
+  if (!has_array_repeat_builtin) {
+    // We'll emit this as a raw declare statement directly in the module
+    // since it's a pure builtin that doesn't need type system integration
+    module_.add_global("declare dso_local void @__builtin_array_repeat_copy(i8*, i64, i64)");
+  }
+  
   // Emit external function declarations first
   for (const auto &external_function : mir_module_.external_functions) {
     emit_external_declaration(external_function);
@@ -803,30 +818,76 @@ void Emitter::emit_array_repeat_init_per_element(
 
   std::string array_type_name = module_.get_type_name(array_type_id);
 
-  // Simple and effective optimization: zero repeat on zero-initializable type.
+  // Fast path: zero-initializable & value is zero -> whole array = zeroinitializer
   if (is_const_zero(value.value) &&
       type::helper::type_helper::is_zero_initializable(
           array_type->element_type)) {
-    current_block_builder_->emit_store(array_type_name, "zeroinitializer",
-                                       pointer_type_name(array_type_id),
-                                       base_ptr);
+    current_block_builder_->emit_store(
+        array_type_name,
+        "zeroinitializer",
+        pointer_type_name(array_type_id),
+        base_ptr);
     return;
   }
 
-  auto element_operand = get_typed_operand(value.value);
-  for (std::size_t idx = 0; idx < value.count; ++idx) {
-    std::vector<std::pair<std::string, std::string>> indices;
-    indices.emplace_back("i32", "0");
-    indices.emplace_back("i32", std::to_string(idx));
-
-    std::string elem_ptr = current_block_builder_->emit_getelementptr(
-        array_type_name, pointer_type_name(array_type_id), base_ptr, indices,
-        true, "elem");
-
-    current_block_builder_->emit_store(
-        element_operand.type_name, element_operand.value_name,
-        pointer_type_name(element_operand.type), elem_ptr);
+  // If count == 0, nothing to do.
+  if (value.count == 0) {
+    return;
   }
+
+  // 1) Evaluate the element value once
+  auto element_operand = get_typed_operand(value.value);
+
+  // 2) Compute pointer to element 0: gep [N x T]* base, 0, 0
+  std::vector<std::pair<std::string, std::string>> indices;
+  indices.emplace_back("i32", "0");
+  indices.emplace_back("i32", "0");
+
+  std::string elem0_ptr = current_block_builder_->emit_getelementptr(
+      array_type_name,
+      pointer_type_name(array_type_id),
+      base_ptr,
+      indices,
+      /*inbounds=*/true,
+      "elem0");
+
+  // elem0_ptr has type "T*"
+  std::string elem_ptr_type = pointer_type_name(array_type->element_type);
+
+  // 3) Store the first element
+  current_block_builder_->emit_store(
+      element_operand.type_name,       // value type (T)
+      element_operand.value_name,      // SSA name
+      elem_ptr_type,                   // pointer type (T*)
+      elem0_ptr);
+
+  // If there is only one element, we're done.
+  if (value.count <= 1) {
+    return;
+  }
+
+  // 4) Compute sizeof(T) using the GEP-null trick
+  std::string elem_size = emit_sizeof_bytes(array_type->element_type); // i64
+
+  // 5) Bitcast elem0_ptr to i8*
+  std::string byte_ptr = current_block_builder_->emit_cast(
+      "bitcast",
+      elem_ptr_type,    // from T*
+      elem0_ptr,
+      "i8*",            // to i8*
+      "repeat.ptr");
+
+  // 6) Call the builtin: void @__builtin_array_repeat_copy(i8* first_elem, i64 elem_size, i64 count)
+  std::vector<std::pair<std::string, std::string>> args;
+  args.emplace_back("i8*", byte_ptr);
+  args.emplace_back("i64",  elem_size);
+  args.emplace_back("i64",  std::to_string(value.count));
+
+  current_block_builder_->emit_call(
+      "void",
+      "__builtin_array_repeat_copy",
+      args,
+      /*hint=*/"");
 }
 
 std::string Emitter::get_temp(mir::TempId temp) {
@@ -921,6 +982,32 @@ TypedOperand Emitter::emit_string_constant_operand(mir::TypeId type,
   return TypedOperand{.type_name = std::move(dest_type_name),
                       .value_name = forced_name ? *forced_name : std::move(value_name),
                       .type = type};
+}
+
+std::string Emitter::emit_sizeof_bytes(mir::TypeId type) {
+  std::string ty_name = module_.get_type_name(type);
+  std::string ptr_ty  = module_.pointer_type_name(type);
+
+
+  // %p = getelementptr T, T* null, i32 1
+  std::vector<std::pair<std::string, std::string>> indices;
+  indices.emplace_back("i32", "1");
+
+  std::string gep = current_block_builder_->emit_getelementptr(
+      ty_name,           // pointee type
+      ptr_ty,            // pointer type
+      "null",            // pointer value
+      indices,
+      /*inbounds=*/true,
+      "sizeof.gep");
+
+  // %size = ptrtoint T* %p to i64
+  return current_block_builder_->emit_cast(
+      "ptrtoint",
+      ptr_ty,            // value type
+      gep,
+      "i64",             // integer type for size
+      "sizeof");
 }
 
 } // namespace codegen

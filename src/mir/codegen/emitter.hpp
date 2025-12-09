@@ -117,6 +117,7 @@ private:
   void materialize_constant_into_temp(mir::TempId dest,
                                       const std::string &type_name,
                                       const std::string &literal);
+  std::string emit_sizeof_bytes(mir::TypeId type);
 };
 
 } // namespace codegen
