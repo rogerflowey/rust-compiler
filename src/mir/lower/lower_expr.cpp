@@ -17,6 +17,15 @@ Operand FunctionLowerer::load_place_value(Place place, TypeId type) {
   return make_temp_operand(temp);
 }
 
+Operand FunctionLowerer::lower_operand(const hir::Expr &expr) {
+  // Try to lower as a pure constant operand first (no temp needed).
+  // Fall back to lower_expr if that doesn't work.
+  if (auto const_operand = try_lower_to_const(expr)) {
+    return std::move(*const_operand);
+  }
+  return expect_operand(lower_expr(expr), "Expression must produce value");
+}
+
 std::optional<Operand> FunctionLowerer::lower_expr(const hir::Expr &expr) {
   semantic::ExprInfo info = hir::helper::get_expr_info(expr);
 
@@ -142,8 +151,7 @@ Place FunctionLowerer::ensure_reference_operand_place(
     return lower_expr_place(operand);
   }
 
-  Operand value = expect_operand(lower_expr(operand),
-                                 "Reference operand must produce a value");
+  Operand value = lower_operand(operand);
   LocalId temp_local =
       create_synthetic_local(operand_info.type, mutable_reference);
   AssignStatement assign;
@@ -176,25 +184,25 @@ FunctionLowerer::materialize_place_base(const hir::Expr &base_expr,
 std::optional<Operand>
 FunctionLowerer::lower_expr_impl(const hir::Literal &literal,
                                  const semantic::ExprInfo &info) {
-  return emit_rvalue(build_literal_rvalue(literal, info), info.type);
+  return emit_rvalue_to_temp(build_literal_rvalue(literal, info), info.type);
 }
 
 std::optional<Operand>
 FunctionLowerer::lower_expr_impl(const hir::StructLiteral &struct_literal,
                                  const semantic::ExprInfo &info) {
-  return emit_rvalue(build_struct_aggregate(struct_literal), info.type);
+  return emit_rvalue_to_temp(build_struct_aggregate(struct_literal), info.type);
 }
 
 std::optional<Operand>
 FunctionLowerer::lower_expr_impl(const hir::ArrayLiteral &array_literal,
                                  const semantic::ExprInfo &info) {
-  return emit_rvalue(build_array_aggregate(array_literal), info.type);
+  return emit_rvalue_to_temp(build_array_aggregate(array_literal), info.type);
 }
 
 std::optional<Operand>
 FunctionLowerer::lower_expr_impl(const hir::ArrayRepeat &array_repeat,
                                  const semantic::ExprInfo &info) {
-  return emit_rvalue(build_array_repeat_rvalue(array_repeat), info.type);
+  return emit_rvalue_to_temp(build_array_repeat_rvalue(array_repeat), info.type);
 }
 
 std::optional<Operand>
@@ -275,7 +283,7 @@ FunctionLowerer::lower_expr_impl(const hir::FieldAccess &field_access,
   TempId base_temp = materialize_place_base(*field_access.base, base_info);
   FieldAccessRValue field_rvalue{
       .base = base_temp, .index = hir::helper::get_field_index(field_access)};
-  return emit_rvalue(std::move(field_rvalue), info.type);
+  return emit_rvalue_to_temp(std::move(field_rvalue), info.type);
 }
 
 std::optional<Operand>
@@ -299,10 +307,9 @@ FunctionLowerer::lower_expr_impl(const hir::Cast &cast_expr,
     throw std::logic_error(
         "Cast expression missing resolved type during MIR lowering");
   }
-  Operand operand = expect_operand(lower_expr(*cast_expr.expr),
-                                   "Cast operand must produce value");
+  Operand operand = lower_operand(*cast_expr.expr);
   CastRValue cast_rvalue{.value = operand, .target_type = info.type};
-  return emit_rvalue(std::move(cast_rvalue), info.type);
+  return emit_rvalue_to_temp(std::move(cast_rvalue), info.type);
 }
 
 std::optional<Operand>
@@ -332,7 +339,7 @@ FunctionLowerer::lower_expr_impl(const hir::BinaryOp &binary,
       classify_binary_kind(binary, lhs_info.type, rhs_info.type, info.type);
 
   BinaryOpRValue binary_value{.kind = kind, .lhs = lhs, .rhs = rhs};
-  return emit_rvalue(std::move(binary_value), info.type);
+  return emit_rvalue_to_temp(std::move(binary_value), info.type);
 }
 
 std::optional<Operand>
@@ -485,7 +492,7 @@ FunctionLowerer::lower_expr_impl(const hir::UnaryOp &unary,
                 .operand =
                     expect_operand(lower_expr(*unary.rhs),
                                    "Unary not operand must produce value")};
-            return emit_rvalue(std::move(unary_rvalue), info.type);
+            return emit_rvalue_to_temp(std::move(unary_rvalue), info.type);
           },
           [&](const hir::UnaryNegate &) {
             UnaryOpRValue unary_rvalue{
@@ -493,7 +500,7 @@ FunctionLowerer::lower_expr_impl(const hir::UnaryOp &unary,
                 .operand =
                     expect_operand(lower_expr(*unary.rhs),
                                    "Unary neg operand must produce value")};
-            return emit_rvalue(std::move(unary_rvalue), info.type);
+            return emit_rvalue_to_temp(std::move(unary_rvalue), info.type);
           },
           [&](const hir::Reference &reference) {
             semantic::ExprInfo operand_info =
@@ -501,7 +508,7 @@ FunctionLowerer::lower_expr_impl(const hir::UnaryOp &unary,
             Place place = ensure_reference_operand_place(
                 *unary.rhs, operand_info, reference.is_mutable);
             RefRValue ref_rvalue{.place = std::move(place)};
-            return emit_rvalue(std::move(ref_rvalue), info.type);
+            return emit_rvalue_to_temp(std::move(ref_rvalue), info.type);
           },
           [&](const hir::Dereference &) {
             return load_place_value(lower_place_impl(unary, info), info.type);

@@ -66,7 +66,7 @@ private:
 	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
 	Operand emit_array_repeat(Operand value, std::size_t count, TypeId result_type);
 	template <typename RValueT>
-	Operand emit_rvalue(RValueT rvalue_kind, TypeId result_type);
+	Operand emit_rvalue_to_temp(RValueT rvalue_kind, TypeId result_type);
 	BasicBlockId create_block();
 	bool block_is_terminated(BasicBlockId id) const;
 	BasicBlockId current_block_id() const;
@@ -114,6 +114,9 @@ private:
         void lower_binding_let(const hir::BindingDef& binding, const hir::Expr& init_expr);
         void lower_reference_let(const hir::ReferencePattern& ref_pattern,
                                  const hir::Expr& init_expr);
+	void lower_pattern_from_expr(const hir::Pattern& pattern,
+	                              const hir::Expr& expr,
+	                              TypeId expr_type);
 
 	// RValue building helpers - shared between try_lower_pure_rvalue and lower_expr_impl
 	AggregateRValue build_struct_aggregate(const hir::StructLiteral& struct_literal);
@@ -121,12 +124,14 @@ private:
 	ArrayRepeatRValue build_array_repeat_rvalue(const hir::ArrayRepeat& array_repeat);
 	ConstantRValue build_literal_rvalue(const hir::Literal& lit,
 		const semantic::ExprInfo& info);
+	std::optional<Operand> try_lower_to_const(const hir::Expr& expr);
 
 	LocalId require_local_id(const hir::Local* local) const;
 	Place make_local_place(const hir::Local* local) const;
 	Place make_local_place(LocalId local_id) const;
 	LocalId create_synthetic_local(TypeId type, bool is_mutable_reference);
 	Operand load_place_value(Place place, TypeId type);
+	Operand lower_operand(const hir::Expr& expr);
 	std::optional<Operand> lower_expr(const hir::Expr& expr);
 	Place lower_expr_place(const hir::Expr& expr);
 	Place ensure_reference_operand_place(const hir::Expr& operand,
@@ -194,7 +199,7 @@ std::optional<Operand> FunctionLowerer::lower_expr_impl(const T&, const semantic
 }
 
 template <typename RValueT>
-Operand FunctionLowerer::emit_rvalue(RValueT rvalue_kind, TypeId result_type) {
+Operand FunctionLowerer::emit_rvalue_to_temp(RValueT rvalue_kind, TypeId result_type) {
 	TempId dest = allocate_temp(result_type);
 	RValue rvalue;
 	rvalue.value = std::move(rvalue_kind);
