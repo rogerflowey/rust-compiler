@@ -688,41 +688,144 @@ void FunctionLowerer::lower_statement_impl(const hir::LetStmt &let_stmt) {
   }
 
   const hir::Expr &init_expr = *let_stmt.initializer;
-  PatternValue pval;
+  lower_let_pattern(*let_stmt.pattern, init_expr);
+}
 
-  // Check if the pattern is an underscore binding that won't store the value
-  // In that case, always fully lower the expression for side-effects
-  bool is_underscore_binding = false;
-  if (auto *binding = std::get_if<hir::BindingDef>(&let_stmt.pattern->value)) {
-    if (hir::Local *local = hir::helper::get_local(*binding)) {
-      if (local->name.name == "_") {
-        is_underscore_binding = true;
-      }
-    }
-  }
+void FunctionLowerer::emit_initialize_statement(Place dest, RValue rvalue) {
+  InitializeStatement init_stmt;
+  init_stmt.dest = std::move(dest);
+  init_stmt.rvalue = std::move(rvalue);
+  Statement stmt;
+  stmt.value = std::move(init_stmt);
+  append_statement(std::move(stmt));
+}
 
-  if (is_underscore_binding) {
-    // For underscore bindings, always lower the expression to ensure
-    // side-effects are captured, even though the value won't be stored
-    (void)lower_expr(init_expr);
+void FunctionLowerer::emit_leaf_initialize(const hir::Expr &expr, Place dest) {
+  if (auto rvalue_opt = lower_expr_as_rvalue(expr)) {
+    emit_initialize_statement(std::move(dest), std::move(*rvalue_opt));
     return;
   }
 
-  // First try: can we treat this as a pure RValue init?
-  std::optional<RValue> rvalue_opt = lower_expr_as_rvalue(init_expr);
-  if (rvalue_opt) {
-    pval.mode = PatternStoreMode::Initialize;
-    pval.value = std::move(*rvalue_opt);
-  } else {
-    // Fallback: lower to Operand and treat as normal assignment
-    Operand value = expect_operand(lower_expr(init_expr),
-                                   "Let initializer must produce value");
-    pval.mode = PatternStoreMode::Assign;
-    pval.value = std::move(value);
+  Operand value = expect_operand(lower_expr(expr),
+                                 "Let initializer must produce value");
+  AssignStatement assign;
+  assign.dest = std::move(dest);
+  assign.src = std::move(value);
+  Statement stmt;
+  stmt.value = std::move(assign);
+  append_statement(std::move(stmt));
+}
+
+void FunctionLowerer::lower_struct_literal_init(const hir::StructLiteral &literal,
+                                                Place dest,
+                                                TypeId dest_type) {
+  TypeId normalized = canonicalize_type_for_mir(dest_type);
+  auto *struct_type =
+      std::get_if<type::StructType>(&type::get_type_from_id(normalized).value);
+  if (!struct_type) {
+    throw std::logic_error(
+        "Struct literal init without struct destination type during MIR lowering");
   }
 
-  // Let the pattern decide how to store this value
-  lower_pattern_store(*let_stmt.pattern, pval);
+  const auto &struct_info = type::TypeContext::get_instance().get_struct(struct_type->id);
+  const auto &fields = hir::helper::get_canonical_fields(literal);
+  if (fields.initializers.size() != struct_info.fields.size()) {
+    throw std::logic_error(
+        "Struct literal field count mismatch during place-directed init");
+  }
+
+  for (std::size_t idx = 0; idx < fields.initializers.size(); ++idx) {
+    if (!fields.initializers[idx]) {
+      throw std::logic_error(
+          "Struct literal field missing initializer during MIR lowering");
+    }
+    TypeId field_type = canonicalize_type_for_mir(struct_info.fields[idx].type);
+    if (field_type == invalid_type_id) {
+      throw std::logic_error(
+          "Struct field missing resolved type during MIR lowering");
+    }
+    Place field_place = dest;
+    field_place.projections.push_back(FieldProjection{idx});
+    lower_place_directed_init(*fields.initializers[idx], std::move(field_place),
+                              field_type);
+  }
+}
+
+void FunctionLowerer::lower_place_directed_init(const hir::Expr &expr, Place dest,
+                                                TypeId dest_type) {
+  if (dest_type == invalid_type_id) {
+    throw std::logic_error(
+        "Destination type missing during place-directed init lowering");
+  }
+
+  TypeId normalized = canonicalize_type_for_mir(dest_type);
+  const type::Type &dest_type_value = type::get_type_from_id(normalized);
+
+  std::visit(
+      Overloaded{
+          [this, dest, normalized, &dest_type_value, &expr](
+              const hir::StructLiteral &struct_literal) {
+            if (!std::holds_alternative<type::StructType>(dest_type_value.value)) {
+              emit_leaf_initialize(expr, dest);
+              return;
+            }
+            lower_struct_literal_init(struct_literal, dest, normalized);
+          },
+          [this, dest, &dest_type_value, &expr](const hir::ArrayRepeat &array_repeat) {
+            if (!std::holds_alternative<type::ArrayType>(dest_type_value.value)) {
+              emit_leaf_initialize(expr, dest);
+              return;
+            }
+            RValue rvalue;
+            rvalue.value = build_array_repeat_rvalue(array_repeat);
+            emit_initialize_statement(dest, std::move(rvalue));
+          },
+          [this, dest, &expr](const auto &) { emit_leaf_initialize(expr, dest); }},
+      expr.value);
+}
+
+void FunctionLowerer::lower_let_pattern(const hir::Pattern &pattern,
+                                        const hir::Expr &init_expr) {
+  std::visit(
+      Overloaded{[this, &init_expr](const hir::BindingDef &binding) {
+                   lower_binding_let(binding, init_expr);
+                 },
+                 [this, &init_expr](const hir::ReferencePattern &ref_pattern) {
+                   lower_reference_let(ref_pattern, init_expr);
+                 }},
+      pattern.value);
+}
+
+void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
+                                        const hir::Expr &init_expr) {
+  hir::Local *local = hir::helper::get_local(binding);
+  if (!local) {
+    throw std::logic_error("Let binding missing local during MIR lowering");
+  }
+
+  if (local->name.name == "_") {
+    // For underscore bindings, try to avoid materializing pure values while
+    // still lowering side-effects when present.
+    if (!lower_expr_as_rvalue(init_expr)) {
+      (void)lower_expr(init_expr);
+    }
+    return;
+  }
+
+  if (!local->type_annotation) {
+    throw std::logic_error(
+        "Let binding missing resolved type during MIR lowering");
+  }
+
+  Place dest = make_local_place(local);
+  TypeId dest_type = hir::helper::get_resolved_type(*local->type_annotation);
+  lower_place_directed_init(init_expr, std::move(dest), dest_type);
+}
+
+void FunctionLowerer::lower_reference_let(const hir::ReferencePattern &,
+                                          const hir::Expr &) {
+  throw std::logic_error(
+      "Reference patterns not yet supported in MIR lowering");
 }
 
 void FunctionLowerer::lower_statement_impl(const hir::ExprStmt &expr_stmt) {
@@ -740,13 +843,6 @@ void FunctionLowerer::lower_statement_impl(const hir::ExprStmt &expr_stmt) {
                              "diverging expression leaves block reachable");
     }
   }
-}
-
-void FunctionLowerer::lower_pattern_store(const hir::Pattern &pattern,
-                                          const PatternValue &pval) {
-  std::visit(
-      [this, &pval](const auto &pat) { lower_pattern_store_impl(pat, pval); },
-      pattern.value);
 }
 
 std::optional<RValue> FunctionLowerer::try_lower_pure_rvalue(
@@ -845,54 +941,6 @@ ConstantRValue FunctionLowerer::build_literal_rvalue(
   ConstantRValue const_rval;
   const_rval.constant = std::move(constant);
   return const_rval;
-}
-
-void FunctionLowerer::lower_pattern_store_impl(const hir::BindingDef &binding,
-                                               const PatternValue &pval) {
-  hir::Local *local = hir::helper::get_local(binding);
-  if (!local || local->name.name == "_") {
-    // `_` binding: initializer already lowered for side-effects,
-    // nothing to store.
-    return;
-  }
-
-  Place dest = make_local_place(local);
-
-  // Initialize mode with an RValue → InitializeStatement
-  if (pval.mode == PatternStoreMode::Initialize) {
-    if (const auto *rv = std::get_if<RValue>(&pval.value)) {
-      InitializeStatement init_stmt;
-      init_stmt.dest = std::move(dest);
-      init_stmt.rvalue = *rv; // copy; you can std::move if you want
-      Statement stmt;
-      stmt.value = std::move(init_stmt);
-      append_statement(std::move(stmt));
-      return;
-    }
-    // If mode is Initialize but we got an Operand, just fall through and treat
-    // it as a normal assignment. That shouldn't happen with current callers,
-    // but it's a safe, reasonable fallback.
-  }
-
-  // Normal assignment path (Assign mode, or Initialize-without-RValue)
-  const auto *operand = std::get_if<Operand>(&pval.value);
-  if (!operand) {
-    throw std::logic_error(
-        "Pattern assignment expects Operand value but got RValue");
-  }
-
-  AssignStatement assign;
-  assign.dest = std::move(dest);
-  assign.src  = *operand;
-  Statement stmt;
-  stmt.value = std::move(assign);
-  append_statement(std::move(stmt));
-}
-
-void FunctionLowerer::lower_pattern_store_impl(const hir::ReferencePattern &,
-                                               const PatternValue &) {
-  throw std::logic_error(
-      "Reference patterns not yet supported in MIR lowering");
 }
 
 LocalId FunctionLowerer::require_local_id(const hir::Local *local) const {
