@@ -261,7 +261,7 @@ void Emitter::emit_statement(const mir::Statement &statement) {
              },
              [&](const mir::LoadStatement &load) { emit_load(load); },
              [&](const mir::AssignStatement &assign) { emit_assign(assign); },
-             [&](const mir::InitializeStatement &init) { emit_initialize(init); },
+             [&](const mir::InitStatement &init) { emit_init_statement(init); },
              [&](const mir::CallStatement &call) { emit_call(call); }},
              statement.value);
 }
@@ -295,47 +295,10 @@ void Emitter::emit_assign(const mir::AssignStatement &statement) {
       pointer_type_name(dest.pointee_type), dest.pointer);
 }
 
-void Emitter::emit_initialize(const mir::InitializeStatement &init) {
-  TranslatedPlace dest = translate_place(init.dest);
-  if (dest.pointee_type == mir::invalid_type_id) {
-    throw std::logic_error("Initialize dest missing pointee type during codegen");
-  }
-
-  mir::TypeId ty = dest.pointee_type;
-  std::string ty_name = module_.get_type_name(ty);
-
-  std::visit(
-      Overloaded{
-          [&](const mir::ConstantRValue &c) {
-            // Scalar or constant aggregate: materialize constant and store
-            TypedOperand op =
-                materialize_constant_operand(ty, c.constant, std::nullopt);
-            current_block_builder_->emit_store(
-                op.type_name, op.value_name, pointer_type_name(ty),
-                dest.pointer);
-          },
-
-          [&](const mir::AggregateRValue &agg) {
-            emit_aggregate_init_per_field(dest.pointer, ty, agg);
-          },
-
-          [&](const mir::ArrayRepeatRValue &arr) {
-            emit_array_repeat_init_per_element(dest.pointer, ty, arr);
-          },
-
-          [&](const auto &/*other*/) {
-            // Fallback: build into temp, then store. 
-            // Note: We cannot modify current_function_->temp_types (it's const),
-            // so we create a temporary SSA value using an alloca-like pattern.
-            // For now, treat this conservatively: build into temp via emit_rvalue_into,
-            // but we need a valid TempId. Since we can't extend temp_types,
-            // we'll materialize to a local allocation or use a workaround.
-            // Actually, the simpler approach: just emit store directly via the
-            // aggregate/cast path that already handles it.
-            throw std::logic_error(
-                "Initialize fallback unimplemented: must use aggregate/array/const");
-          }},
-      init.rvalue.value);
+void Emitter::emit_init_statement(const mir::InitStatement &statement) {
+  // TODO: Implement InitStatement emission
+  // For now, stub that throws
+  throw std::logic_error("emit_init_statement not yet implemented");
 }
 
 void Emitter::emit_call(const mir::CallStatement &statement) {
@@ -484,7 +447,7 @@ TranslatedPlace Emitter::translate_place(const mir::Place &place) {
                                     .value();
                },
                [&](const mir::IndexProjection &index_proj) {
-                 auto index_operand = get_typed_operand(mir::Operand{index_proj.index});
+                 auto index_operand = get_typed_operand(index_proj.index);
                  indices.emplace_back(index_operand.type_name, index_operand.value_name);
                  current_type =
                      type::helper::type_helper::array_element(current_type).value();

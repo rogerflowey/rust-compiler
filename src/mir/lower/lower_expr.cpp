@@ -105,10 +105,8 @@ Place FunctionLowerer::make_index_place(const hir::Index &index_expr,
     place = ensure_reference_operand_place(*index_expr.base, base_info, false);
   }
   semantic::ExprInfo idx_info = hir::helper::get_expr_info(*index_expr.index);
-  Operand idx_operand = expect_operand(lower_expr(*index_expr.index),
-                                       "Index expression must produce value");
-  TempId index_temp = materialize_operand(idx_operand, idx_info.type);
-  place.projections.push_back(IndexProjection{index_temp});
+  Operand idx_operand = lower_operand(*index_expr.index);
+  place.projections.push_back(IndexProjection{std::move(idx_operand)});
   return place;
 }
 
@@ -175,8 +173,7 @@ FunctionLowerer::materialize_place_base(const hir::Expr &base_expr,
     base_operand =
         load_place_value(lower_expr_place(base_expr), base_info.type);
   } else {
-    base_operand =
-        expect_operand(lower_expr(base_expr), "Expected value for place base");
+    base_operand = lower_operand(base_expr);
   }
   return materialize_operand(base_operand, base_info.type);
 }
@@ -330,10 +327,8 @@ FunctionLowerer::lower_expr_impl(const hir::BinaryOp &binary,
   semantic::ExprInfo lhs_info = hir::helper::get_expr_info(*binary.lhs);
   semantic::ExprInfo rhs_info = hir::helper::get_expr_info(*binary.rhs);
 
-  Operand lhs =
-      expect_operand(lower_expr(*binary.lhs), "Binary lhs must produce value");
-  Operand rhs =
-      expect_operand(lower_expr(*binary.rhs), "Binary rhs must produce value");
+  Operand lhs = lower_operand(*binary.lhs);
+  Operand rhs = lower_operand(*binary.rhs);
 
   BinaryOpRValue::Kind kind =
       classify_binary_kind(binary, lhs_info.type, rhs_info.type, info.type);
@@ -357,22 +352,15 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
           compound_rhs = binary->rhs.get();
         }
         if (compound_rhs) {
-          // For underscore assignment, try to avoid materializing pure values
-          // Only materialize if the value has side effects (i.e., not a pure RValue)
-          if (!lower_expr_as_rvalue(*compound_rhs)) {
-            (void)lower_expr(*compound_rhs);
-          }
+          // For underscore assignment, just lower for side effects
+          (void)lower_expr(*compound_rhs);
         } else {
-          // For underscore assignment, try to avoid materializing pure values
-          if (!lower_expr_as_rvalue(*assignment.rhs)) {
-            (void)lower_expr(*assignment.rhs);
-          }
-        }
-      } else {
-        // For underscore assignment, try to avoid materializing pure values
-        if (!lower_expr_as_rvalue(*assignment.rhs)) {
+          // For underscore assignment, just lower for side effects
           (void)lower_expr(*assignment.rhs);
         }
+      } else {
+        // For underscore assignment, just lower for side effects
+        (void)lower_expr(*assignment.rhs);
       }
     }
     return std::nullopt;
@@ -447,8 +435,7 @@ FunctionLowerer::lower_expr_impl(const hir::Call &call_expr,
     if (!arg) {
       throw std::logic_error("Call argument missing during MIR lowering");
     }
-    args.push_back(
-        expect_operand(lower_expr(*arg), "Call argument must produce value"));
+    args.push_back(lower_operand(*arg));
   }
   mir::FunctionRef target = lookup_function(func_use->def);
   return emit_call(target, info.type, std::move(args));
@@ -464,15 +451,13 @@ FunctionLowerer::lower_expr_impl(const hir::MethodCall &method_call,
   mir::FunctionRef target = lookup_function(method_def);
   std::vector<Operand> args;
   args.reserve(method_call.args.size() + 1);
-  args.push_back(expect_operand(lower_expr(*method_call.receiver),
-                                "Method receiver must produce value"));
+  args.push_back(lower_operand(*method_call.receiver));
   for (const auto &arg : method_call.args) {
     if (!arg) {
       throw std::logic_error(
           "Method call argument missing during MIR lowering");
     }
-    args.push_back(
-        expect_operand(lower_expr(*arg), "Method argument must produce value"));
+    args.push_back(lower_operand(*arg));
   }
   return emit_call(target, info.type, std::move(args));
 }
@@ -489,17 +474,13 @@ FunctionLowerer::lower_expr_impl(const hir::UnaryOp &unary,
           [&](const hir::UnaryNot &) {
             UnaryOpRValue unary_rvalue{
                 .kind = UnaryOpRValue::Kind::Not,
-                .operand =
-                    expect_operand(lower_expr(*unary.rhs),
-                                   "Unary not operand must produce value")};
+                .operand = lower_operand(*unary.rhs)};
             return emit_rvalue_to_temp(std::move(unary_rvalue), info.type);
           },
           [&](const hir::UnaryNegate &) {
             UnaryOpRValue unary_rvalue{
                 .kind = UnaryOpRValue::Kind::Neg,
-                .operand =
-                    expect_operand(lower_expr(*unary.rhs),
-                                   "Unary neg operand must produce value")};
+                .operand = lower_operand(*unary.rhs)};
             return emit_rvalue_to_temp(std::move(unary_rvalue), info.type);
           },
           [&](const hir::Reference &reference) {
@@ -519,8 +500,7 @@ FunctionLowerer::lower_expr_impl(const hir::UnaryOp &unary,
 std::optional<Operand>
 FunctionLowerer::lower_if_expr(const hir::If &if_expr,
                                const semantic::ExprInfo &info) {
-  Operand condition = expect_operand(lower_expr(*if_expr.condition),
-                                     "If condition must produce value");
+  Operand condition = lower_operand(*if_expr.condition);
   if (!current_block) {
     return std::nullopt;
   }
@@ -608,8 +588,7 @@ FunctionLowerer::lower_if_expr(const hir::If &if_expr,
 
 std::optional<Operand> FunctionLowerer::lower_short_circuit(
     const hir::BinaryOp &binary, const semantic::ExprInfo &info, bool is_and) {
-  Operand lhs = expect_operand(lower_expr(*binary.lhs),
-                               "Short-circuit lhs must produce value");
+  Operand lhs = lower_operand(*binary.lhs);
   if (!current_block) {
     return std::nullopt;
   }
@@ -634,8 +613,7 @@ std::optional<Operand> FunctionLowerer::lower_short_circuit(
   incomings.push_back(PhiIncoming{lhs_block, short_value_temp});
 
   switch_to_block(rhs_block);
-  Operand rhs = expect_operand(lower_expr(*binary.rhs),
-                               "Short-circuit rhs must produce value");
+  Operand rhs = lower_operand(*binary.rhs);
   std::optional<BasicBlockId> rhs_fallthrough =
       current_block ? std::optional<BasicBlockId>(*current_block)
                     : std::nullopt;
@@ -712,8 +690,7 @@ std::optional<Operand> FunctionLowerer::lower_while_expr(
   auto &ctx = push_loop_context(&while_expr, cond_block, break_block,
                                 while_expr.break_type);
 
-  Operand condition = expect_operand(lower_expr(*while_expr.condition),
-                                     "While condition must produce value");
+  Operand condition = lower_operand(*while_expr.condition);
   if (current_block) {
     branch_on_bool(condition, body_block, break_block);
     ctx.break_predecessors.push_back(cond_block);

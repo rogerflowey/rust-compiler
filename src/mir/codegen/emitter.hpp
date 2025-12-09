@@ -58,7 +58,7 @@ private:
   void emit_define(const mir::DefineStatement &statement);
   void emit_load(const mir::LoadStatement &statement);
   void emit_assign(const mir::AssignStatement &statement);
-  void emit_initialize(const mir::InitializeStatement &statement);
+  void emit_init_statement(const mir::InitStatement &statement);
   void emit_call(const mir::CallStatement &statement);
 
   // translation helpers: both emit and get_*

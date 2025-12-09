@@ -99,7 +99,7 @@ struct FieldProjection {
 };
 
 struct IndexProjection {
-    TempId index = 0;
+    Operand index;
 };
 
 using Projection = std::variant<FieldProjection, IndexProjection>;
@@ -224,9 +224,44 @@ struct AssignStatement {
     Operand src;
 };
 
-struct InitializeStatement {
+struct InitLeaf {
+    enum class Kind {
+        Omitted,   // this slot is initialized by other MIR statements
+        Operand    // write this operand into the slot
+    };
+
+    Kind kind = Kind::Omitted;
+    Operand operand;  // meaningful iff kind == Operand
+};
+
+struct InitStruct {
+    // same length and order as canonical struct fields
+    std::vector<InitLeaf> fields;
+};
+
+struct InitArrayLiteral {
+    std::vector<InitLeaf> elements;
+};
+
+struct InitArrayRepeat {
+    InitLeaf element;
+    std::size_t count = 0;
+};
+
+struct InitGeneral {
+    InitLeaf value;
+};
+
+using InitPatternVariant =
+    std::variant<InitStruct, InitArrayLiteral, InitArrayRepeat, InitGeneral>;
+
+struct InitPattern {
+    InitPatternVariant value;
+};
+
+struct InitStatement {
     Place dest;
-    RValue rvalue;
+    InitPattern pattern;
 };
 
 struct CallTarget {
@@ -241,7 +276,7 @@ struct CallStatement {
     std::vector<Operand> args;
 };
 
-using StatementVariant = std::variant<DefineStatement, LoadStatement, AssignStatement, InitializeStatement, CallStatement>;
+using StatementVariant = std::variant<DefineStatement, LoadStatement, AssignStatement, InitStatement, CallStatement>;
 
 struct Statement {
     StatementVariant value;

@@ -514,6 +514,22 @@ Operand FunctionLowerer::make_temp_operand(TempId temp) {
   return operand;
 }
 
+Operand FunctionLowerer::make_const_operand(std::uint64_t value, TypeId type, bool is_signed) {
+  IntConstant int_const;
+  int_const.value = value;
+  int_const.is_negative = false;
+  int_const.is_signed = is_signed;
+  
+  Constant c;
+  c.type = type;
+  c.value = std::move(int_const);
+  
+  Operand op;
+  op.value = std::move(c);
+  
+  return op;
+}
+
 void FunctionLowerer::emit_return(std::optional<Operand> value) {
     
     TypeId ret_ty = mir_function.return_type;
@@ -691,102 +707,230 @@ void FunctionLowerer::lower_statement_impl(const hir::LetStmt &let_stmt) {
   lower_let_pattern(*let_stmt.pattern, init_expr);
 }
 
-void FunctionLowerer::emit_initialize_statement(Place dest, RValue rvalue) {
-  InitializeStatement init_stmt;
+
+
+void FunctionLowerer::emit_init_statement(Place dest, InitPattern pattern) {
+  InitStatement init_stmt;
   init_stmt.dest = std::move(dest);
-  init_stmt.rvalue = std::move(rvalue);
+  init_stmt.pattern = std::move(pattern);
   Statement stmt;
   stmt.value = std::move(init_stmt);
   append_statement(std::move(stmt));
 }
 
-// === RValue building: HIR expression -> MIR RValue shape ================
-// These helpers build an RValue description. They may emit statements
-// for subexpressions, but the RValue itself has no control flow.
-//
-// Implementations:
-//   - try_lower_pure_rvalue: check if expr is a pure RValue kind
-//   - lower_expr_as_rvalue: wrapper around try_lower_pure_rvalue
-//   - build_struct_aggregate: collect struct field initializers
-//   - build_array_aggregate: collect array element initializers
-//   - build_array_repeat_rvalue: repeat operand N times
-//   - build_literal_rvalue: create constant RValue
+// === Central Init API ===================================================
 
-// === RValue emission: RValue -> MIR statements ==========================
+void FunctionLowerer::lower_init(
+    const hir::Expr &expr,
+    Place dest,
+    TypeId dest_type
+) {
+  if (dest_type == invalid_type_id) {
+    throw std::logic_error("Destination type missing in lower_init");
+  }
 
-void FunctionLowerer::emit_leaf_initialize(const hir::Expr &expr, Place dest) {
-  if (auto rvalue_opt = lower_expr_as_rvalue(expr)) {
-    emit_initialize_statement(std::move(dest), std::move(*rvalue_opt));
+  // 1) Try specialized init logic (aggregates, etc.)
+  if (try_lower_init_outside(expr, dest, dest_type)) {
+    // fully handled dest
     return;
   }
 
+  // 2) Fallback: compute a value and assign to dest
   Operand value = lower_operand(expr);
+
   AssignStatement assign;
   assign.dest = std::move(dest);
-  assign.src = std::move(value);
+  assign.src  = std::move(value);
+
   Statement stmt;
   stmt.value = std::move(assign);
   append_statement(std::move(stmt));
 }
 
-// === Init strategy: expr + dest + type -> best init pattern ============
-
-void FunctionLowerer::lower_struct_literal_init(const hir::StructLiteral &literal,
-                                                Place dest,
-                                                TypeId dest_type) {
-  TypeId normalized = canonicalize_type_for_mir(dest_type);
-  auto *struct_type =
-      std::get_if<type::StructType>(&type::get_type_from_id(normalized).value);
-  if (!struct_type) {
-    throw std::logic_error(
-        "Struct literal init without struct destination type during MIR lowering");
+bool FunctionLowerer::try_lower_init_outside(
+    const hir::Expr &expr,
+    Place dest,
+    TypeId dest_type
+) {
+  if (dest_type == invalid_type_id) {
+    return false;
   }
 
-  const auto &struct_info = type::TypeContext::get_instance().get_struct(struct_type->id);
+  TypeId normalized = canonicalize_type_for_mir(dest_type);
+  const type::Type &ty = type::get_type_from_id(normalized);
+
+  // Struct literal -> struct destination
+  if (auto *struct_lit = std::get_if<hir::StructLiteral>(&expr.value)) {
+    if (std::holds_alternative<type::StructType>(ty.value)) {
+      lower_struct_init(*struct_lit, std::move(dest), normalized);
+      return true;
+    }
+    return false;
+  }
+
+  // Array literal -> array destination
+  if (auto *array_lit = std::get_if<hir::ArrayLiteral>(&expr.value)) {
+    lower_array_literal_init(*array_lit, std::move(dest), normalized);
+    return true;
+  }
+
+  // Array repeat -> array destination
+  if (auto *array_rep = std::get_if<hir::ArrayRepeat>(&expr.value)) {
+    lower_array_repeat_init(*array_rep, std::move(dest), normalized);
+    return true;
+  }
+
+  // Everything else: not handled here
+  return false;
+}
+
+
+
+void FunctionLowerer::lower_struct_init(
+    const hir::StructLiteral &literal,
+    Place dest,
+    TypeId dest_type
+) {
+  TypeId normalized = canonicalize_type_for_mir(dest_type);
+  auto *struct_ty =
+      std::get_if<type::StructType>(&type::get_type_from_id(normalized).value);
+  if (!struct_ty) {
+    throw std::logic_error(
+        "Struct literal init without struct destination type");
+  }
+
+  const auto &struct_info =
+      type::TypeContext::get_instance().get_struct(struct_ty->id);
   const auto &fields = hir::helper::get_canonical_fields(literal);
+
   if (fields.initializers.size() != struct_info.fields.size()) {
     throw std::logic_error(
-        "Struct literal field count mismatch during place-directed init");
+        "Struct literal field count mismatch during struct init");
   }
+
+  InitStruct init_struct;
+  init_struct.fields.resize(fields.initializers.size());
 
   for (std::size_t idx = 0; idx < fields.initializers.size(); ++idx) {
     if (!fields.initializers[idx]) {
       throw std::logic_error(
           "Struct literal field missing initializer during MIR lowering");
     }
-    TypeId field_type = canonicalize_type_for_mir(struct_info.fields[idx].type);
-    if (field_type == invalid_type_id) {
+
+    TypeId field_ty =
+        canonicalize_type_for_mir(struct_info.fields[idx].type);
+    if (field_ty == invalid_type_id) {
       throw std::logic_error(
           "Struct field missing resolved type during MIR lowering");
     }
+
+    const hir::Expr &field_expr = *fields.initializers[idx];
+    auto &leaf = init_struct.fields[idx];
+
+    // Build sub-place dest.field[idx]
     Place field_place = dest;
     field_place.projections.push_back(FieldProjection{idx});
-    lower_place_directed_init(*fields.initializers[idx], std::move(field_place),
-                              field_type);
-  }
-}
 
-void FunctionLowerer::lower_place_directed_init(const hir::Expr &expr, Place dest,
-                                                TypeId dest_type) {
-  if (dest_type == invalid_type_id) {
-    throw std::logic_error(
-        "Destination type missing during place-directed init lowering");
-  }
-
-  TypeId normalized = canonicalize_type_for_mir(dest_type);
-  const type::Type &dest_type_value = type::get_type_from_id(normalized);
-
-  // Only special-case struct literals with a struct destination type.
-  if (auto *struct_literal = std::get_if<hir::StructLiteral>(&expr.value)) {
-    if (std::holds_alternative<type::StructType>(dest_type_value.value)) {
-      lower_struct_literal_init(*struct_literal, std::move(dest), normalized);
-      return;
+    // Try to initialize this field via its own place-directed path:
+    if (try_lower_init_outside(field_expr, std::move(field_place), field_ty)) {
+      // Field is handled by the MIR just emitted.
+      leaf = make_omitted_leaf();
+    } else {
+      // Fall back: compute an Operand and store via InitPattern
+      Operand value = lower_operand(field_expr);
+      leaf = make_operand_leaf(std::move(value));
     }
   }
 
-  // Everything else (including ArrayRepeat) goes through the generic leaf path.
-  emit_leaf_initialize(expr, std::move(dest));
+  InitPattern pattern;
+  pattern.value = std::move(init_struct);
+  emit_init_statement(std::move(dest), std::move(pattern));
 }
+
+
+
+// === Array Init ========================================================
+
+void FunctionLowerer::lower_array_literal_init(
+    const hir::ArrayLiteral &array_literal,
+    Place dest,
+    TypeId dest_type
+) {
+  InitArrayLiteral init_array;
+  init_array.elements.resize(array_literal.elements.size());
+
+  for (std::size_t idx = 0; idx < array_literal.elements.size(); ++idx) {
+    const auto &elem_expr_ptr = array_literal.elements[idx];
+    if (!elem_expr_ptr) {
+      throw std::logic_error(
+          "Array literal element missing during MIR lowering");
+    }
+
+    const hir::Expr &elem_expr = *elem_expr_ptr;
+    auto &leaf = init_array.elements[idx];
+
+    // Build sub-place dest[idx]
+    Place elem_place = dest;
+    TypeId usize_ty = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
+    Operand idx_operand = make_const_operand(idx, usize_ty, false);
+    elem_place.projections.push_back(IndexProjection{std::move(idx_operand)});
+
+    if (try_lower_init_outside(elem_expr, std::move(elem_place), dest_type)) {
+      leaf = make_omitted_leaf();
+    } else {
+      Operand op = lower_operand(elem_expr);
+      leaf = make_operand_leaf(std::move(op));
+    }
+  }
+
+  InitPattern pattern;
+  pattern.value = std::move(init_array);
+  emit_init_statement(std::move(dest), std::move(pattern));
+}
+
+void FunctionLowerer::lower_array_repeat_init(
+    const hir::ArrayRepeat &array_repeat,
+    Place dest,
+    TypeId dest_type
+) {
+  InitArrayRepeat init_repeat;
+  
+  // Extract count from variant
+  if (std::holds_alternative<size_t>(array_repeat.count)) {
+    init_repeat.count = std::get<size_t>(array_repeat.count);
+  } else {
+    throw std::logic_error(
+        "Array repeat count must be a compile-time constant during MIR lowering");
+  }
+
+  // Try to initialize the element via place-directed init
+  Place elem_place = dest;
+  IntConstant zero_const;
+  zero_const.value = 0;
+  zero_const.is_negative = false;
+  zero_const.is_signed = false;
+  Constant c;
+  c.type = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
+  c.value = std::move(zero_const);
+  Operand zero_operand;
+  zero_operand.value = std::move(c);
+  elem_place.projections.push_back(IndexProjection{std::move(zero_operand)});
+
+  if (try_lower_init_outside(*array_repeat.value, std::move(elem_place), dest_type)) {
+    // Element is handled by separate MIR statements
+    init_repeat.element = make_omitted_leaf();
+  } else {
+    // Fall back: compute an Operand
+    Operand op = lower_operand(*array_repeat.value);
+    init_repeat.element = make_operand_leaf(std::move(op));
+  }
+
+  InitPattern pattern;
+  pattern.value = std::move(init_repeat);
+  emit_init_statement(std::move(dest), std::move(pattern));
+}
+
+
 
 // === Pattern-based initialization =====================================
 
@@ -805,7 +949,7 @@ void FunctionLowerer::lower_let_pattern(const hir::Pattern &pattern,
 void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
                                         const hir::Expr &init_expr) {
   // Binding pattern lowering: initialize the local directly from the initializer
-  // expression. lower_place_directed_init will choose the best strategy
+  // expression. lower_init will choose the best strategy
   // (struct field-by-field, leaf initialize, or temp+assign).
   hir::Local *local = hir::helper::get_local(binding);
   if (!local) {
@@ -813,11 +957,8 @@ void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
   }
 
   if (local->name.name == "_") {
-    // For underscore bindings, try to avoid materializing pure values while
-    // still lowering side-effects when present.
-    if (!lower_expr_as_rvalue(init_expr)) {
-      (void)lower_expr(init_expr);
-    }
+    // For underscore bindings, just lower for side effects
+    (void)lower_expr(init_expr);
     return;
   }
 
@@ -828,7 +969,7 @@ void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
 
   Place dest = make_local_place(local);
   TypeId dest_type = hir::helper::get_resolved_type(*local->type_annotation);
-  lower_place_directed_init(init_expr, std::move(dest), dest_type);
+  lower_init(init_expr, std::move(dest), dest_type);
 }
 
 void FunctionLowerer::lower_reference_let(const hir::ReferencePattern &,
@@ -869,42 +1010,7 @@ void FunctionLowerer::lower_statement_impl(const hir::ExprStmt &expr_stmt) {
   }
 }
 
-std::optional<RValue> FunctionLowerer::try_lower_pure_rvalue(
-  const hir::Expr &expr, const semantic::ExprInfo &info) {
-  return std::visit(
-    Overloaded{
-      [this](const hir::StructLiteral &struct_lit) -> std::optional<RValue> {
-        RValue rv;
-        rv.value = build_struct_aggregate(struct_lit);
-        return rv;
-      },
-      [this](const hir::ArrayLiteral &array_lit) -> std::optional<RValue> {
-        RValue rv;
-        rv.value = build_array_aggregate(array_lit);
-        return rv;
-      },
-      [this](const hir::ArrayRepeat &array_rep) -> std::optional<RValue> {
-        RValue rv;
-        rv.value = build_array_repeat_rvalue(array_rep);
-        return rv;
-      },
-      [this, &info](const hir::Literal &lit) -> std::optional<RValue> {
-        RValue rv;
-        rv.value = build_literal_rvalue(lit, info);
-        return rv;
-      },
-      [](const auto &) -> std::optional<RValue> {
-        return std::nullopt;
-      },
-    },
-    expr.value);
-}
 
-std::optional<RValue> FunctionLowerer::lower_expr_as_rvalue(
-    const hir::Expr &expr) {
-  semantic::ExprInfo info = hir::helper::get_expr_info(expr);
-  return try_lower_pure_rvalue(expr, info);
-}
 
 AggregateRValue FunctionLowerer::build_struct_aggregate(
     const hir::StructLiteral &struct_literal) {

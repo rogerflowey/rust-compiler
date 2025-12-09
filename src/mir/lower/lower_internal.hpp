@@ -65,6 +65,7 @@ private:
 	std::optional<Operand> emit_call(mir::FunctionRef target, TypeId result_type, std::vector<Operand>&& args);
 	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
 	Operand emit_array_repeat(Operand value, std::size_t count, TypeId result_type);
+	void emit_init_statement(Place dest, InitPattern pattern);
 	template <typename RValueT>
 	Operand emit_rvalue_to_temp(RValueT rvalue_kind, TypeId result_type);
 	BasicBlockId create_block();
@@ -100,16 +101,14 @@ private:
 	bool lower_block_statements(const hir::Block& block);
 	void lower_block(const hir::Block& hir_block);
 	std::optional<Operand> lower_block_expr(const hir::Block& block, TypeId expected_type);
-	void lower_statement(const hir::Stmt& stmt);
+        void lower_statement(const hir::Stmt& stmt);
         void lower_statement_impl(const hir::LetStmt& let_stmt);
         void lower_statement_impl(const hir::ExprStmt& expr_stmt);
-        std::optional<RValue> lower_expr_as_rvalue(const hir::Expr& expr);
-        std::optional<RValue> try_lower_pure_rvalue(const hir::Expr& expr,
-                const semantic::ExprInfo& info);
-        void lower_place_directed_init(const hir::Expr& expr, Place dest, TypeId dest_type);
-        void lower_struct_literal_init(const hir::StructLiteral& literal, Place dest, TypeId dest_type);
-        void emit_leaf_initialize(const hir::Expr& expr, Place dest);
-        void emit_initialize_statement(Place dest, RValue rvalue);
+        void lower_init(const hir::Expr& expr, Place dest, TypeId dest_type);
+        bool try_lower_init_outside(const hir::Expr& expr, Place dest, TypeId dest_type);
+        void lower_struct_init(const hir::StructLiteral& literal, Place dest, TypeId dest_type);
+        void lower_array_literal_init(const hir::ArrayLiteral& array_literal, Place dest, TypeId dest_type);
+        void lower_array_repeat_init(const hir::ArrayRepeat& array_repeat, Place dest, TypeId dest_type);
         void lower_let_pattern(const hir::Pattern& pattern, const hir::Expr& init_expr);
         void lower_binding_let(const hir::BindingDef& binding, const hir::Expr& init_expr);
         void lower_reference_let(const hir::ReferencePattern& ref_pattern,
@@ -118,13 +117,14 @@ private:
 	                              const hir::Expr& expr,
 	                              TypeId expr_type);
 
-	// RValue building helpers - shared between try_lower_pure_rvalue and lower_expr_impl
+	std::optional<Operand> try_lower_to_const(const hir::Expr& expr);
+
+	// RValue building helpers for lower_expr_impl
 	AggregateRValue build_struct_aggregate(const hir::StructLiteral& struct_literal);
 	AggregateRValue build_array_aggregate(const hir::ArrayLiteral& array_literal);
 	ArrayRepeatRValue build_array_repeat_rvalue(const hir::ArrayRepeat& array_repeat);
 	ConstantRValue build_literal_rvalue(const hir::Literal& lit,
 		const semantic::ExprInfo& info);
-	std::optional<Operand> try_lower_to_const(const hir::Expr& expr);
 
 	LocalId require_local_id(const hir::Local* local) const;
 	Place make_local_place(const hir::Local* local) const;
@@ -132,6 +132,7 @@ private:
 	LocalId create_synthetic_local(TypeId type, bool is_mutable_reference);
 	Operand load_place_value(Place place, TypeId type);
 	Operand lower_operand(const hir::Expr& expr);
+	Operand make_const_operand(std::uint64_t value, TypeId type, bool is_signed = false);
 	std::optional<Operand> lower_expr(const hir::Expr& expr);
 	Place lower_expr_place(const hir::Expr& expr);
 	Place ensure_reference_operand_place(const hir::Expr& operand,
@@ -208,6 +209,20 @@ Operand FunctionLowerer::emit_rvalue_to_temp(RValueT rvalue_kind, TypeId result_
 	stmt.value = std::move(define);
 	append_statement(std::move(stmt));
 	return make_temp_operand(dest);
+}
+
+// Utility helpers for InitLeaf construction
+inline InitLeaf make_operand_leaf(Operand op) {
+	InitLeaf leaf;
+	leaf.kind = InitLeaf::Kind::Operand;
+	leaf.operand = std::move(op);
+	return leaf;
+}
+
+inline InitLeaf make_omitted_leaf() {
+	InitLeaf leaf;
+	leaf.kind = InitLeaf::Kind::Omitted;
+	return leaf;
 }
 
 } // namespace mir::detail
