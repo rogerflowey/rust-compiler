@@ -86,14 +86,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout-reimu",
         type=int,
-        default=30,
-        help="Timeout in seconds for reimu execution. Default: 30s.",
+        default=10,
+        help="Timeout in seconds for reimu execution. Default: 10s.",
     )
     parser.add_argument(
         "--timeout-builtin",
         type=int,
-        default=30,
-        help="Timeout in seconds for builtin.c compilation. Default: 30s.",
+        default=10,
+        help="Timeout in seconds for builtin.c compilation. Default: 10s.",
     )
     return parser.parse_args()
 
@@ -369,7 +369,6 @@ def main() -> int:
 
     summary_path.write_text("\n".join(summary_lines).rstrip() + "\n", encoding="utf-8")
     print(f"Summary written to {summary_path}")
-
     if failures:
         for rel_case, reason in failures:
             sys.stderr.write(f"{RED}- {rel_case}: {reason}{RESET}\n")

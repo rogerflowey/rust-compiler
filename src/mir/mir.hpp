@@ -31,6 +31,9 @@ using FunctionRef = std::variant<MirFunction*, ExternalFunction*>;
 struct LocalInfo {
     TypeId type = invalid_type_id;
     std::string debug_name;
+
+    bool is_alias = false;
+    std::optional<TempId> alias_temp;
 };
 
 struct FunctionParameter {
@@ -99,7 +102,7 @@ struct FieldProjection {
 };
 
 struct IndexProjection {
-    TempId index = 0;
+    Operand index;
 };
 
 using Projection = std::variant<FieldProjection, IndexProjection>;
@@ -224,9 +227,48 @@ struct AssignStatement {
     Operand src;
 };
 
-struct InitializeStatement {
+struct InitLeaf {
+    enum class Kind {
+        Omitted,   // this slot is initialized by other MIR statements
+        Operand    // write this operand into the slot
+    };
+
+    Kind kind = Kind::Omitted;
+    Operand operand;  // meaningful iff kind == Operand
+};
+
+struct InitStruct {
+    // same length and order as canonical struct fields
+    std::vector<InitLeaf> fields;
+};
+
+struct InitArrayLiteral {
+    std::vector<InitLeaf> elements;
+};
+
+struct InitArrayRepeat {
+    InitLeaf element;
+    std::size_t count = 0;
+};
+
+struct InitGeneral { // Unused currently
+    InitLeaf value;
+};
+
+struct InitCopy {
+    Place src;
+};
+
+using InitPatternVariant =
+    std::variant<InitStruct, InitArrayLiteral, InitArrayRepeat, InitGeneral, InitCopy>;
+
+struct InitPattern {
+    InitPatternVariant value;
+};
+
+struct InitStatement {
     Place dest;
-    RValue rvalue;
+    InitPattern pattern;
 };
 
 struct CallTarget {
@@ -236,12 +278,15 @@ struct CallTarget {
 };
 
 struct CallStatement {
-    std::optional<TempId> dest;
+    std::optional<TempId> dest;      // normal value return (non-sret)
     CallTarget target;
     std::vector<Operand> args;
+
+    // If set, callee must write its result into this place (sret-style).
+    std::optional<Place> sret_dest;
 };
 
-using StatementVariant = std::variant<DefineStatement, LoadStatement, AssignStatement, InitializeStatement, CallStatement>;
+using StatementVariant = std::variant<DefineStatement, LoadStatement, AssignStatement, InitStatement, CallStatement>;
 
 struct Statement {
     StatementVariant value;
@@ -309,6 +354,11 @@ struct MirFunction {
     std::vector<BasicBlock> basic_blocks;
     BasicBlockId start_block = 0;
     TypeId return_type = invalid_type_id;
+
+    // SRET support: if uses_sret is true, the callee receives an implicit first
+    // parameter (the return destination pointer), and returns void.
+    bool uses_sret = false;
+    std::optional<TempId> sret_temp;  // temp holding the sret pointer (&return_type)
 
     [[nodiscard]] TypeId get_temp_type(TempId temp) const {
         if (temp >= temp_types.size()) {

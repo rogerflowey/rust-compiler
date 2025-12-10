@@ -111,6 +111,25 @@ bool is_never_type(TypeId type) {
            std::get_if<type::NeverType>(&type::get_type_from_id(type).value) != nullptr;
 }
 
+bool is_aggregate_type(TypeId type) {
+    if (type == type::invalid_type_id) {
+        return false;
+    }
+    const auto &resolved = type::get_type_from_id(type);
+    return std::get_if<type::StructType>(&resolved.value) != nullptr ||
+           std::get_if<type::ArrayType>(&resolved.value) != nullptr;
+}
+
+TypeId make_ref_type(TypeId pointee) {
+    if (pointee == type::invalid_type_id) {
+        return type::invalid_type_id;
+    }
+    type::ReferenceType ref_type;
+    ref_type.referenced_type = pointee;
+    ref_type.is_mutable = false;
+    return type::get_typeID(type::Type{ref_type});
+}
+
 Constant make_bool_constant(bool value) {
     Constant constant;
     constant.type = get_bool_type();

@@ -6,6 +6,7 @@
 
 #include "semantic/hir/hir.hpp"
 #include "semantic/pass/semantic_check/expr_info.hpp"
+#include "type/helper.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -19,20 +20,8 @@
 
 namespace mir::detail {
 
-enum class PatternStoreMode {
-	Initialize,
-	Assign,
-};
-
-// Unified value type for pattern stores: either an Operand (normal assign)
-// or an RValue (for initializer lowering)
-struct PatternValue {
-	PatternStoreMode mode = PatternStoreMode::Assign;
-	std::variant<Operand, RValue> value;
-};
-
 struct FunctionLowerer {
-	enum class FunctionKind { Function, Method };
+        enum class FunctionKind { Function, Method };
 
 	FunctionLowerer(const hir::Function& function,
 		   const std::unordered_map<const void*, mir::FunctionRef>& fn_map,
@@ -67,17 +56,29 @@ private:
 	std::vector<std::pair<const void*, LoopContext>> loop_stack;
 	size_t synthetic_local_counter = 0;
 
+        // SRET support
+        bool uses_sret_ = false;
+        std::optional<Place> return_place_;  // where returns should store result, if sret
+        const hir::Local* nrvo_local_ = nullptr;
+
 	void initialize(FunctionId id, std::string name);
 	const hir::Block* get_body() const;
 	const std::vector<std::unique_ptr<hir::Local>>& get_locals_vector() const;
 	TypeId resolve_return_type() const;
-	void init_locals();
-	mir::FunctionRef lookup_function(const void* key) const; // NEW: Returns FunctionRef
+        void init_locals();
+        const hir::Local* pick_nrvo_local() const;
+        mir::FunctionRef lookup_function(const void* key) const; // NEW: Returns FunctionRef
 	std::optional<Operand> emit_call(mir::FunctionRef target, TypeId result_type, std::vector<Operand>&& args);
+	bool function_uses_sret(const hir::Function &fn) const;
+	bool method_uses_sret(const hir::Method &m) const;
+	void emit_call_into_place(mir::FunctionRef target, TypeId result_type, Place dest, std::vector<Operand> &&args);
+	bool try_lower_init_call(const hir::Call &call_expr, Place dest, TypeId dest_type);
+	bool try_lower_init_method_call(const hir::MethodCall &mcall, Place dest, TypeId dest_type);
 	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
 	Operand emit_array_repeat(Operand value, std::size_t count, TypeId result_type);
+	void emit_init_statement(Place dest, InitPattern pattern);
 	template <typename RValueT>
-	Operand emit_rvalue(RValueT rvalue_kind, TypeId result_type);
+	Operand emit_rvalue_to_temp(RValueT rvalue_kind, TypeId result_type);
 	BasicBlockId create_block();
 	bool block_is_terminated(BasicBlockId id) const;
 	BasicBlockId current_block_id() const;
@@ -111,20 +112,25 @@ private:
 	bool lower_block_statements(const hir::Block& block);
 	void lower_block(const hir::Block& hir_block);
 	std::optional<Operand> lower_block_expr(const hir::Block& block, TypeId expected_type);
-	void lower_statement(const hir::Stmt& stmt);
-	void lower_statement_impl(const hir::LetStmt& let_stmt);
-	void lower_statement_impl(const hir::ExprStmt& expr_stmt);
-	std::optional<RValue> lower_expr_as_rvalue(const hir::Expr& expr);
-	std::optional<RValue> try_lower_pure_rvalue(const hir::Expr& expr,
-		const semantic::ExprInfo& info);
-	void lower_pattern_store(const hir::Pattern& pattern,
-	                         const PatternValue& pval);
-	void lower_pattern_store_impl(const hir::BindingDef& binding,
-	                              const PatternValue& pval);
-	void lower_pattern_store_impl(const hir::ReferencePattern& ref_pattern,
-	                              const PatternValue& pval);
+        void lower_statement(const hir::Stmt& stmt);
+        void lower_statement_impl(const hir::LetStmt& let_stmt);
+        void lower_statement_impl(const hir::ExprStmt& expr_stmt);
+        void lower_init(const hir::Expr& expr, Place dest, TypeId dest_type);
+        bool try_lower_init_outside(const hir::Expr& expr, Place dest, TypeId dest_type);
+        void lower_struct_init(const hir::StructLiteral& literal, Place dest, TypeId dest_type);
+        void lower_array_literal_init(const hir::ArrayLiteral& array_literal, Place dest, TypeId dest_type);
+        void lower_array_repeat_init(const hir::ArrayRepeat& array_repeat, Place dest, TypeId dest_type);
+        void lower_let_pattern(const hir::Pattern& pattern, const hir::Expr& init_expr);
+        void lower_binding_let(const hir::BindingDef& binding, const hir::Expr& init_expr);
+        void lower_reference_let(const hir::ReferencePattern& ref_pattern,
+                                 const hir::Expr& init_expr);
+	void lower_pattern_from_expr(const hir::Pattern& pattern,
+	                              const hir::Expr& expr,
+	                              TypeId expr_type);
 
-	// RValue building helpers - shared between try_lower_pure_rvalue and lower_expr_impl
+	std::optional<Operand> try_lower_to_const(const hir::Expr& expr);
+
+	// RValue building helpers for lower_expr_impl
 	AggregateRValue build_struct_aggregate(const hir::StructLiteral& struct_literal);
 	AggregateRValue build_array_aggregate(const hir::ArrayLiteral& array_literal);
 	ArrayRepeatRValue build_array_repeat_rvalue(const hir::ArrayRepeat& array_repeat);
@@ -136,6 +142,8 @@ private:
 	Place make_local_place(LocalId local_id) const;
 	LocalId create_synthetic_local(TypeId type, bool is_mutable_reference);
 	Operand load_place_value(Place place, TypeId type);
+	Operand lower_operand(const hir::Expr& expr);
+	Operand make_const_operand(std::uint64_t value, TypeId type, bool is_signed = false);
 	std::optional<Operand> lower_expr(const hir::Expr& expr);
 	Place lower_expr_place(const hir::Expr& expr);
 	Place ensure_reference_operand_place(const hir::Expr& operand,
@@ -203,7 +211,7 @@ std::optional<Operand> FunctionLowerer::lower_expr_impl(const T&, const semantic
 }
 
 template <typename RValueT>
-Operand FunctionLowerer::emit_rvalue(RValueT rvalue_kind, TypeId result_type) {
+Operand FunctionLowerer::emit_rvalue_to_temp(RValueT rvalue_kind, TypeId result_type) {
 	TempId dest = allocate_temp(result_type);
 	RValue rvalue;
 	rvalue.value = std::move(rvalue_kind);
@@ -212,6 +220,20 @@ Operand FunctionLowerer::emit_rvalue(RValueT rvalue_kind, TypeId result_type) {
 	stmt.value = std::move(define);
 	append_statement(std::move(stmt));
 	return make_temp_operand(dest);
+}
+
+// Utility helpers for InitLeaf construction
+inline InitLeaf make_operand_leaf(Operand op) {
+	InitLeaf leaf;
+	leaf.kind = InitLeaf::Kind::Operand;
+	leaf.operand = std::move(op);
+	return leaf;
+}
+
+inline InitLeaf make_omitted_leaf() {
+	InitLeaf leaf;
+	leaf.kind = InitLeaf::Kind::Omitted;
+	return leaf;
 }
 
 } // namespace mir::detail

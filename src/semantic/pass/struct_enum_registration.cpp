@@ -8,77 +8,26 @@ namespace semantic {
 
 namespace {
     // Small visitor to walk the entire HIR and collect all struct definitions
+    // This visitor leverages HirVisitorBase to properly traverse the entire HIR tree,
+    // ensuring structs defined at any scope (global, inside functions, etc.) are collected.
     class StructCollectorVisitor : public hir::HirVisitorBase<StructCollectorVisitor> {
     public:
         std::vector<hir::StructDef*> structs;
 
+        // Override struct visit to collect it and continue traversal
         void visit(hir::StructDef& struct_def) {
             structs.push_back(&struct_def);
+            // Continue visiting via base class (which handles field type annotations)
+            base().visit(struct_def);
         }
 
-        void visit(hir::Block& block) {
-            for (auto& item_ptr : block.items) {
-                std::visit([this](auto& item) { this->visit(item); }, item_ptr->value);
-            }
-            for (auto& stmt_ptr : block.stmts) {
-                std::visit([this](auto& stmt) { this->visit(stmt); }, stmt_ptr->value);
-            }
-            if (block.final_expr) {
-                visit(**block.final_expr);
-            }
-        }
-
-        void visit(hir::LetStmt& let_stmt) {
-            if (let_stmt.initializer) {
-                visit(*let_stmt.initializer);
-            }
-        }
-
-        void visit(hir::ExprStmt& expr_stmt) {
-            visit(*expr_stmt.expr);
-        }
-
-        void visit(hir::Expr& expr) {
-            std::visit([this](auto& e) { this->visit(e); }, expr.value);
-        }
-
-        void visit(hir::Function& func) {
-            if (func.body) {
-                visit(*func.body);
-            }
-        }
-
-        // Expression visitors to recurse through blocks in control flow
-        void visit(hir::If& if_expr) {
-            if (if_expr.condition) {
-                visit(*if_expr.condition);
-            }
-            if (if_expr.then_block) {
-                visit(*if_expr.then_block);
-            }
-            if (if_expr.else_expr) {
-                visit(**if_expr.else_expr);
-            }
-        }
-
-        void visit(hir::Loop& loop_expr) {
-            if (loop_expr.body) {
-                visit(*loop_expr.body);
-            }
-        }
-
-        void visit(hir::While& while_expr) {
-            if (while_expr.condition) {
-                visit(*while_expr.condition);
-            }
-            if (while_expr.body) {
-                visit(*while_expr.body);
-            }
-        }
-
-        // Default visitor for other expressions - do nothing
+        // For all other nodes, use the base implementation which properly recurses
+        // through the entire HIR tree (blocks, functions, expressions, etc.)
         template <typename T>
-        void visit(T&) {}
+        void visit(T& node) {
+            // Delegate to base class for proper traversal
+            base().visit(node);
+        }
     };
 }
 

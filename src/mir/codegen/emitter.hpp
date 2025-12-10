@@ -58,7 +58,7 @@ private:
   void emit_define(const mir::DefineStatement &statement);
   void emit_load(const mir::LoadStatement &statement);
   void emit_assign(const mir::AssignStatement &statement);
-  void emit_initialize(const mir::InitializeStatement &statement);
+  void emit_init_statement(const mir::InitStatement &statement);
   void emit_call(const mir::CallStatement &statement);
 
   // translation helpers: both emit and get_*
@@ -89,15 +89,19 @@ private:
   void emit_field_access_rvalue_into(mir::TempId dest,
                                      const mir::FieldAccessRValue &value);
 
-  // per-field aggregate initialization helpers
-  void emit_aggregate_init_per_field(
-      const std::string &base_ptr,
-      mir::TypeId aggregate_type,
-      const mir::AggregateRValue &agg);
-  void emit_array_repeat_init_per_element(
-      const std::string &base_ptr,
-      mir::TypeId array_type_id,
-      const mir::ArrayRepeatRValue &value);
+  // InitPattern-based initialization helpers
+  void emit_init_struct(const std::string &base_ptr,
+                        mir::TypeId struct_type,
+                        const mir::InitStruct &init_struct);
+  void emit_init_array_literal(const std::string &base_ptr,
+                               mir::TypeId array_type,
+                               const mir::InitArrayLiteral &init_array);
+  void emit_init_array_repeat(const std::string &base_ptr,
+                              mir::TypeId array_type,
+                              const mir::InitArrayRepeat &init_array_repeat);
+  void emit_init_copy(const std::string &dest_ptr,
+                      mir::TypeId dest_type,
+                      const mir::InitCopy &copy);
 
   // lookup helpers
   std::string get_temp(mir::TempId temp);
@@ -117,6 +121,7 @@ private:
   void materialize_constant_into_temp(mir::TempId dest,
                                       const std::string &type_name,
                                       const std::string &literal);
+  std::string emit_sizeof_bytes(mir::TypeId type);
 };
 
 } // namespace codegen

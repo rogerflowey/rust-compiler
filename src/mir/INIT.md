@@ -1,280 +1,516 @@
-Gotcha, that helps a lot. Let me rewrite the plan in terms of what you *actually* want:
-
-* **One layer** of logic in the lowerer that:
-
-  * operates on **HIR expr + place + type**, and
-  * emits a **series of `Initialize` statements**, *destructing the place*,
-* With **clear rules** for:
-
-  * struct literals,
-  * array literals,
-  * array repeats,
-* And then the **emitter** decides *how* to realize each `Initialize` (loop vs unrolled, memset, etc.) without guessing where temps came from.
-
-Here’s a design doc in that shape, minimal code, mostly behavior and contracts.
+Here’s a “final” implementation plan you can drop straight in front of agents. It explains both **what we’re doing conceptually** and **exactly how to implement it**.
 
 ---
 
-## Structural Initialization: Place-Destructing Lowerer, Strategy-Choosing Emitter
+# Goal
 
-**Status:** Revised plan
-**Key idea:**
-The lowerer does *place destructuring* and emits a **series of `Initialize` statements** on sub-places; the emitter chooses how to implement each `Initialize` based on the attached RValue.
+We’re **throwing away** the old scattered “init-in-place optimization” around `InitializeStatement` and replacing it with a **clean, structured init model** in MIR:
 
----
+1. MIR gets a first-class **InitStatement + InitPattern** representation.
+2. All “expression → place” initialization goes through:
 
-### 1. High-Level Shape
+   ```cpp
+   bool FunctionLowerer::try_lower_init_outside(const hir::Expr&, Place, TypeId);
+   void FunctionLowerer::lower_init(const hir::Expr&, Place, TypeId);
+   ```
+3. For aggregates (structs / arrays), we:
 
-We introduce a concept:
+   * Optionally initialize sub-places via separate MIR statements, and
+   * Use **InitPattern with per-slot `InitLeaf`** where each slot is either:
 
-> **Place-directed initialization pass in the lowerer**:
->
-> Given:
->
-> * a destination **place** `P`,
-> * its **type** `T`,
-> * and an initializer **HIR expr** `E`,
->
-> lowerer emits **one or more** `Initialize{ dest: Place, rvalue: RValue }` statements that:
->
-> * recursively follow the *shape* of `T` and `E`, and
-> * stop at well-defined cut points (struct vs array vs repeat).
+     * `Operand` = copy this SSA value into that sub-place, or
+     * `Omitted` = this slot was already initialized by other MIR statements.
 
-Crucially:
-
-* The **lowerer**:
-
-  * **does** recursively *destructure the place* (struct fields, sometimes array elements).
-  * **does not** unroll “execution strategies” like loops or memsets.
-* The **emitter**:
-
-  * sees each `Initialize { place, rvalue }`,
-  * decides whether to do:
-
-    * direct stores,
-    * `insertvalue`,
-    * loops,
-    * `zeroinitializer` / memset, etc.
-
-No “temp → RValue backtracking” is needed; all structure comes directly from lowering on HIR.
+`Omitted` is not optional: it’s how we model “this field/element is handled elsewhere.”
 
 ---
 
-### 2. Core Contracts
+# Phase 1 – MIR Data Model Changes
 
-#### 2.1 Lowerer responsibilities
+## 1.1 Add Init types
 
-When the lowerer knows:
+In `mir.hpp` (near `Place` definitions, before `StatementVariant`), add:
 
-* “I am initializing this **place** of type `T` from this **expr**”,
+```cpp
+struct InitLeaf {
+    enum class Kind {
+        Omitted,   // this slot is initialized by other MIR statements
+        Operand    // write this operand into the slot
+    };
 
-it:
+    Kind kind = Kind::Omitted;
+    Operand operand;  // meaningful iff kind == Operand
+};
 
-1. **Destructs the place** based on type and expression kind:
+struct InitStruct {
+    // same length and order as canonical struct fields
+    std::vector<InitLeaf> fields;
+};
 
-   * For **struct types**, it always walks fields and creates further `Initialize` on sub-places (see §3.3).
-   * For **array types**, it sometimes walks elements (§3.2), sometimes not.
-   * For **array repeats**, it stops at the “array repeat” level (§3.1).
+struct InitArrayLiteral {
+    std::vector<InitLeaf> elements;
+};
 
-2. Emits a **sequence of `Initialize` for sub-places** that cannot be further structurally decomposed under our rules.
+struct InitArrayRepeat {
+    InitLeaf element;
+    std::size_t count = 0;
+};
 
-3. Does not unroll runtime loops or decide about repetition strategy; it only describes “what should be written where” in a structured way.
+struct InitGeneral {
+    InitLeaf value;
+};
 
-#### 2.2 Emitter responsibilities
+using InitPatternVariant =
+    std::variant<InitStruct, InitArrayLiteral, InitArrayRepeat, InitGeneral>;
 
-For each `Initialize { dest: Place, rvalue: RValue }`:
+struct InitPattern {
+    InitPatternVariant value;
+};
 
-* Use:
-
-  * the **destination type**,
-  * the **shape** of the RValue (`Constant`, `Aggregate`, `ArrayRepeat`),
-* To choose:
-
-  * per-field/element `store`,
-  * building a small aggregate in registers then storing once,
-  * explicit loop for large repeats,
-  * `zeroinitializer` / memset for zero repeats,
-  * etc.
-
-The emitter is free to use different strategies for:
-
-* array-repeat,
-* small constant arrays,
-* nested aggregates,
-
-without the lowerer changing.
-
----
-
-### 3. Behavior per RValue kind
-
-This is the heart of what you specified:
-
-> * array repeat should be destructed to the array repeat level
-> * array literal: no destruct
-> * struct literal: always destruct as far as possible
-
-We phrase that as precise lowering rules.
-
-#### 3.1 Array repeat (`[expr; N]`)
-
-**Rule: stop at “array repeat” level.**
-
-Given a destination place `P` of type `[T; N]` and expr `E` that is an array repeat:
-
-* Lowerer emits **exactly one** `Initialize` for that place:
-
-  * `Initialize { dest = P, rvalue = ArrayRepeatRValue{ value = ..., count = N } }`.
-
-* It does **not**:
-
-  * create per-element places,
-  * emit N separate `Initialize`/`Assign`,
-  * generate any loops.
-
-Within `ArrayRepeatRValue`:
-
-* The `value` itself is lowered to an `Operand` / small RValue (as today).
-* If that value is constant-zero and `T` is zero-initializable, the emitter can later detect this and apply a `zeroinitializer`/memset policy.
-
-So for something like:
-
-```rust
-dist: [i32; 100] = [2147483647; 100];
+struct InitStatement {
+    Place dest;
+    InitPattern pattern;
+};
 ```
 
-lowerer will end with a single `Initialize` on the `dist` field place with an `ArrayRepeatRValue`. Emitter decides how to implement the 100 stores.
+## 1.2 Update StatementVariant
 
-#### 3.2 Array literal (`[e0, e1, ..., eN-1]`)
+Define the MIR statements as:
 
-start from always not destructing it, i.e. keep the array literal rvalue same as array repeat. Later we might decide to destruct if there is array with aggregated, but not now
+```cpp
+struct DefineStatement {
+    TempId dest;
+    RValue rvalue;
+};
 
-#### 3.3 Struct literal
+struct LoadStatement {
+    TempId dest;
+    Place src;
+};
 
-> “struct literal should always be destructed until it cannot”
+struct AssignStatement {
+    Place dest;
+    Operand src;
+};
 
-Here we go fully **place-destructing**:
+struct CallStatement {
+    std::optional<TempId> dest;
+    CallTarget target;
+    std::vector<Operand> args;
+};
 
-* Given struct type `S` and expr `E` that is a struct literal:
+using StatementVariant = std::variant<
+    DefineStatement,
+    LoadStatement,
+    AssignStatement,
+    CallStatement,
+    InitStatement
+>;
+```
 
-  * We **never** emit an `Initialize` for the whole `S` struct in one go.
-  * Instead, we:
+**Action:** remove `InitializeStatement` from `StatementVariant`. If the struct `InitializeStatement` still exists, it should no longer be produced by `FunctionLowerer` and is effectively dead.
 
-    * derive field places `P.field[i]` via projections,
-    * match literal fields to those indices (using your canonical field helper),
-    * recursively initialize each field place from its field expr.
+## 1.3 Utility helpers
 
-* Recursion continues until:
+In `mir::detail::FunctionLowerer` (or a nearby place):
 
-  * we hit a scalar/leaf expression, or
-  * an expression that is not a simple literal/aggregate (e.g. an `if`, method call, etc.), at which point we emit a leaf `Initialize`/`Assign` for that field.
+```cpp
+InitLeaf make_operand_leaf(Operand op) {
+    InitLeaf leaf;
+    leaf.kind = InitLeaf::Kind::Operand;
+    leaf.operand = std::move(op);
+    return leaf;
+}
 
-Struct aggregates do **not** survive as `AggregateRValue` for any output `Initialize`. Structs are always “flattened” in terms of MIR places.
+InitLeaf make_omitted_leaf() {
+    InitLeaf leaf;
+    leaf.kind = InitLeaf::Kind::Omitted;
+    return leaf;
+}
 
----
+void FunctionLowerer::emit_init_statement(Place dest, InitPattern pattern) {
+    InitStatement init_stmt;
+    init_stmt.dest = std::move(dest);
+    init_stmt.pattern = std::move(pattern);
 
-#### 3.4 scalar literals
+    Statement stmt;
+    stmt.value = std::move(init_stmt);
+    append_statement(std::move(stmt));
+}
+```
 
-Keep them as constant in the Operand, so emitter can optimize based on the value's constness. Do not use the old define and use style for const anymore.
-
-### 4. Patterns and HIR
-
-> “I think we can also think pattern as operating on expr, or it will cause trouble when we try to optimize it like what we done for a single struct?”
-
-Yes: with this design, the *interesting* work happens when we know:
-
-* the pattern binds some place(s),
-* the type(s) of those places,
-* and the exact initializer HIR expr.
-
-For now:
-
-* We only have **simple binding patterns** (plus `_`), so we only need the special case:
-
-  * resolve local → place,
-  * grab local type,
-  * run the **place-destructing init** against the initializer expr.
-
-Longer-term (tuple/struct/array patterns):
-
-* The pattern layer will:
-
-  * break a big place into sub-places according to the pattern and type,
-  * pair those sub-places with sub-expressions (if the initializer has matching structure),
-  * and call the same place-destructing init logic for each.
-
-The key point: **patterns operate on HIR exprs**, not on MIR temps, so they can reuse the same structural init machinery and avoid temp→RValue hacks.
-
----
-
-### 5. No Temp → RValue Maps
-
-One explicit anti-goal:
-
-* We **do not** track “this `TempId` came from that `RValue`” to reopen structure later.
-
-Instead:
-
-* All structural decisions are made while:
-
-  * we still have HIR expressions, and
-  * we know the destination place and type.
-
-The emitter treats MIR as a simple IR where structure is reflected only by:
-
-* `Initialize` onto specific places, with specific RValue shapes (`Constant`, `Aggregate`, `ArrayRepeat`),
-* and doesn’t need to chase def-use chains to reconstruct aggregate shapes.
+Update MIR printing/dumping to show `InitStatement` and the contents of `InitPattern` and `InitLeaf`.
 
 ---
 
-### 6. Change Plan (Targeted)
+# Phase 2 – Central Init API
 
-1. **Introduce “place-destructing init” helper in the lowerer.**
+We want a **single entry point** that all place-directed initialization goes through.
 
-   Conceptually:
+## 2.1 New top-level init function
 
-   * Takes `(expr, dest_place, dest_type)`.
-   * Applies the rules above (`struct`, `array literal` with heuristics, `array repeat`).
-   * Emits one or more `Initialize` statements for sub-places.
+In `FunctionLowerer`:
 
-2. **Use it from `let` with simple binding patterns.**
+```cpp
+void FunctionLowerer::lower_init(
+    const hir::Expr &expr,
+    Place dest,
+    TypeId dest_type
+) {
+    if (dest_type == invalid_type_id) {
+        throw std::logic_error("Destination type missing in lower_init");
+    }
 
-   * When pattern is a local binding (non-`_`), do:
+    // 1) Try specialized init logic (aggregates, etc.)
+    if (try_lower_init_outside(expr, dest, dest_type)) {
+        // fully handled dest
+        return;
+    }
 
-     * resolve place + type,
-     * call the helper.
-   * Whatever cannot be handled structurally by that helper falls back to:
+    // 2) Fallback: compute a value and assign to dest
+    Operand value = lower_operand(expr);
 
-     * existing `lower_expr` + `Assign` / `Initialize` with simpler RValues.
+    AssignStatement assign;
+    assign.dest = std::move(dest);
+    assign.src  = std::move(value);
 
-3. **Implement struct literal behavior first.**
+    Statement stmt;
+    stmt.value = std::move(assign);
+    append_statement(std::move(stmt));
+}
+```
 
-   * Always destruct fields into per-field `Initialize` or leaf operations.
-   * This is the cleanest part and already improves big structs like your `Graph`.
+From now on, any code that wants to “initialize this place from that expression” should call `lower_init`.
 
-4. **Implement array literal behavior with heuristics.**
+---
 
-   * Add the “small + aggregate → destruct” and “small const scalar → keep aggregate” split.
-   * Keep the exact thresholds configurable / tweakable.
+# Phase 3 – The Dispatcher: `try_lower_init_outside`
 
-5. **Implement array repeat behavior.**
+This is the **central decision point** for “can we do a smart structured init for this expression into this place?”
 
-   * Ensure lowering stops at array-repeat level:
+## 3.1 Signature and contract
 
-     * single `Initialize` with `ArrayRepeatRValue` per destination place.
-   * Do not unroll in lowerer.
+```cpp
+bool FunctionLowerer::try_lower_init_outside(
+    const hir::Expr &expr,
+    Place dest,
+    TypeId dest_type
+);
+```
 
-6. **Adjust emitter to treat:**
+**Contract:**
 
-   * Structs: there should no longer be struct `AggregateRValue` in top-level `Initialize` → emitter only sees field-level inits.
-   * Arrays: may still see `AggregateRValue` or `ArrayRepeatRValue` at the array place.
-   * Leaf constants, scalar RValues: same as before.
+* If it returns `true`:
 
-7. **Tests.**
+  * It has emitted all MIR needed to fully initialize `dest`.
+  * Caller must NOT emit any additional stores to `dest`.
+* If it returns `false`:
 
-   * Verify big examples like the `Graph` with combined struct/array/repeat behave as expected.
-   * Inspect generated IR for:
+  * It emitted **no** MIR.
+  * Caller must fall back (e.g., `lower_operand` + `AssignStatement`, or Operand leaf in a pattern).
 
-     * better field-wise initialization,
-     * no giant insertvalue chains where we don’t want them,
-     * array repeat represented as a single logical operation.
+## 3.2 Initial implementation
+
+We start by recognizing aggregate literal forms and delegating:
+
+```cpp
+bool FunctionLowerer::try_lower_init_outside(
+    const hir::Expr &expr,
+    Place dest,
+    TypeId dest_type
+) {
+    if (dest_type == invalid_type_id) {
+        return false;
+    }
+
+    TypeId normalized = canonicalize_type_for_mir(dest_type);
+    const type::Type &ty = type::get_type_from_id(normalized);
+
+    // Struct literal -> struct destination
+    if (auto *struct_lit = std::get_if<hir::StructLiteral>(&expr.value)) {
+        if (std::holds_alternative<type::StructType>(ty.value)) {
+            lower_struct_init(*struct_lit, std::move(dest), normalized);
+            return true;
+        }
+        return false;
+    }
+
+    // Array literal -> array destination
+    if (auto *array_lit = std::get_if<hir::ArrayLiteral>(&expr.value)) {
+        lower_array_literal_init(*array_lit, std::move(dest), normalized);
+        return true;
+    }
+
+    // Array repeat -> array destination
+    if (auto *array_rep = std::get_if<hir::ArrayRepeat>(&expr.value)) {
+        lower_array_repeat_init(*array_rep, std::move(dest), normalized);
+        return true;
+    }
+
+    // Everything else: not handled here
+    return false;
+}
+```
+
+Later, if you want special handling for other shapes (e.g., some calls), you add logic **here** so behavior is consistently used at top-level init and nested fields.
+
+---
+
+# Phase 4 – Struct Init with `InitLeaf::Omitted`
+
+The core idea:
+
+* Given a struct literal and a destination `Place dest` of that struct type:
+
+  * For each field `i`:
+
+    * Build the sub-place `dest.field[i]`.
+    * Call `try_lower_init_outside` on that field expression and sub-place.
+
+      * If it returns `true`, we know separate MIR has already initialized `dest.field[i]` → we set `InitLeaf::Omitted` for that field.
+      * Otherwise, we fall back: compute an `Operand` and set `InitLeaf::Operand`.
+
+### 4.1 Implementation
+
+In `FunctionLowerer`:
+
+```cpp
+void FunctionLowerer::lower_struct_init(
+    const hir::StructLiteral &literal,
+    Place dest,
+    TypeId dest_type
+) {
+    TypeId normalized = canonicalize_type_for_mir(dest_type);
+    auto *struct_ty =
+        std::get_if<type::StructType>(&type::get_type_from_id(normalized).value);
+    if (!struct_ty) {
+        throw std::logic_error(
+            "Struct literal init without struct destination type");
+    }
+
+    const auto &struct_info =
+        type::TypeContext::get_instance().get_struct(struct_ty->id);
+    const auto &fields = hir::helper::get_canonical_fields(literal);
+
+    if (fields.initializers.size() != struct_info.fields.size()) {
+        throw std::logic_error(
+            "Struct literal field count mismatch during struct init");
+    }
+
+    InitStruct init_struct;
+    init_struct.fields.resize(fields.initializers.size());
+
+    for (std::size_t idx = 0; idx < fields.initializers.size(); ++idx) {
+        if (!fields.initializers[idx]) {
+            throw std::logic_error(
+                "Struct literal field missing initializer during MIR lowering");
+        }
+
+        TypeId field_ty =
+            canonicalize_type_for_mir(struct_info.fields[idx].type);
+        if (field_ty == invalid_type_id) {
+            throw std::logic_error(
+                "Struct field missing resolved type during MIR lowering");
+        }
+
+        const hir::Expr &field_expr = *fields.initializers[idx];
+        auto &leaf = init_struct.fields[idx];
+
+        // Build sub-place dest.field[idx]
+        Place field_place = dest;
+        field_place.projections.push_back(FieldProjection{idx});
+
+        // Try to initialize this field via its own place-directed path:
+        if (try_lower_init_outside(field_expr, std::move(field_place), field_ty)) {
+            // Field is handled by the MIR just emitted.
+            leaf = make_omitted_leaf();
+        } else {
+            // Fall back: compute an Operand and store via InitPattern
+            Operand value = lower_operand(field_expr);
+            leaf = make_operand_leaf(std::move(value));
+        }
+    }
+
+    InitPattern pattern;
+    pattern.value = std::move(init_struct);
+    emit_init_statement(std::move(dest), std::move(pattern));
+}
+```
+
+This is the **core improvement** over the old approach: partial, per-field, place-directed init with a clear distinction (`Omitted` vs `Operand`) at the MIR level.
+
+---
+
+# Phase 5 – Array Init with the Same Pattern
+
+## 5.1 Helper: const index as Temp
+
+You probably have something like this already; if not, define it:
+
+```cpp
+TempId FunctionLowerer::materialize_const_usize(std::size_t value) {
+    Constant c = make_usize_constant(value);  // use your actual helper
+    Operand op;
+    op.value = std::move(c);
+    TypeId usize_ty = get_usize_type();       // however usize is represented
+    return materialize_operand(op, usize_ty);
+}
+```
+
+## 5.2 Array literal init
+
+Same idea: each element either gets its own place-directed init, or becomes an `Operand` leaf.
+
+```cpp
+void FunctionLowerer::lower_array_literal_init(
+    const hir::ArrayLiteral &array_literal,
+    Place dest,
+    TypeId dest_type
+) {
+    InitArrayLiteral init_array;
+    init_array.elements.resize(array_literal.elements.size());
+
+    for (std::size_t idx = 0; idx < array_literal.elements.size(); ++idx) {
+        const auto &elem_expr_ptr = array_literal.elements[idx];
+        if (!elem_expr_ptr) {
+            throw std::logic_error(
+                "Array literal element missing during MIR lowering");
+        }
+
+        const hir::Expr &elem_expr = *elem_expr_ptr;
+        auto &leaf = init_array.elements[idx];
+
+        // Build sub-place dest[idx]
+        Place elem_place = dest;
+        TempId idx_temp = materialize_const_usize(idx);
+        elem_place.projections.push_back(IndexProjection{idx_temp});
+
+        if (try_lower_init_outside(elem_expr, std::move(elem_place), dest_type /* or element type if tracked */)) {
+            leaf = make_omitted_leaf();
+        } else {
+            Operand op = lower_operand(elem_expr);
+            leaf = make_operand_leaf(std::move(op));
+        }
+    }
+
+    InitPattern pattern;
+    pattern.value = std::move(init_array);
+    emit_init_statement(std::move(dest), std::move(pattern));
+}
+```
+
+## 5.3 Array repeat init
+
+Here, we redefine the meaning of array repeat, it is not "copy the value repeat time", but "initialize the value in the first element, and then copy the first element repeat-1 time"
+So you should try init on the first element using the expr, and if omitted, the emitter will know to copy the first element to the rest of array
+
+---
+
+# Phase 6 – Hook Let-Bindings and Other Places into `lower_init`
+
+Anywhere you previously had “initialize a local from this expression” with custom logic should now call `lower_init`.
+
+Example: `lower_binding_let` (you already have a skeleton close to this):
+
+```cpp
+void FunctionLowerer::lower_binding_let(
+    const hir::BindingDef &binding,
+    const hir::Expr &init_expr
+) {
+    hir::Local *local = hir::helper::get_local(binding);
+    if (!local) {
+        throw std::logic_error("Let binding missing local during MIR lowering");
+    }
+
+    // Discard-binding `_`: we only care about side effects
+    if (local->name.name == "_") {
+        if (!lower_expr_as_rvalue(init_expr)) {
+            (void)lower_expr(init_expr);
+        }
+        return;
+    }
+
+    if (!local->type_annotation) {
+        throw std::logic_error(
+            "Let binding missing resolved type during MIR lowering");
+    }
+
+    Place dest = make_local_place(local);
+    TypeId dest_type =
+        hir::helper::get_resolved_type(*local->type_annotation);
+
+    lower_init(init_expr, std::move(dest), dest_type);
+}
+```
+
+Future pattern shapes (tuples, struct patterns, etc.) should decompose the destination into multiple sub-Places and call `lower_init` for each bound part.
+
+---
+
+# Phase 7 – Clean Up & Fix Breakage
+
+After you make these structural changes, you’ll have compile and logic errors. Resolution path for agents:
+
+1. **Delete old init helpers**:
+
+   * `emit_initialize_statement`
+   * `emit_leaf_initialize`
+   * any `lower_place_directed_init` that still uses `InitializeStatement`.
+
+2. **Replace all use sites**:
+
+   * If something used `emit_initialize_statement(expr, dest, rvalue)` → that path should now:
+
+     * either become `lower_init(expr, dest, type)`, or
+     * if it only wants “value then store”, use `lower_operand` + `AssignStatement`.
+
+3. **Update passes that inspect MIR**:
+
+   * Anywhere there’s a `std::get<InitializeStatement>` or equivalent → remove or adapt.
+   * Add handling for `InitStatement` if the pass cares about aggregates; otherwise at least don’t crash.
+
+4. **Tests**:
+
+   * Add small MIR dump tests for functions like:
+
+     ```rust
+     let s = S { a: 1, b: S { a: 2, b: 3 } };
+     let arr = [x, S { ... }, y];
+     let rep = [x; 4];
+     ```
+
+   * Confirm:
+
+     * There is an `InitStatement` for the locals.
+     * Nested struct/array literals inside fields/elements are either:
+
+       * expanded as separate init MIR into sub-places (and those slots show `Omitted`), or
+       * represented as `Operand` leaves where `try_lower_init_outside` returned false.
+
+---
+
+# Mental Model for Agents
+
+* **think in two layers**:
+
+  * *Value world* (unchanged): `RValue`, `DefineStatement`, `TempId`, `Operand`.
+  * *Init world* (new): `InitStatement` + `InitPattern` + `InitLeaf`.
+
+* **The dispatcher** `try_lower_init_outside` is the only place that decides:
+
+  * “Do we handle this expression in a special way for this destination place?”
+  * Right now, it handles aggregate literals (struct/array/array-repeat).
+
+* **Struct/array lowering code is dumb and local**:
+
+  * For each sub-slot:
+
+    * build a sub-place,
+    * call `try_lower_init_outside`,
+    * choose `Omitted` vs `Operand` leaf accordingly.
+
+* **`Omitted` is semantic**:
+
+  * If you initialized a sub-place with separate statements, you must mark that leaf `Omitted` so analyses know that slot is already handled and `InitStatement` doesn't have to touch it.
+
+That’s the plan. Agents can follow it linearly: update MIR types, implement dispatcher, wire up `lower_init`, rewrite struct/array lowering around `InitLeaf`/`InitPattern`, and then fix all the resulting compile and test failures.

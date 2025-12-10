@@ -96,6 +96,10 @@ Emitter::Emitter(mir::MirModule &module, std::string target_triple,
 
 std::string Emitter::emit() {
   emit_globals();
+
+  // Always declare builtins for array repeat and memcpy
+  module_.add_global("declare dso_local void @__builtin_array_repeat_copy(i8*, i64, i64)");
+  module_.add_global("declare i32 @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)");
   
   // Emit external function declarations first
   for (const auto &external_function : mir_module_.external_functions) {
@@ -132,16 +136,33 @@ void Emitter::emit_function(const mir::MirFunction &function) {
   block_builders_.clear();
 
   std::vector<llvmbuilder::FunctionParameter> params;
-  params.reserve(function.params.size());
+
+  bool is_sret = function.uses_sret &&
+                 function.sret_temp.has_value() &&
+                 mir::detail::is_aggregate_type(function.return_type);
+
+  if (is_sret) {
+    mir::TempId t = *function.sret_temp;
+    std::string param_name = llvmbuilder::temp_name(t);  // same as get_temp(t)
+
+    params.push_back(llvmbuilder::FunctionParameter{
+        module_.pointer_type_name(function.return_type), // T*
+        param_name
+    });
+  }
+
+  // then user params
+  params.reserve(params.size() + function.params.size());
   for (const auto &param : function.params) {
     params.push_back(
         llvmbuilder::FunctionParameter{module_.get_type_name(param.type),
                                        param.name});
   }
 
-  // Use "void" for unit return types
+  // Use "void" for unit return types or sret functions
   std::string return_type;
-  if (std::get_if<type::UnitType>(&type::get_type_from_id(function.return_type).value)) {
+  if (is_sret ||
+      std::get_if<type::UnitType>(&type::get_type_from_id(function.return_type).value)) {
     return_type = "void";
   } else {
     return_type = module_.get_type_name(function.return_type);
@@ -226,17 +247,25 @@ void Emitter::emit_entry_block_prologue() {
   auto &entry = *current_block_builder_;
   for (std::size_t idx = 0; idx < current_function_->locals.size(); ++idx) {
     const auto &local = current_function_->locals[idx];
+
+    if (local.is_alias) {
+      continue;
+    }
+
     std::string llvm_type = module_.get_type_name(local.type);
     entry.emit_alloca_into(local_ptr_name(static_cast<mir::LocalId>(idx)),
                            llvm_type, std::nullopt, std::nullopt);
   }
 
   const auto &params = current_function_builder_->parameters();
+  std::size_t first_user_param = (current_function_->sret_temp ? 1 : 0);
+
   for (std::size_t idx = 0; idx < current_function_->params.size(); ++idx) {
     const auto &param = current_function_->params[idx];
     std::string type_name = module_.get_type_name(param.type);
-    entry.emit_store(type_name, params[idx].name, type_name + "*",
-                    local_ptr_name(param.local));
+    std::string dest_ptr = get_local_ptr(param.local);
+    entry.emit_store(type_name, params[idx + first_user_param].name,
+                    pointer_type_name(param.type), dest_ptr);
   }
 }
 
@@ -246,7 +275,7 @@ void Emitter::emit_statement(const mir::Statement &statement) {
              },
              [&](const mir::LoadStatement &load) { emit_load(load); },
              [&](const mir::AssignStatement &assign) { emit_assign(assign); },
-             [&](const mir::InitializeStatement &init) { emit_initialize(init); },
+             [&](const mir::InitStatement &init) { emit_init_statement(init); },
              [&](const mir::CallStatement &call) { emit_call(call); }},
              statement.value);
 }
@@ -280,52 +309,44 @@ void Emitter::emit_assign(const mir::AssignStatement &statement) {
       pointer_type_name(dest.pointee_type), dest.pointer);
 }
 
-void Emitter::emit_initialize(const mir::InitializeStatement &init) {
-  TranslatedPlace dest = translate_place(init.dest);
+void Emitter::emit_init_statement(const mir::InitStatement &statement) {
+  // Translate the destination place to get base pointer and pointee type
+  TranslatedPlace dest = translate_place(statement.dest);
   if (dest.pointee_type == mir::invalid_type_id) {
-    throw std::logic_error("Initialize dest missing pointee type during codegen");
+    throw std::logic_error("Init destination missing pointee type during codegen");
   }
 
-  mir::TypeId ty = dest.pointee_type;
-  std::string ty_name = module_.get_type_name(ty);
-
-  std::visit(
-      Overloaded{
-          [&](const mir::ConstantRValue &c) {
-            // Scalar or constant aggregate: materialize constant and store
-            TypedOperand op =
-                materialize_constant_operand(ty, c.constant, std::nullopt);
-            current_block_builder_->emit_store(
-                op.type_name, op.value_name, pointer_type_name(ty),
-                dest.pointer);
-          },
-
-          [&](const mir::AggregateRValue &agg) {
-            emit_aggregate_init_per_field(dest.pointer, ty, agg);
-          },
-
-          [&](const mir::ArrayRepeatRValue &arr) {
-            emit_array_repeat_init_per_element(dest.pointer, ty, arr);
-          },
-
-          [&](const auto &/*other*/) {
-            // Fallback: build into temp, then store. 
-            // Note: We cannot modify current_function_->temp_types (it's const),
-            // so we create a temporary SSA value using an alloca-like pattern.
-            // For now, treat this conservatively: build into temp via emit_rvalue_into,
-            // but we need a valid TempId. Since we can't extend temp_types,
-            // we'll materialize to a local allocation or use a workaround.
-            // Actually, the simpler approach: just emit store directly via the
-            // aggregate/cast path that already handles it.
-            throw std::logic_error(
-                "Initialize fallback unimplemented: must use aggregate/array/const");
-          }},
-      init.rvalue.value);
+  // Dispatch based on the InitPattern variant
+  std::visit(Overloaded{
+      [&](const mir::InitStruct &init_struct) {
+        emit_init_struct(dest.pointer, dest.pointee_type, init_struct);
+      },
+      [&](const mir::InitArrayLiteral &init_array) {
+        emit_init_array_literal(dest.pointer, dest.pointee_type, init_array);
+      },
+      [&](const mir::InitArrayRepeat &init_array_repeat) {
+        emit_init_array_repeat(dest.pointer, dest.pointee_type, init_array_repeat);
+      },
+      [&](const mir::InitGeneral &) {
+        throw std::logic_error("InitGeneral not yet supported in emitter");
+      },
+      [&](const mir::InitCopy &copy) {
+        emit_init_copy(dest.pointer, dest.pointee_type, copy);
+      }
+  }, statement.pattern.value);
 }
 
 void Emitter::emit_call(const mir::CallStatement &statement) {
   std::vector<std::pair<std::string, std::string>> args;
-  args.reserve(statement.args.size());
+  args.reserve(statement.args.size() + (statement.sret_dest ? 1 : 0));
+
+  // If we have an sret destination, make it the first argument.
+  if (statement.sret_dest) {
+    TranslatedPlace dest = translate_place(*statement.sret_dest);
+    std::string ptr_ty = pointer_type_name(dest.pointee_type);
+    args.emplace_back(ptr_ty, dest.pointer);
+  }
+
   for (const auto &arg : statement.args) {
     auto operand = get_typed_operand(arg);
     args.emplace_back(operand.type_name, operand.value_name);
@@ -337,21 +358,15 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
 
   if (statement.target.kind == mir::CallTarget::Kind::Internal) {
     const auto& fn = mir_module_.functions.at(statement.target.id);
-    // Use "void" for unit return types
-    if (std::get_if<type::UnitType>(&type::get_type_from_id(fn.return_type).value)) {
-      ret_type = "void";
-    } else {
-      ret_type = module_.get_type_name(fn.return_type);
-    }
+    bool abi_returns_void = statement.sret_dest.has_value() ||
+      std::get_if<type::UnitType>(&type::get_type_from_id(fn.return_type).value);
+    ret_type = abi_returns_void ? "void" : module_.get_type_name(fn.return_type);
     func_name = fn.name;
   } else {
     const auto& ext_fn = mir_module_.external_functions.at(statement.target.id);
-    // Use "void" for unit return types
-    if (std::get_if<type::UnitType>(&type::get_type_from_id(ext_fn.return_type).value)) {
-      ret_type = "void";
-    } else {
-      ret_type = module_.get_type_name(ext_fn.return_type);
-    }
+    bool abi_returns_void = statement.sret_dest.has_value() ||
+      std::get_if<type::UnitType>(&type::get_type_from_id(ext_fn.return_type).value);
+    ret_type = abi_returns_void ? "void" : module_.get_type_name(ext_fn.return_type);
     func_name = ext_fn.name;
   }
 
@@ -386,32 +401,61 @@ void Emitter::emit_terminator(const mir::Terminator &terminator) {
              },
              [&](const mir::SwitchIntTerminator &switch_term) {
                auto discr = get_typed_operand(switch_term.discriminant);
-               std::vector<std::pair<std::string, std::string>> cases;
-               cases.reserve(switch_term.targets.size());
-               for (const auto &target : switch_term.targets) {
-                 cases.emplace_back(format_constant_literal(target.match_value),
-                                    block_builders_.at(target.block)->label());
+               
+               // Optimization: emit conditional branch for single-case boolean switches
+               // If this is a single-case switch on a boolean discriminant,
+               // emit as conditional branch (br i1) instead of switch statement
+               if (switch_term.targets.size() == 1 && discr.type_name == "i1") {
+                 const auto &case_target = switch_term.targets[0];
+                 // Determine which block is the true branch
+                 // If the case matches the constant value that's "true"
+                 bool case_is_true = false;
+                 if (const auto *bool_const = std::get_if<mir::BoolConstant>(&case_target.match_value.value)) {
+                   case_is_true = bool_const->value;
+                 }
+                 
+                 // Emit conditional branch
+                 // If case_is_true, then condition value leads to case block
+                 // Otherwise, condition value (false) leads to case block, so negate
+                 std::string true_label, false_label;
+                 if (case_is_true) {
+                   true_label = block_builders_.at(case_target.block)->label();
+                   false_label = block_builders_.at(switch_term.otherwise)->label();
+                 } else {
+                   true_label = block_builders_.at(switch_term.otherwise)->label();
+                   false_label = block_builders_.at(case_target.block)->label();
+                 }
+                 current_block_builder_->emit_cond_br(discr.value_name, true_label, false_label);
+               } else {
+                 // Regular switch for multi-case or non-boolean
+                 std::vector<std::pair<std::string, std::string>> cases;
+                 cases.reserve(switch_term.targets.size());
+                 for (const auto &target : switch_term.targets) {
+                   cases.emplace_back(format_constant_literal(target.match_value),
+                                      block_builders_.at(target.block)->label());
+                 }
+                 current_block_builder_->emit_switch(
+                     discr.type_name, discr.value_name,
+                     block_builders_.at(switch_term.otherwise)->label(), cases);
                }
-               current_block_builder_->emit_switch(
-                   discr.type_name, discr.value_name,
-                   block_builders_.at(switch_term.otherwise)->label(), cases);
              },
              [&](const mir::ReturnTerminator &ret) {
-              if (mir::detail::is_unit_type(current_function_->return_type)) {
-                  // For unit-returning functions, we always just 'ret void'.
-                  if(ret.value){
-                    std::cerr<<"WARNING: Unit type function have return with value, ignored\n";
+              bool abi_returns_void =
+                  mir::detail::is_unit_type(current_function_->return_type) ||
+                  current_function_->uses_sret;
+
+              if (abi_returns_void) {
+                  if (ret.value) {
+                    std::cerr << "WARNING: function with void ABI return has ReturnTerminator with value; ignoring\n";
                   }
                   current_block_builder_->emit_ret_void();
                   return;
               }
-            
-              // Non-unit / non-never function must have a value.
-              if (!ret.value) {
 
+              if (!ret.value) {
                   throw std::logic_error(
-                      "Non-unit function has ReturnTerminator without value during codegen:");
-                  }
+                      "Non-unit/non-sret function has ReturnTerminator without value during codegen:");
+              }
               auto operand = get_typed_operand(*ret.value);
               current_block_builder_->emit_ret(operand.type_name,
                                                operand.value_name);
@@ -469,7 +513,7 @@ TranslatedPlace Emitter::translate_place(const mir::Place &place) {
                                     .value();
                },
                [&](const mir::IndexProjection &index_proj) {
-                 auto index_operand = get_typed_operand(mir::Operand{index_proj.index});
+                 auto index_operand = get_typed_operand(index_proj.index);
                  indices.emplace_back(index_operand.type_name, index_operand.value_name);
                  current_type =
                      type::helper::type_helper::array_element(current_type).value();
@@ -740,95 +784,6 @@ void Emitter::emit_field_access_rvalue_into(
       {static_cast<unsigned>(value.index)});
 }
 
-void Emitter::emit_aggregate_init_per_field(
-    const std::string &base_ptr,
-    mir::TypeId aggregate_type,
-    const mir::AggregateRValue &agg) {
-  std::string aggregate_type_name = module_.get_type_name(aggregate_type);
-
-  switch (agg.kind) {
-  case mir::AggregateRValue::Kind::Struct: {
-    // For each field: GEP -> store
-    for (std::size_t idx = 0; idx < agg.elements.size(); ++idx) {
-      auto elem_operand = get_typed_operand(agg.elements[idx]);
-
-      // Compute field pointer: gep base, 0, idx
-      std::vector<std::pair<std::string, std::string>> indices;
-      indices.emplace_back("i32", "0");
-      indices.emplace_back("i32", std::to_string(idx));
-
-      std::string field_ptr = current_block_builder_->emit_getelementptr(
-          aggregate_type_name, pointer_type_name(aggregate_type), base_ptr,
-          indices, true, "field");
-
-      // Store element
-      current_block_builder_->emit_store(
-          elem_operand.type_name, elem_operand.value_name,
-          pointer_type_name(elem_operand.type), field_ptr);
-    }
-    break;
-  }
-
-  case mir::AggregateRValue::Kind::Array: {
-    for (std::size_t idx = 0; idx < agg.elements.size(); ++idx) {
-      auto elem_operand = get_typed_operand(agg.elements[idx]);
-
-      std::vector<std::pair<std::string, std::string>> indices;
-      indices.emplace_back("i32", "0");
-      indices.emplace_back("i32", std::to_string(idx));
-
-      std::string elem_ptr = current_block_builder_->emit_getelementptr(
-          aggregate_type_name, pointer_type_name(aggregate_type), base_ptr,
-          indices, true, "elem");
-
-      current_block_builder_->emit_store(
-          elem_operand.type_name, elem_operand.value_name,
-          pointer_type_name(elem_operand.type), elem_ptr);
-    }
-    break;
-  }
-  }
-}
-
-void Emitter::emit_array_repeat_init_per_element(
-    const std::string &base_ptr,
-    mir::TypeId array_type_id,
-    const mir::ArrayRepeatRValue &value) {
-  const auto &resolved = type::get_type_from_id(array_type_id);
-  const auto *array_type = std::get_if<type::ArrayType>(&resolved.value);
-  if (!array_type) {
-    throw std::logic_error(
-        "Array repeat init requires array destination type");
-  }
-
-  std::string array_type_name = module_.get_type_name(array_type_id);
-
-  // Simple and effective optimization: zero repeat on zero-initializable type.
-  if (is_const_zero(value.value) &&
-      type::helper::type_helper::is_zero_initializable(
-          array_type->element_type)) {
-    current_block_builder_->emit_store(array_type_name, "zeroinitializer",
-                                       pointer_type_name(array_type_id),
-                                       base_ptr);
-    return;
-  }
-
-  auto element_operand = get_typed_operand(value.value);
-  for (std::size_t idx = 0; idx < value.count; ++idx) {
-    std::vector<std::pair<std::string, std::string>> indices;
-    indices.emplace_back("i32", "0");
-    indices.emplace_back("i32", std::to_string(idx));
-
-    std::string elem_ptr = current_block_builder_->emit_getelementptr(
-        array_type_name, pointer_type_name(array_type_id), base_ptr, indices,
-        true, "elem");
-
-    current_block_builder_->emit_store(
-        element_operand.type_name, element_operand.value_name,
-        pointer_type_name(element_operand.type), elem_ptr);
-  }
-}
-
 std::string Emitter::get_temp(mir::TempId temp) {
   return llvmbuilder::temp_name(temp);
 }
@@ -837,6 +792,15 @@ std::string Emitter::get_local_ptr(mir::LocalId local) {
   if (local >= current_function_->locals.size()) {
     throw std::out_of_range("Invalid LocalId");
   }
+  const auto &info = current_function_->locals[local];
+
+  if (info.is_alias) {
+    if (!info.alias_temp) {
+      throw std::logic_error("Alias local missing alias_temp");
+    }
+    return get_temp(*info.alias_temp);
+  }
+
   return local_ptr_name(local);
 }
 
@@ -921,6 +885,256 @@ TypedOperand Emitter::emit_string_constant_operand(mir::TypeId type,
   return TypedOperand{.type_name = std::move(dest_type_name),
                       .value_name = forced_name ? *forced_name : std::move(value_name),
                       .type = type};
+}
+
+std::string Emitter::emit_sizeof_bytes(mir::TypeId type) {
+  std::string ty_name = module_.get_type_name(type);
+  std::string ptr_ty  = module_.pointer_type_name(type);
+
+
+  // %p = getelementptr T, T* null, i32 1
+  std::vector<std::pair<std::string, std::string>> indices;
+  indices.emplace_back("i32", "1");
+
+  std::string gep = current_block_builder_->emit_getelementptr(
+      ty_name,           // pointee type
+      ptr_ty,            // pointer type
+      "null",            // pointer value
+      indices,
+      /*inbounds=*/true,
+      "sizeof.gep");
+
+  // %size = ptrtoint T* %p to i64
+  return current_block_builder_->emit_cast(
+      "ptrtoint",
+      ptr_ty,            // value type
+      gep,
+      "i64",             // integer type for size
+      "sizeof");
+}
+
+// ===== InitPattern-based initialization helpers =====
+
+void Emitter::emit_init_struct(const std::string &base_ptr,
+                                mir::TypeId struct_type,
+                                const mir::InitStruct &init_struct) {
+  std::string struct_type_name = module_.get_type_name(struct_type);
+
+  // For each field in the struct:
+  for (std::size_t field_idx = 0; field_idx < init_struct.fields.size(); ++field_idx) {
+    const auto &leaf = init_struct.fields[field_idx];
+
+    // Skip Omitted leaves (already initialized by other statements)
+    if (leaf.kind == mir::InitLeaf::Kind::Omitted) {
+      continue;
+    }
+
+    // Get the operand value
+    auto operand = get_typed_operand(leaf.operand);
+
+    // Compute field pointer: gep struct, 0, field_idx
+    std::vector<std::pair<std::string, std::string>> indices;
+    indices.emplace_back("i32", "0");
+    indices.emplace_back("i32", std::to_string(field_idx));
+
+    std::string field_ptr = current_block_builder_->emit_getelementptr(
+        struct_type_name,
+        pointer_type_name(struct_type),
+        base_ptr,
+        indices,
+        /*inbounds=*/true,
+        "field");
+
+    // Store the operand into the field
+    current_block_builder_->emit_store(
+        operand.type_name,
+        operand.value_name,
+        pointer_type_name(operand.type),
+        field_ptr);
+  }
+}
+
+void Emitter::emit_init_array_literal(const std::string &base_ptr,
+                                      mir::TypeId array_type,
+                                      const mir::InitArrayLiteral &init_array) {
+  std::string array_type_name = module_.get_type_name(array_type);
+
+  // For each element in the array literal:
+  for (std::size_t elem_idx = 0; elem_idx < init_array.elements.size(); ++elem_idx) {
+    const auto &leaf = init_array.elements[elem_idx];
+
+    // Skip Omitted leaves (already initialized by other statements)
+    if (leaf.kind == mir::InitLeaf::Kind::Omitted) {
+      continue;
+    }
+
+    // Get the operand value
+    auto operand = get_typed_operand(leaf.operand);
+
+    // Compute element pointer: gep array, 0, elem_idx
+    std::vector<std::pair<std::string, std::string>> indices;
+    indices.emplace_back("i32", "0");
+    indices.emplace_back("i32", std::to_string(elem_idx));
+
+    std::string elem_ptr = current_block_builder_->emit_getelementptr(
+        array_type_name,
+        pointer_type_name(array_type),
+        base_ptr,
+        indices,
+        /*inbounds=*/true,
+        "elem");
+
+    // Store the operand into the element
+    current_block_builder_->emit_store(
+        operand.type_name,
+        operand.value_name,
+        pointer_type_name(operand.type),
+        elem_ptr);
+  }
+}
+
+void Emitter::emit_init_array_repeat(const std::string &base_ptr,
+                                     mir::TypeId array_type,
+                                     const mir::InitArrayRepeat &init_array_repeat) {
+  const auto &resolved = type::get_type_from_id(array_type);
+  const auto *array_type_info = std::get_if<type::ArrayType>(&resolved.value);
+  if (!array_type_info) {
+    throw std::logic_error(
+        "Array repeat init requires array destination type");
+  }
+
+  const auto &element_leaf = init_array_repeat.element;
+  const std::size_t count = init_array_repeat.count;
+
+  // If count == 0, nothing to do
+  if (count == 0) {
+    return;
+  }
+
+  // Handle Omitted leaf: assume element[0] is already initialized
+  if (element_leaf.kind == mir::InitLeaf::Kind::Omitted) {
+    // Bitcast base_ptr to i8*
+    std::string byte_ptr = current_block_builder_->emit_cast(
+        "bitcast",
+        pointer_type_name(array_type),
+        base_ptr,
+        "i8*",
+        "repeat.ptr");
+
+    // Emit sizeof(element_type)
+    std::string elem_size = emit_sizeof_bytes(array_type_info->element_type);
+
+    // Call __builtin_array_repeat_copy(elem0_ptr, elem_size, count)
+    // Note: we're passing the base pointer directly since elem[0] is already at that location
+    std::vector<std::pair<std::string, std::string>> args;
+    args.emplace_back("i8*", byte_ptr);
+    args.emplace_back("i64", elem_size);
+    args.emplace_back("i64", std::to_string(count));
+
+    current_block_builder_->emit_call(
+        "void",
+        "__builtin_array_repeat_copy",
+        args,
+        "");
+    return;
+  }
+
+  // Handle Operand leaf
+  auto element_operand = get_typed_operand(element_leaf.operand);
+
+  // Optimize: if the operand is zero and element type is zero-initializable,
+  // use zeroinitializer
+  //if (is_const_zero(element_leaf.operand) &&
+  //    type::helper::type_helper::is_zero_initializable(array_type_info->element_type)) {
+  //  std::string array_type_name = module_.get_type_name(array_type);
+  //  current_block_builder_->emit_store(
+  //      array_type_name,
+  //      "zeroinitializer",
+  //      pointer_type_name(array_type),
+  //      base_ptr);
+  //  return;
+  //}
+  // DO NOT do that since zeroinitializer produce huge sw blocks. Use memset if needed.
+
+
+  // Standard path: store element[0], then use __builtin_array_repeat_copy for the rest
+
+  // 1) Compute pointer to element 0: gep [count x T]* base, 0, 0
+  std::vector<std::pair<std::string, std::string>> indices;
+  indices.emplace_back("i32", "0");
+  indices.emplace_back("i32", "0");
+
+  std::string array_type_name = module_.get_type_name(array_type);
+  std::string elem0_ptr = current_block_builder_->emit_getelementptr(
+      array_type_name,
+      pointer_type_name(array_type),
+      base_ptr,
+      indices,
+      /*inbounds=*/true,
+      "elem0");
+
+  // 2) Store the element value at element[0]
+  current_block_builder_->emit_store(
+      element_operand.type_name,
+      element_operand.value_name,
+      pointer_type_name(array_type_info->element_type),
+      elem0_ptr);
+
+  // If count == 1, we're done
+  if (count == 1) {
+    return;
+  }
+
+  // 3) Compute sizeof(element_type)
+  std::string elem_size = emit_sizeof_bytes(array_type_info->element_type);
+
+  // 4) Bitcast elem0_ptr to i8*
+  std::string byte_ptr = current_block_builder_->emit_cast(
+      "bitcast",
+      pointer_type_name(array_type_info->element_type),
+      elem0_ptr,
+      "i8*",
+      "repeat.ptr");
+
+  // 5) Call __builtin_array_repeat_copy(elem0_ptr, elem_size, count)
+  std::vector<std::pair<std::string, std::string>> args;
+  args.emplace_back("i8*", byte_ptr);
+  args.emplace_back("i64", elem_size);
+  args.emplace_back("i64", std::to_string(count));
+
+  current_block_builder_->emit_call(
+      "void",
+      "__builtin_array_repeat_copy",
+      args,
+      "");
+}
+
+void Emitter::emit_init_copy(const std::string &dest_ptr,
+                             mir::TypeId dest_type,
+                             const mir::InitCopy &copy) {
+  TranslatedPlace src = translate_place(copy.src);
+  if (src.pointee_type != dest_type) {
+    throw std::logic_error("InitCopy type mismatch between src and dest");
+  }
+
+  if (src.pointer == dest_ptr) {
+    return;
+  }
+
+  std::string size = emit_sizeof_bytes(dest_type);
+
+  std::string dest_byte_ptr = current_block_builder_->emit_cast(
+      "bitcast", pointer_type_name(dest_type), dest_ptr, "i8*", "cpy.dest");
+  std::string src_byte_ptr = current_block_builder_->emit_cast(
+      "bitcast", pointer_type_name(dest_type), src.pointer, "i8*", "cpy.src");
+
+  std::vector<std::pair<std::string, std::string>> args;
+  args.emplace_back("i8*", dest_byte_ptr);
+  args.emplace_back("i8*", src_byte_ptr);
+  args.emplace_back("i64", size);
+  args.emplace_back("i1", "false");
+
+  current_block_builder_->emit_call("i32", "llvm.memcpy.p0i8.p0i8.i64", args, "");
 }
 
 } // namespace codegen
