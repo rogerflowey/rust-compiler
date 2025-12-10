@@ -56,16 +56,18 @@ private:
 	std::vector<std::pair<const void*, LoopContext>> loop_stack;
 	size_t synthetic_local_counter = 0;
 
-	// SRET support
-	bool uses_sret_ = false;
-	std::optional<Place> return_place_;  // where returns should store result, if sret
+        // SRET support
+        bool uses_sret_ = false;
+        std::optional<Place> return_place_;  // where returns should store result, if sret
+        const hir::Local* nrvo_local_ = nullptr;
 
 	void initialize(FunctionId id, std::string name);
 	const hir::Block* get_body() const;
 	const std::vector<std::unique_ptr<hir::Local>>& get_locals_vector() const;
 	TypeId resolve_return_type() const;
-	void init_locals();
-	mir::FunctionRef lookup_function(const void* key) const; // NEW: Returns FunctionRef
+        void init_locals();
+        const hir::Local* pick_nrvo_local() const;
+        mir::FunctionRef lookup_function(const void* key) const; // NEW: Returns FunctionRef
 	std::optional<Operand> emit_call(mir::FunctionRef target, TypeId result_type, std::vector<Operand>&& args);
 	bool function_uses_sret(const hir::Function &fn) const;
 	bool method_uses_sret(const hir::Method &m) const;

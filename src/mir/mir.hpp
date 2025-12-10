@@ -31,6 +31,9 @@ using FunctionRef = std::variant<MirFunction*, ExternalFunction*>;
 struct LocalInfo {
     TypeId type = invalid_type_id;
     std::string debug_name;
+
+    bool is_alias = false;
+    std::optional<TempId> alias_temp;
 };
 
 struct FunctionParameter {
@@ -252,8 +255,12 @@ struct InitGeneral { // Unused currently
     InitLeaf value;
 };
 
+struct InitCopy {
+    Place src;
+};
+
 using InitPatternVariant =
-    std::variant<InitStruct, InitArrayLiteral, InitArrayRepeat, InitGeneral>;
+    std::variant<InitStruct, InitArrayLiteral, InitArrayRepeat, InitGeneral, InitCopy>;
 
 struct InitPattern {
     InitPatternVariant value;

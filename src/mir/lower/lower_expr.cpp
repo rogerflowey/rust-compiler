@@ -6,6 +6,38 @@
 #include "type/type.hpp"
 #include <stdexcept>
 
+namespace {
+
+bool are_places_definitely_disjoint(const mir::Place &a, const mir::Place &b) {
+  if (std::holds_alternative<mir::PointerPlace>(a.base) ||
+      std::holds_alternative<mir::PointerPlace>(b.base)) {
+    return false;
+  }
+
+  if ((std::holds_alternative<mir::LocalPlace>(a.base) &&
+       std::holds_alternative<mir::GlobalPlace>(b.base)) ||
+      (std::holds_alternative<mir::GlobalPlace>(a.base) &&
+       std::holds_alternative<mir::LocalPlace>(b.base))) {
+    return true;
+  }
+
+  if (const auto *lhs_local = std::get_if<mir::LocalPlace>(&a.base)) {
+    if (const auto *rhs_local = std::get_if<mir::LocalPlace>(&b.base)) {
+      return lhs_local->id != rhs_local->id;
+    }
+  }
+
+  if (const auto *lhs_global = std::get_if<mir::GlobalPlace>(&a.base)) {
+    if (const auto *rhs_global = std::get_if<mir::GlobalPlace>(&b.base)) {
+      return lhs_global->global != rhs_global->global;
+    }
+  }
+
+  return false;
+}
+
+} // namespace
+
 namespace mir::detail {
 
 Operand FunctionLowerer::load_place_value(Place place, TypeId type) {
@@ -365,6 +397,33 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
     }
     return std::nullopt;
   }
+
+  semantic::ExprInfo lhs_info = hir::helper::get_expr_info(*assignment.lhs);
+  semantic::ExprInfo rhs_info = hir::helper::get_expr_info(*assignment.rhs);
+
+  if (lhs_info.is_place && rhs_info.is_place && lhs_info.has_type &&
+      rhs_info.has_type && lhs_info.type == rhs_info.type &&
+      is_aggregate_type(lhs_info.type)) {
+
+    Place dest_place = lower_expr_place(*assignment.lhs);
+    Place src_place = lower_expr_place(*assignment.rhs);
+
+    if (are_places_definitely_disjoint(dest_place, src_place)) {
+      InitCopy copy{.src = std::move(src_place)};
+      InitPattern pattern;
+      pattern.value = std::move(copy);
+
+      InitStatement init_stmt;
+      init_stmt.dest = std::move(dest_place);
+      init_stmt.pattern = std::move(pattern);
+
+      Statement stmt;
+      stmt.value = std::move(init_stmt);
+      append_statement(std::move(stmt));
+      return std::nullopt;
+    }
+  }
+
   Place dest = lower_expr_place(*assignment.lhs);
   Operand value = expect_operand(lower_expr(*assignment.rhs),
                                  "Assignment rhs must produce value");
