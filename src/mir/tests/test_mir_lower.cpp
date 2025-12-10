@@ -1165,19 +1165,20 @@ TEST(MirLowerTest, LowersStructLiteralAggregate) {
     function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
+    // With SRET support, aggregate return types should create sret_temp
+    ASSERT_TRUE(lowered.uses_sret);
+    ASSERT_TRUE(lowered.sret_temp.has_value());
+    
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
     
-    ASSERT_TRUE(std::holds_alternative<mir::DefineStatement>(block.statements[0].value));
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::AggregateRValue>(define_stmt.rvalue.value));
-    const auto& aggregate = std::get<mir::AggregateRValue>(define_stmt.rvalue.value);
-    EXPECT_EQ(aggregate.kind, mir::AggregateRValue::Kind::Struct);
-    ASSERT_EQ(aggregate.elements.size(), 2u);
-    // Elements should be ConstOperands now due to optimization
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[0].value));
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[1].value));
+    // Now we should have an InitStatement instead of DefineStatement
+    ASSERT_TRUE(std::holds_alternative<mir::InitStatement>(block.statements[0].value));
+    const auto& init_stmt = std::get<mir::InitStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::InitStruct>(init_stmt.pattern.value));
+    const auto& init_struct = std::get<mir::InitStruct>(init_stmt.pattern.value);
+    ASSERT_EQ(init_struct.fields.size(), 2u);
 }
 
 TEST(MirLowerTest, LowersArrayLiteralAggregate) {
@@ -1200,18 +1201,20 @@ TEST(MirLowerTest, LowersArrayLiteralAggregate) {
     function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
+    // With SRET support, aggregate return types should create sret_temp
+    ASSERT_TRUE(lowered.uses_sret);
+    ASSERT_TRUE(lowered.sret_temp.has_value());
+    
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
     
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::AggregateRValue>(define_stmt.rvalue.value));
-    const auto& aggregate = std::get<mir::AggregateRValue>(define_stmt.rvalue.value);
-    EXPECT_EQ(aggregate.kind, mir::AggregateRValue::Kind::Array);
-    ASSERT_EQ(aggregate.elements.size(), 2u);
-    // Elements should be ConstOperands now due to optimization
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[0].value));
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(aggregate.elements[1].value));
+    // Now we should have an InitStatement instead of DefineStatement
+    ASSERT_TRUE(std::holds_alternative<mir::InitStatement>(block.statements[0].value));
+    const auto& init_stmt = std::get<mir::InitStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::InitArrayLiteral>(init_stmt.pattern.value));
+    const auto& init_array = std::get<mir::InitArrayLiteral>(init_stmt.pattern.value);
+    ASSERT_EQ(init_array.elements.size(), 2u);
 }
 
 TEST(MirLowerTest, LowersArrayRepeatAggregate) {
@@ -1234,16 +1237,20 @@ TEST(MirLowerTest, LowersArrayRepeatAggregate) {
     function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
+    // With SRET support, aggregate return types should create sret_temp
+    ASSERT_TRUE(lowered.uses_sret);
+    ASSERT_TRUE(lowered.sret_temp.has_value());
+    
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     ASSERT_EQ(block.statements.size(), 1u);
     
-    const auto& define_stmt = std::get<mir::DefineStatement>(block.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::ArrayRepeatRValue>(define_stmt.rvalue.value));
-    const auto& repeat = std::get<mir::ArrayRepeatRValue>(define_stmt.rvalue.value);
-    EXPECT_EQ(repeat.count, 3u);
-    // The literal is now optimized to a direct Constant operand, not a temp
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(repeat.value.value));
+    // Now we should have an InitStatement instead of DefineStatement
+    ASSERT_TRUE(std::holds_alternative<mir::InitStatement>(block.statements[0].value));
+    const auto& init_stmt = std::get<mir::InitStatement>(block.statements[0].value);
+    ASSERT_TRUE(std::holds_alternative<mir::InitArrayRepeat>(init_stmt.pattern.value));
+    const auto& init_repeat = std::get<mir::InitArrayRepeat>(init_stmt.pattern.value);
+    EXPECT_EQ(init_repeat.count, 3u);
 }
 
 TEST(MirLowerTest, LowersMethodCallWithReceiver) {

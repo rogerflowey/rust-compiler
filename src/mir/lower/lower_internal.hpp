@@ -56,6 +56,10 @@ private:
 	std::vector<std::pair<const void*, LoopContext>> loop_stack;
 	size_t synthetic_local_counter = 0;
 
+	// SRET support
+	bool uses_sret_ = false;
+	std::optional<Place> return_place_;  // where returns should store result, if sret
+
 	void initialize(FunctionId id, std::string name);
 	const hir::Block* get_body() const;
 	const std::vector<std::unique_ptr<hir::Local>>& get_locals_vector() const;
@@ -63,6 +67,11 @@ private:
 	void init_locals();
 	mir::FunctionRef lookup_function(const void* key) const; // NEW: Returns FunctionRef
 	std::optional<Operand> emit_call(mir::FunctionRef target, TypeId result_type, std::vector<Operand>&& args);
+	bool function_uses_sret(const hir::Function &fn) const;
+	bool method_uses_sret(const hir::Method &m) const;
+	void emit_call_into_place(mir::FunctionRef target, TypeId result_type, Place dest, std::vector<Operand> &&args);
+	bool try_lower_init_call(const hir::Call &call_expr, Place dest, TypeId dest_type);
+	bool try_lower_init_method_call(const hir::MethodCall &mcall, Place dest, TypeId dest_type);
 	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
 	Operand emit_array_repeat(Operand value, std::size_t count, TypeId result_type);
 	void emit_init_statement(Place dest, InitPattern pattern);

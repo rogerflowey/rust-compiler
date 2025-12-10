@@ -271,9 +271,12 @@ struct CallTarget {
 };
 
 struct CallStatement {
-    std::optional<TempId> dest;
+    std::optional<TempId> dest;      // normal value return (non-sret)
     CallTarget target;
     std::vector<Operand> args;
+
+    // If set, callee must write its result into this place (sret-style).
+    std::optional<Place> sret_dest;
 };
 
 using StatementVariant = std::variant<DefineStatement, LoadStatement, AssignStatement, InitStatement, CallStatement>;
@@ -344,6 +347,11 @@ struct MirFunction {
     std::vector<BasicBlock> basic_blocks;
     BasicBlockId start_block = 0;
     TypeId return_type = invalid_type_id;
+
+    // SRET support: if uses_sret is true, the callee receives an implicit first
+    // parameter (the return destination pointer), and returns void.
+    bool uses_sret = false;
+    std::optional<TempId> sret_temp;  // temp holding the sret pointer (&return_type)
 
     [[nodiscard]] TypeId get_temp_type(TempId temp) const {
         if (temp >= temp_types.size()) {

@@ -211,7 +211,7 @@ def main() -> int:
             (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
             continue
 
-        result_clang = run_cmd([clang, "-S", f"--target={args.target}", str(ir_path), "-o", str(asm_source)])
+        result_clang = run_cmd([clang, "-S", "-O2", f"--target={args.target}", str(ir_path), "-o", str(asm_source)])
         log_lines.append("== clang ==")
         if result_clang.stdout:
             log_lines.append(result_clang.stdout.rstrip())

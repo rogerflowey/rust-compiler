@@ -429,6 +429,12 @@ FunctionLowerer::lower_expr_impl(const hir::Call &call_expr,
     throw std::logic_error(
         "Call expression callee is not a resolved function use");
   }
+
+  const hir::Function *hir_fn = func_use->def;
+  bool use_sret = function_uses_sret(*hir_fn);
+
+  mir::FunctionRef target = lookup_function(hir_fn);
+
   std::vector<Operand> args;
   args.reserve(call_expr.args.size());
   for (const auto &arg : call_expr.args) {
@@ -437,8 +443,18 @@ FunctionLowerer::lower_expr_impl(const hir::Call &call_expr,
     }
     args.push_back(lower_operand(*arg));
   }
-  mir::FunctionRef target = lookup_function(func_use->def);
-  return emit_call(target, info.type, std::move(args));
+
+  if (!use_sret) {
+    // current behavior
+    return emit_call(target, info.type, std::move(args));
+  }
+
+  // sret in expression context: create a synthetic local + load
+  LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
+  Place dest_place = make_local_place(tmp_local);
+
+  emit_call_into_place(target, info.type, dest_place, std::move(args));
+  return load_place_value(std::move(dest_place), info.type);
 }
 
 std::optional<Operand>
@@ -448,10 +464,14 @@ FunctionLowerer::lower_expr_impl(const hir::MethodCall &method_call,
   if (!method_call.receiver) {
     throw std::logic_error("Method call missing receiver during MIR lowering");
   }
+
+  bool use_sret = method_uses_sret(*method_def);
   mir::FunctionRef target = lookup_function(method_def);
+
   std::vector<Operand> args;
   args.reserve(method_call.args.size() + 1);
   args.push_back(lower_operand(*method_call.receiver));
+
   for (const auto &arg : method_call.args) {
     if (!arg) {
       throw std::logic_error(
@@ -459,7 +479,18 @@ FunctionLowerer::lower_expr_impl(const hir::MethodCall &method_call,
     }
     args.push_back(lower_operand(*arg));
   }
-  return emit_call(target, info.type, std::move(args));
+
+  if (!use_sret) {
+    // current behavior
+    return emit_call(target, info.type, std::move(args));
+  }
+
+  // sret in expression context: create a synthetic local + load
+  LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
+  Place dest_place = make_local_place(tmp_local);
+
+  emit_call_into_place(target, info.type, dest_place, std::move(args));
+  return load_place_value(std::move(dest_place), info.type);
 }
 
 std::optional<Operand>
@@ -756,6 +787,21 @@ FunctionLowerer::lower_return_expr(const hir::Return &return_expr) {
     }
     UnreachableTerminator term{};
     terminate_current_block(Terminator{std::move(term)});
+    return std::nullopt;
+  }
+
+  if (uses_sret_) {
+    if (!return_expr.value || !*return_expr.value) {
+      throw std::logic_error(
+          "sret function requires explicit return value");
+    }
+    if (!return_place_) {
+      throw std::logic_error("sret function missing return_place");
+    }
+
+    // Write into sret destination
+    lower_init(**return_expr.value, *return_place_, mir_function.return_type);
+    emit_return(std::nullopt);
     return std::nullopt;
   }
 

@@ -147,16 +147,33 @@ void Emitter::emit_function(const mir::MirFunction &function) {
   block_builders_.clear();
 
   std::vector<llvmbuilder::FunctionParameter> params;
-  params.reserve(function.params.size());
+
+  bool is_sret = function.uses_sret &&
+                 function.sret_temp.has_value() &&
+                 mir::detail::is_aggregate_type(function.return_type);
+
+  if (is_sret) {
+    mir::TempId t = *function.sret_temp;
+    std::string param_name = llvmbuilder::temp_name(t);  // same as get_temp(t)
+
+    params.push_back(llvmbuilder::FunctionParameter{
+        module_.pointer_type_name(function.return_type), // T*
+        param_name
+    });
+  }
+
+  // then user params
+  params.reserve(params.size() + function.params.size());
   for (const auto &param : function.params) {
     params.push_back(
         llvmbuilder::FunctionParameter{module_.get_type_name(param.type),
                                        param.name});
   }
 
-  // Use "void" for unit return types
+  // Use "void" for unit return types or sret functions
   std::string return_type;
-  if (std::get_if<type::UnitType>(&type::get_type_from_id(function.return_type).value)) {
+  if (is_sret ||
+      std::get_if<type::UnitType>(&type::get_type_from_id(function.return_type).value)) {
     return_type = "void";
   } else {
     return_type = module_.get_type_name(function.return_type);
@@ -247,10 +264,12 @@ void Emitter::emit_entry_block_prologue() {
   }
 
   const auto &params = current_function_builder_->parameters();
+  std::size_t first_user_param = (current_function_->sret_temp ? 1 : 0);
+
   for (std::size_t idx = 0; idx < current_function_->params.size(); ++idx) {
     const auto &param = current_function_->params[idx];
     std::string type_name = module_.get_type_name(param.type);
-    entry.emit_store(type_name, params[idx].name, type_name + "*",
+    entry.emit_store(type_name, params[idx + first_user_param].name, type_name + "*",
                     local_ptr_name(param.local));
   }
 }
@@ -321,7 +340,15 @@ void Emitter::emit_init_statement(const mir::InitStatement &statement) {
 
 void Emitter::emit_call(const mir::CallStatement &statement) {
   std::vector<std::pair<std::string, std::string>> args;
-  args.reserve(statement.args.size());
+  args.reserve(statement.args.size() + (statement.sret_dest ? 1 : 0));
+
+  // If we have an sret destination, make it the first argument.
+  if (statement.sret_dest) {
+    TranslatedPlace dest = translate_place(*statement.sret_dest);
+    std::string ptr_ty = pointer_type_name(dest.pointee_type);
+    args.emplace_back(ptr_ty, dest.pointer);
+  }
+
   for (const auto &arg : statement.args) {
     auto operand = get_typed_operand(arg);
     args.emplace_back(operand.type_name, operand.value_name);
@@ -333,21 +360,15 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
 
   if (statement.target.kind == mir::CallTarget::Kind::Internal) {
     const auto& fn = mir_module_.functions.at(statement.target.id);
-    // Use "void" for unit return types
-    if (std::get_if<type::UnitType>(&type::get_type_from_id(fn.return_type).value)) {
-      ret_type = "void";
-    } else {
-      ret_type = module_.get_type_name(fn.return_type);
-    }
+    bool abi_returns_void = statement.sret_dest.has_value() ||
+      std::get_if<type::UnitType>(&type::get_type_from_id(fn.return_type).value);
+    ret_type = abi_returns_void ? "void" : module_.get_type_name(fn.return_type);
     func_name = fn.name;
   } else {
     const auto& ext_fn = mir_module_.external_functions.at(statement.target.id);
-    // Use "void" for unit return types
-    if (std::get_if<type::UnitType>(&type::get_type_from_id(ext_fn.return_type).value)) {
-      ret_type = "void";
-    } else {
-      ret_type = module_.get_type_name(ext_fn.return_type);
-    }
+    bool abi_returns_void = statement.sret_dest.has_value() ||
+      std::get_if<type::UnitType>(&type::get_type_from_id(ext_fn.return_type).value);
+    ret_type = abi_returns_void ? "void" : module_.get_type_name(ext_fn.return_type);
     func_name = ext_fn.name;
   }
 
@@ -393,21 +414,22 @@ void Emitter::emit_terminator(const mir::Terminator &terminator) {
                    block_builders_.at(switch_term.otherwise)->label(), cases);
              },
              [&](const mir::ReturnTerminator &ret) {
-              if (mir::detail::is_unit_type(current_function_->return_type)) {
-                  // For unit-returning functions, we always just 'ret void'.
-                  if(ret.value){
-                    std::cerr<<"WARNING: Unit type function have return with value, ignored\n";
+              bool abi_returns_void =
+                  mir::detail::is_unit_type(current_function_->return_type) ||
+                  current_function_->uses_sret;
+
+              if (abi_returns_void) {
+                  if (ret.value) {
+                    std::cerr << "WARNING: function with void ABI return has ReturnTerminator with value; ignoring\n";
                   }
                   current_block_builder_->emit_ret_void();
                   return;
               }
-            
-              // Non-unit / non-never function must have a value.
-              if (!ret.value) {
 
+              if (!ret.value) {
                   throw std::logic_error(
-                      "Non-unit function has ReturnTerminator without value during codegen:");
-                  }
+                      "Non-unit/non-sret function has ReturnTerminator without value during codegen:");
+              }
               auto operand = get_typed_operand(*ret.value);
               current_block_builder_->emit_ret(operand.type_name,
                                                operand.value_name);
@@ -987,16 +1009,18 @@ void Emitter::emit_init_array_repeat(const std::string &base_ptr,
 
   // Optimize: if the operand is zero and element type is zero-initializable,
   // use zeroinitializer
-  if (is_const_zero(element_leaf.operand) &&
-      type::helper::type_helper::is_zero_initializable(array_type_info->element_type)) {
-    std::string array_type_name = module_.get_type_name(array_type);
-    current_block_builder_->emit_store(
-        array_type_name,
-        "zeroinitializer",
-        pointer_type_name(array_type),
-        base_ptr);
-    return;
-  }
+  //if (is_const_zero(element_leaf.operand) &&
+  //    type::helper::type_helper::is_zero_initializable(array_type_info->element_type)) {
+  //  std::string array_type_name = module_.get_type_name(array_type);
+  //  current_block_builder_->emit_store(
+  //      array_type_name,
+  //      "zeroinitializer",
+  //      pointer_type_name(array_type),
+  //      base_ptr);
+  //  return;
+  //}
+  // DO NOT do that since zeroinitializer produce huge sw blocks. Use memset if needed.
+
 
   // Standard path: store element[0], then use __builtin_array_repeat_copy for the rest
 

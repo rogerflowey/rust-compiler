@@ -176,6 +176,23 @@ void FunctionLowerer::initialize(FunctionId id, std::string name) {
   mir_function.name = std::move(name);
   TypeId return_type = resolve_return_type();
   mir_function.return_type = canonicalize_type_for_mir(return_type);
+  
+  // Setup SRET if returning an aggregate type
+  uses_sret_ = is_aggregate_type(mir_function.return_type);
+  mir_function.uses_sret = uses_sret_;
+  
+  if (uses_sret_) {
+    // Create a temp whose type is &ReturnType
+    TypeId ref_ty = make_ref_type(mir_function.return_type);
+    TempId t = allocate_temp(ref_ty);
+    mir_function.sret_temp = t;
+
+    // Return destination is a PointerPlace based on this temp
+    Place p;
+    p.base = PointerPlace{t};
+    return_place_ = std::move(p);
+  }
+  
   init_locals();
   collect_parameters();
   BasicBlockId entry = create_block();
@@ -391,6 +408,117 @@ Operand FunctionLowerer::emit_array_repeat(Operand value, std::size_t count,
   return emit_rvalue_to_temp(std::move(repeat), result_type);
 }
 
+bool FunctionLowerer::function_uses_sret(const hir::Function &fn) const {
+  if (!fn.body) {
+    return false; // external/builtin: leave ABI alone for now
+  }
+  if (!fn.sig.return_type) {
+    return false; // unit
+  }
+  TypeId ret = canonicalize_type_for_mir(
+      hir::helper::get_resolved_type(*fn.sig.return_type));
+  return is_aggregate_type(ret);
+}
+
+bool FunctionLowerer::method_uses_sret(const hir::Method &m) const {
+  if (!m.body) {
+    return false;
+  }
+  if (!m.sig.return_type) {
+    return false;
+  }
+  TypeId ret = canonicalize_type_for_mir(
+      hir::helper::get_resolved_type(*m.sig.return_type));
+  return is_aggregate_type(ret);
+}
+
+void FunctionLowerer::emit_call_into_place(mir::FunctionRef target,
+                                          TypeId /* result_type */,
+                                          Place dest,
+                                          std::vector<Operand> &&args) {
+  CallStatement call_stmt;
+  call_stmt.dest = std::nullopt; // sret-style: no result temp
+
+  if (auto *internal = std::get_if<MirFunction *>(&target)) {
+    call_stmt.target.kind = mir::CallTarget::Kind::Internal;
+    call_stmt.target.id = (*internal)->id;
+  } else if (auto *external = std::get_if<ExternalFunction *>(&target)) {
+    call_stmt.target.kind = mir::CallTarget::Kind::External;
+    call_stmt.target.id = (*external)->id;
+  }
+
+  call_stmt.args = std::move(args);
+  call_stmt.sret_dest = std::move(dest);
+
+  Statement stmt;
+  stmt.value = std::move(call_stmt);
+  append_statement(std::move(stmt));
+}
+
+bool FunctionLowerer::try_lower_init_call(const hir::Call &call_expr,
+                                         Place dest,
+                                         TypeId dest_type) {
+  if (!call_expr.callee) {
+    return false;
+  }
+
+  const auto *func_use =
+      std::get_if<hir::FuncUse>(&call_expr.callee->value);
+  if (!func_use || !func_use->def) {
+    return false;
+  }
+
+  const hir::Function *hir_fn = func_use->def;
+  if (!function_uses_sret(*hir_fn)) {
+    return false; // not an internal aggregate-returning function
+  }
+
+  mir::FunctionRef target = lookup_function(hir_fn);
+
+  std::vector<Operand> args;
+  args.reserve(call_expr.args.size());
+  for (const auto &arg : call_expr.args) {
+    if (!arg) {
+      throw std::logic_error("Call argument missing during MIR lowering");
+    }
+    args.push_back(lower_operand(*arg));
+  }
+
+  emit_call_into_place(target, dest_type, std::move(dest), std::move(args));
+  return true;
+}
+
+bool FunctionLowerer::try_lower_init_method_call(const hir::MethodCall &mcall,
+                                                Place dest,
+                                                TypeId dest_type) {
+  const hir::Method *method_def = hir::helper::get_method_def(mcall);
+  if (!method_def || !method_uses_sret(*method_def)) {
+    return false;
+  }
+
+  if (!mcall.receiver) {
+    throw std::logic_error("Method call missing receiver during MIR lowering");
+  }
+
+  mir::FunctionRef target = lookup_function(method_def);
+
+  std::vector<Operand> args;
+  args.reserve(mcall.args.size() + 1);
+
+  // receiver first
+  args.push_back(lower_operand(*mcall.receiver));
+
+  for (const auto &arg : mcall.args) {
+    if (!arg) {
+      throw std::logic_error("Method call argument missing during MIR lowering");
+    }
+    args.push_back(lower_operand(*arg));
+  }
+
+  emit_call_into_place(target, dest_type, std::move(dest), std::move(args));
+  return true;
+}
+
 BasicBlockId FunctionLowerer::create_block() {
   BasicBlockId id = static_cast<BasicBlockId>(mir_function.basic_blocks.size());
   mir_function.basic_blocks.emplace_back();
@@ -539,11 +667,18 @@ void FunctionLowerer::emit_return(std::optional<Operand> value) {
             mir_function.name);
     }
 
-    if (!value && !is_unit_type(ret_ty)) {
-        throw std::logic_error(
-            "emit_return called without value for non-unit function: " +
-            mir_function.name);
+    if (uses_sret_) {
+        if (value) {
+            throw std::logic_error("Internal invariant: sret function should not return value operand");
+        }
+    } else {
+        if (!value && !is_unit_type(ret_ty)) {
+            throw std::logic_error(
+                "emit_return called without value for non-unit function: " +
+                mir_function.name);
+        }
     }
+    
     if (!current_block) {
         return;
     }
@@ -627,6 +762,21 @@ void FunctionLowerer::lower_block(const hir::Block &hir_block) {
         if (!expr_ptr) {
             throw std::logic_error("Ownership violated: Final expression");
         }
+
+        if (uses_sret_) {
+            if (!return_place_) {
+                throw std::logic_error("sret function missing return_place");
+            }
+            // Write directly into return_place_ via init machinery
+            lower_init(*expr_ptr, *return_place_, ret_ty);
+            if (!is_reachable()) {
+                return;
+            }
+            emit_return(std::nullopt);
+            return;
+        }
+
+        // Non-sret path: current behavior
         std::optional<Operand> value = lower_expr(*expr_ptr);
 
         if (!is_reachable()) {
@@ -778,6 +928,20 @@ bool FunctionLowerer::try_lower_init_outside(
   if (auto *array_rep = std::get_if<hir::ArrayRepeat>(&expr.value)) {
     lower_array_repeat_init(*array_rep, std::move(dest), normalized);
     return true;
+  }
+
+  // Call -> sret destination
+  if (auto *call = std::get_if<hir::Call>(&expr.value)) {
+    if (try_lower_init_call(*call, std::move(dest), normalized)) {
+      return true;
+    }
+  }
+
+  // Method call -> sret destination
+  if (auto *mcall = std::get_if<hir::MethodCall>(&expr.value)) {
+    if (try_lower_init_method_call(*mcall, std::move(dest), normalized)) {
+      return true;
+    }
   }
 
   // Everything else: not handled here
