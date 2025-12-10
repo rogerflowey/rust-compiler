@@ -291,7 +291,7 @@ def main() -> int:
             continue
 
         # 2) clang assemble
-        result_clang = run_cmd([clang, "-S", f"--target={args.target}", str(ir_path), "-o", str(asm_source)], timeout=args.timeout_clang)
+        result_clang = run_cmd([clang, "-S", "-O2", f"--target={args.target}", str(ir_path), "-o", str(asm_source)], timeout=args.timeout_clang)
         log_lines.append("== clang ==")
         if result_clang.stdout:
             log_lines.append(result_clang.stdout.rstrip())
