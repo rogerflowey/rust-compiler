@@ -96,20 +96,31 @@ Emitter::Emitter(mir::MirModule &module, std::string target_triple,
 
 std::string Emitter::emit() {
   emit_globals();
-  
+
   // Register builtin array repeat copy function if not already present
   bool has_array_repeat_builtin = false;
+  bool has_memcpy_builtin = false;
   for (const auto &ext_fn : mir_module_.external_functions) {
     if (ext_fn.name == "__builtin_array_repeat_copy") {
       has_array_repeat_builtin = true;
+    }
+    if (ext_fn.name == "__builtin_memcpy") {
+      has_memcpy_builtin = true;
+    }
+
+    if (has_array_repeat_builtin && has_memcpy_builtin) {
       break;
     }
   }
-  
+
   if (!has_array_repeat_builtin) {
     // We'll emit this as a raw declare statement directly in the module
     // since it's a pure builtin that doesn't need type system integration
     module_.add_global("declare dso_local void @__builtin_array_repeat_copy(i8*, i64, i64)");
+  }
+
+  if (!has_memcpy_builtin) {
+    module_.add_global("declare dso_local void @__builtin_memcpy(i8*, i8*, i64)");
   }
   
   // Emit external function declarations first
@@ -258,6 +269,11 @@ void Emitter::emit_entry_block_prologue() {
   auto &entry = *current_block_builder_;
   for (std::size_t idx = 0; idx < current_function_->locals.size(); ++idx) {
     const auto &local = current_function_->locals[idx];
+
+    if (local.is_alias) {
+      continue;
+    }
+
     std::string llvm_type = module_.get_type_name(local.type);
     entry.emit_alloca_into(local_ptr_name(static_cast<mir::LocalId>(idx)),
                            llvm_type, std::nullopt, std::nullopt);
@@ -269,8 +285,9 @@ void Emitter::emit_entry_block_prologue() {
   for (std::size_t idx = 0; idx < current_function_->params.size(); ++idx) {
     const auto &param = current_function_->params[idx];
     std::string type_name = module_.get_type_name(param.type);
-    entry.emit_store(type_name, params[idx + first_user_param].name, type_name + "*",
-                    local_ptr_name(param.local));
+    std::string dest_ptr = get_local_ptr(param.local);
+    entry.emit_store(type_name, params[idx + first_user_param].name,
+                    pointer_type_name(param.type), dest_ptr);
   }
 }
 
@@ -334,6 +351,9 @@ void Emitter::emit_init_statement(const mir::InitStatement &statement) {
       },
       [&](const mir::InitGeneral &) {
         throw std::logic_error("InitGeneral not yet supported in emitter");
+      },
+      [&](const mir::InitCopy &copy) {
+        emit_init_copy(dest.pointer, dest.pointee_type, copy);
       }
   }, statement.pattern.value);
 }
@@ -766,6 +786,15 @@ std::string Emitter::get_local_ptr(mir::LocalId local) {
   if (local >= current_function_->locals.size()) {
     throw std::out_of_range("Invalid LocalId");
   }
+  const auto &info = current_function_->locals[local];
+
+  if (info.is_alias) {
+    if (!info.alias_temp) {
+      throw std::logic_error("Alias local missing alias_temp");
+    }
+    return get_temp(*info.alias_temp);
+  }
+
   return local_ptr_name(local);
 }
 
@@ -1072,6 +1101,33 @@ void Emitter::emit_init_array_repeat(const std::string &base_ptr,
       "__builtin_array_repeat_copy",
       args,
       "");
+}
+
+void Emitter::emit_init_copy(const std::string &dest_ptr,
+                             mir::TypeId dest_type,
+                             const mir::InitCopy &copy) {
+  TranslatedPlace src = translate_place(copy.src);
+  if (src.pointee_type != dest_type) {
+    throw std::logic_error("InitCopy type mismatch between src and dest");
+  }
+
+  if (src.pointer == dest_ptr) {
+    return;
+  }
+
+  std::string size = emit_sizeof_bytes(dest_type);
+
+  std::string dest_byte_ptr = current_block_builder_->emit_cast(
+      "bitcast", pointer_type_name(dest_type), dest_ptr, "i8*", "cpy.dest");
+  std::string src_byte_ptr = current_block_builder_->emit_cast(
+      "bitcast", pointer_type_name(dest_type), src.pointer, "i8*", "cpy.src");
+
+  std::vector<std::pair<std::string, std::string>> args;
+  args.emplace_back("i8*", dest_byte_ptr);
+  args.emplace_back("i8*", src_byte_ptr);
+  args.emplace_back("i64", size);
+
+  current_block_builder_->emit_call("void", "__builtin_memcpy", args, "");
 }
 
 } // namespace codegen

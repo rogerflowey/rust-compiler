@@ -180,7 +180,7 @@ void FunctionLowerer::initialize(FunctionId id, std::string name) {
   // Setup SRET if returning an aggregate type
   uses_sret_ = is_aggregate_type(mir_function.return_type);
   mir_function.uses_sret = uses_sret_;
-  
+
   if (uses_sret_) {
     // Create a temp whose type is &ReturnType
     TypeId ref_ty = make_ref_type(mir_function.return_type);
@@ -192,7 +192,9 @@ void FunctionLowerer::initialize(FunctionId id, std::string name) {
     p.base = PointerPlace{t};
     return_place_ = std::move(p);
   }
-  
+
+  nrvo_local_ = pick_nrvo_local();
+
   init_locals();
   collect_parameters();
   BasicBlockId entry = create_block();
@@ -216,6 +218,58 @@ FunctionLowerer::get_locals_vector() const {
     return hir_function->body->locals;
   }
   return hir_method->body->locals;
+}
+
+const hir::Local *FunctionLowerer::pick_nrvo_local() const {
+  if (!uses_sret_) {
+    return nullptr;
+  }
+
+  TypeId ret_ty = mir_function.return_type;
+  if (ret_ty == invalid_type_id) {
+    return nullptr;
+  }
+
+  const hir::Local *candidate = nullptr;
+  bool multiple = false;
+
+  auto consider = [&](const hir::Local *local_ptr) {
+    if (!local_ptr || !local_ptr->type_annotation) {
+      return;
+    }
+
+    TypeId ty = hir::helper::get_resolved_type(*local_ptr->type_annotation);
+    TypeId normalized = canonicalize_type_for_mir(ty);
+
+    if (normalized != ret_ty) {
+      return;
+    }
+
+    if (candidate && candidate != local_ptr) {
+      multiple = true;
+      return;
+    }
+
+    candidate = local_ptr;
+  };
+
+  if (function_kind == FunctionKind::Method && hir_method && hir_method->body &&
+      hir_method->body->self_local) {
+    consider(hir_method->body->self_local.get());
+  }
+
+  for (const auto &local_ptr : get_locals_vector()) {
+    consider(local_ptr.get());
+    if (multiple) {
+      break;
+    }
+  }
+
+  if (multiple) {
+    return nullptr;
+  }
+
+  return candidate;
 }
 
 TypeId FunctionLowerer::resolve_return_type() const {
@@ -244,6 +298,12 @@ void FunctionLowerer::init_locals() {
     LocalInfo info;
     info.type = normalized;
     info.debug_name = local_ptr->name.name;
+
+    if (uses_sret_ && local_ptr == nrvo_local_ && mir_function.sret_temp) {
+      info.is_alias = true;
+      info.alias_temp = *mir_function.sret_temp;
+    }
+
     mir_function.locals.push_back(std::move(info));
   };
 
@@ -941,6 +1001,26 @@ bool FunctionLowerer::try_lower_init_outside(
   if (auto *mcall = std::get_if<hir::MethodCall>(&expr.value)) {
     if (try_lower_init_method_call(*mcall, std::move(dest), normalized)) {
       return true;
+    }
+  }
+
+  {
+    semantic::ExprInfo info = hir::helper::get_expr_info(expr);
+    if (info.is_place) {
+      if (!info.has_type || info.type == invalid_type_id) {
+        throw std::logic_error("Init RHS place missing type");
+      }
+      TypeId src_ty = canonicalize_type_for_mir(info.type);
+      if (src_ty == normalized) {
+        Place src_place = lower_expr_place(expr);
+
+        InitCopy copy_pattern{.src = std::move(src_place)};
+        InitPattern pattern;
+        pattern.value = std::move(copy_pattern);
+
+        emit_init_statement(std::move(dest), std::move(pattern));
+        return true;
+      }
     }
   }
 

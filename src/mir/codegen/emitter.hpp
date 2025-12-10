@@ -99,6 +99,9 @@ private:
   void emit_init_array_repeat(const std::string &base_ptr,
                               mir::TypeId array_type,
                               const mir::InitArrayRepeat &init_array_repeat);
+  void emit_init_copy(const std::string &dest_ptr,
+                      mir::TypeId dest_type,
+                      const mir::InitCopy &copy);
 
   // lookup helpers
   std::string get_temp(mir::TempId temp);
