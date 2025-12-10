@@ -291,7 +291,7 @@ def main() -> int:
             continue
 
         # 2) clang assemble
-        result_clang = run_cmd([clang, "-S", "-O2", f"--target={args.target}", str(ir_path), "-o", str(asm_source)], timeout=args.timeout_clang)
+        result_clang = run_cmd([clang, "-S", f"--target={args.target}", str(ir_path), "-o", str(asm_source)], timeout=args.timeout_clang)
         log_lines.append("== clang ==")
         if result_clang.stdout:
             log_lines.append(result_clang.stdout.rstrip())
@@ -369,7 +369,6 @@ def main() -> int:
 
     summary_path.write_text("\n".join(summary_lines).rstrip() + "\n", encoding="utf-8")
     print(f"Summary written to {summary_path}")
-
     if failures:
         for rel_case, reason in failures:
             sys.stderr.write(f"{RED}- {rel_case}: {reason}{RESET}\n")

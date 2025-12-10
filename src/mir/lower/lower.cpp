@@ -381,6 +381,15 @@ void FunctionLowerer::append_parameter(const hir::Local *local, TypeId type) {
   param.local = local_id;
   param.type = normalized;
   param.name = local->name.name;
+  
+  // Mangle parameter name to avoid collision with block labels
+  // Remove % prefix if present, then add param_ prefix with %
+  std::string base = param.name;
+  if (!base.empty() && base.front() == '%') {
+    base = base.substr(1);
+  }
+  param.name = "%" + std::string("param_") + base;
+  
   mir_function.params.push_back(std::move(param));
 }
 
@@ -1014,12 +1023,16 @@ bool FunctionLowerer::try_lower_init_outside(
       if (src_ty == normalized) {
         Place src_place = lower_expr_place(expr);
 
-        InitCopy copy_pattern{.src = std::move(src_place)};
-        InitPattern pattern;
-        pattern.value = std::move(copy_pattern);
+        // Only use InitCopy for aggregate types (structs and arrays)
+        // where memcpy is beneficial. For scalar types, fall through to default handling.
+        if (is_aggregate_type(normalized)) {
+          InitCopy copy_pattern{.src = std::move(src_place)};
+          InitPattern pattern;
+          pattern.value = std::move(copy_pattern);
 
-        emit_init_statement(std::move(dest), std::move(pattern));
-        return true;
+          emit_init_statement(std::move(dest), std::move(pattern));
+          return true;
+        }
       }
     }
   }

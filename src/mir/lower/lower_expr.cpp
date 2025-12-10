@@ -422,6 +422,15 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
       append_statement(std::move(stmt));
       return std::nullopt;
     }
+    
+    // Optimization doesn't apply; reuse already-lowered places
+    // to avoid double-evaluation of RHS place expression
+    Operand value = load_place_value(std::move(src_place), rhs_info.type);
+    AssignStatement assign{.dest = std::move(dest_place), .src = value};
+    Statement stmt;
+    stmt.value = std::move(assign);
+    append_statement(std::move(stmt));
+    return std::nullopt;
   }
 
   Place dest = lower_expr_place(*assignment.lhs);

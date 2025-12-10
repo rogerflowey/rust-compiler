@@ -97,31 +97,9 @@ Emitter::Emitter(mir::MirModule &module, std::string target_triple,
 std::string Emitter::emit() {
   emit_globals();
 
-  // Register builtin array repeat copy function if not already present
-  bool has_array_repeat_builtin = false;
-  bool has_memcpy_builtin = false;
-  for (const auto &ext_fn : mir_module_.external_functions) {
-    if (ext_fn.name == "__builtin_array_repeat_copy") {
-      has_array_repeat_builtin = true;
-    }
-    if (ext_fn.name == "__builtin_memcpy") {
-      has_memcpy_builtin = true;
-    }
-
-    if (has_array_repeat_builtin && has_memcpy_builtin) {
-      break;
-    }
-  }
-
-  if (!has_array_repeat_builtin) {
-    // We'll emit this as a raw declare statement directly in the module
-    // since it's a pure builtin that doesn't need type system integration
-    module_.add_global("declare dso_local void @__builtin_array_repeat_copy(i8*, i64, i64)");
-  }
-
-  if (!has_memcpy_builtin) {
-    module_.add_global("declare dso_local void @__builtin_memcpy(i8*, i8*, i64)");
-  }
+  // Always declare builtins for array repeat and memcpy
+  module_.add_global("declare dso_local void @__builtin_array_repeat_copy(i8*, i64, i64)");
+  module_.add_global("declare i32 @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)");
   
   // Emit external function declarations first
   for (const auto &external_function : mir_module_.external_functions) {
@@ -423,15 +401,43 @@ void Emitter::emit_terminator(const mir::Terminator &terminator) {
              },
              [&](const mir::SwitchIntTerminator &switch_term) {
                auto discr = get_typed_operand(switch_term.discriminant);
-               std::vector<std::pair<std::string, std::string>> cases;
-               cases.reserve(switch_term.targets.size());
-               for (const auto &target : switch_term.targets) {
-                 cases.emplace_back(format_constant_literal(target.match_value),
-                                    block_builders_.at(target.block)->label());
+               
+               // Optimization: emit conditional branch for single-case boolean switches
+               // If this is a single-case switch on a boolean discriminant,
+               // emit as conditional branch (br i1) instead of switch statement
+               if (switch_term.targets.size() == 1 && discr.type_name == "i1") {
+                 const auto &case_target = switch_term.targets[0];
+                 // Determine which block is the true branch
+                 // If the case matches the constant value that's "true"
+                 bool case_is_true = false;
+                 if (const auto *bool_const = std::get_if<mir::BoolConstant>(&case_target.match_value.value)) {
+                   case_is_true = bool_const->value;
+                 }
+                 
+                 // Emit conditional branch
+                 // If case_is_true, then condition value leads to case block
+                 // Otherwise, condition value (false) leads to case block, so negate
+                 std::string true_label, false_label;
+                 if (case_is_true) {
+                   true_label = block_builders_.at(case_target.block)->label();
+                   false_label = block_builders_.at(switch_term.otherwise)->label();
+                 } else {
+                   true_label = block_builders_.at(switch_term.otherwise)->label();
+                   false_label = block_builders_.at(case_target.block)->label();
+                 }
+                 current_block_builder_->emit_cond_br(discr.value_name, true_label, false_label);
+               } else {
+                 // Regular switch for multi-case or non-boolean
+                 std::vector<std::pair<std::string, std::string>> cases;
+                 cases.reserve(switch_term.targets.size());
+                 for (const auto &target : switch_term.targets) {
+                   cases.emplace_back(format_constant_literal(target.match_value),
+                                      block_builders_.at(target.block)->label());
+                 }
+                 current_block_builder_->emit_switch(
+                     discr.type_name, discr.value_name,
+                     block_builders_.at(switch_term.otherwise)->label(), cases);
                }
-               current_block_builder_->emit_switch(
-                   discr.type_name, discr.value_name,
-                   block_builders_.at(switch_term.otherwise)->label(), cases);
              },
              [&](const mir::ReturnTerminator &ret) {
               bool abi_returns_void =
@@ -1126,8 +1132,9 @@ void Emitter::emit_init_copy(const std::string &dest_ptr,
   args.emplace_back("i8*", dest_byte_ptr);
   args.emplace_back("i8*", src_byte_ptr);
   args.emplace_back("i64", size);
+  args.emplace_back("i1", "false");
 
-  current_block_builder_->emit_call("void", "__builtin_memcpy", args, "");
+  current_block_builder_->emit_call("i32", "llvm.memcpy.p0i8.p0i8.i64", args, "");
 }
 
 } // namespace codegen

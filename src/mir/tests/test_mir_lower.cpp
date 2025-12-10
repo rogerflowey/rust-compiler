@@ -546,7 +546,7 @@ TEST(MirLowerTest, RecordsFunctionParameters) {
     EXPECT_EQ(lowered.params[0].local, 0u);
     TypeId expected_param_type = mir::detail::canonicalize_type_for_mir(int_type);
     EXPECT_EQ(lowered.params[0].type, expected_param_type);
-    EXPECT_EQ(lowered.params[0].name, "x");
+    EXPECT_EQ(lowered.params[0].name, "%param_x");
 }
 
 TEST(MirLowerTest, LowersBinaryAddition) {
