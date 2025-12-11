@@ -4,6 +4,7 @@
 #include "mir/lower/lower_common.hpp"
 #include "mir/lower/lower_const.hpp"
 #include "mir/lower/lower_internal.hpp"
+#include "mir/lower/sig_builder.hpp"
 
 #include "semantic/expr_info_helpers.hpp"
 #include "semantic/hir/helper.hpp"
@@ -29,6 +30,7 @@ struct FunctionDescriptor {
   std::string name;
   FunctionId id = 0;
   bool is_external = false; // Track if function is external/builtin
+  ProtoSig proto_sig;  // Signature information
 };
 
 void add_function_descriptor(const hir::Function &function,
@@ -174,18 +176,23 @@ MirFunction FunctionLowerer::lower() {
 void FunctionLowerer::initialize(FunctionId id, std::string name) {
   mir_function.id = id;
   mir_function.name = std::move(name);
-  TypeId return_type = resolve_return_type();
-  mir_function.return_type = canonicalize_type_for_mir(return_type);
+
+  // Build proto signature from HIR
+  SigBuilder builder(function_kind == FunctionKind::Function ? 
+                     static_cast<SigBuilder::FnOrMethod>(hir_function) :
+                     static_cast<SigBuilder::FnOrMethod>(hir_method));
+  ProtoSig proto_sig = builder.build_proto_sig();
   
-  // Setup SRET if returning an aggregate type
-  uses_sret_ = is_aggregate_type(mir_function.return_type);
-  mir_function.uses_sret = uses_sret_;
+  // Set up return_desc in the signature
+  mir_function.sig.return_desc = proto_sig.return_desc;
+
+  // Determine if we need SRET
+  uses_sret_ = is_indirect_sret(mir_function.sig.return_desc);
 
   if (uses_sret_) {
     // Create a temp whose type is &ReturnType
-    TypeId ref_ty = make_ref_type(mir_function.return_type);
+    TypeId ref_ty = make_ref_type(return_type(mir_function.sig.return_desc));
     TempId t = allocate_temp(ref_ty);
-    mir_function.sret_temp = t;
 
     // Return destination is a PointerPlace based on this temp
     Place p;
@@ -193,10 +200,25 @@ void FunctionLowerer::initialize(FunctionId id, std::string name) {
     return_place_ = std::move(p);
   }
 
-  nrvo_local_ = pick_nrvo_local();
-
+  // Initialize locals (this must happen before collect_parameters)
   init_locals();
+  
+  // Collect parameters and build MirParam entries
+  nrvo_local_ = pick_nrvo_local();
   collect_parameters();
+  
+  // If using sret, set the result_local in the return descriptor
+  if (uses_sret_) {
+    if (nrvo_local_) {
+      LocalId result_local = require_local_id(nrvo_local_);
+      auto& sret = std::get<ReturnDesc::RetIndirectSRet>(mir_function.sig.return_desc.kind);
+      sret.result_local = result_local;
+    }
+  }
+  
+  // Populate ABI parameters
+  populate_abi_params(mir_function.sig);
+
   BasicBlockId entry = create_block();
   current_block = entry;
   mir_function.start_block = entry;
@@ -225,7 +247,7 @@ const hir::Local *FunctionLowerer::pick_nrvo_local() const {
     return nullptr;
   }
 
-  TypeId ret_ty = mir_function.return_type;
+  TypeId ret_ty = return_type(mir_function.sig.return_desc);
   if (ret_ty == invalid_type_id) {
     return nullptr;
   }
@@ -298,11 +320,6 @@ void FunctionLowerer::init_locals() {
     LocalInfo info;
     info.type = normalized;
     info.debug_name = local_ptr->name.name;
-
-    if (uses_sret_ && local_ptr == nrvo_local_ && mir_function.sret_temp) {
-      info.is_alias = true;
-      info.alias_temp = *mir_function.sret_temp;
-    }
 
     mir_function.locals.push_back(std::move(info));
   };
@@ -377,20 +394,13 @@ void FunctionLowerer::append_parameter(const hir::Local *local, TypeId type) {
   }
   TypeId normalized = canonicalize_type_for_mir(type);
   LocalId local_id = require_local_id(local);
-  FunctionParameter param;
+  
+  // Add to MirFunctionSig.params
+  MirParam param;
   param.local = local_id;
   param.type = normalized;
-  param.name = local->name.name;
-  
-  // Mangle parameter name to avoid collision with block labels
-  // Remove % prefix if present, then add param_ prefix with %
-  std::string base = param.name;
-  if (!base.empty() && base.front() == '%') {
-    base = base.substr(1);
-  }
-  param.name = "%" + std::string("param_") + base;
-  
-  mir_function.params.push_back(std::move(param));
+  param.debug_name = local->name.name;
+  mir_function.sig.params.push_back(std::move(param));
 }
 
 const hir::Local *
@@ -728,22 +738,22 @@ Operand FunctionLowerer::make_const_operand(std::uint64_t value, TypeId type, bo
 }
 
 void FunctionLowerer::emit_return(std::optional<Operand> value) {
+    const ReturnDesc& ret_desc = mir_function.sig.return_desc;
     
-    TypeId ret_ty = mir_function.return_type;
-    if (is_never_type(ret_ty)) {
+    if (is_never(ret_desc)) {
         throw std::logic_error(
             "emit_return called for never-returning function during MIR lowering: " +
             mir_function.name);
     }
 
-    if (uses_sret_) {
+    if (is_indirect_sret(ret_desc)) {
         if (value) {
             throw std::logic_error("Internal invariant: sret function should not return value operand");
         }
     } else {
-        if (!value && !is_unit_type(ret_ty)) {
+        if (!value && !is_void_semantic(ret_desc)) {
             throw std::logic_error(
-                "emit_return called without value for non-unit function: " +
+                "emit_return called without value for non-void function: " +
                 mir_function.name);
         }
     }
@@ -824,60 +834,26 @@ void FunctionLowerer::lower_block(const hir::Block &hir_block) {
     if (!lower_block_statements(hir_block)) {
         return;
     }
-    TypeId ret_ty = mir_function.return_type;
-    // === CASE 1: Block has an explicit final expression ===
+
+    // === CASE: Block has an explicit final expression ===
     if (hir_block.final_expr) {
         const auto &expr_ptr = *hir_block.final_expr;
         if (!expr_ptr) {
             throw std::logic_error("Ownership violated: Final expression");
         }
 
-        if (uses_sret_) {
-            if (!return_place_) {
-                throw std::logic_error("sret function missing return_place");
-            }
-            // Write directly into return_place_ via init machinery
-            lower_init(*expr_ptr, *return_place_, ret_ty);
-            if (!is_reachable()) {
-                return;
-            }
-            emit_return(std::nullopt);
-            return;
-        }
-
-        // Non-sret path: current behavior
-        std::optional<Operand> value = lower_expr(*expr_ptr);
-
-        if (!is_reachable()) {
-            return;
-        }
-
-        if (is_never_type(ret_ty)) {
-            throw std::logic_error("Function promising diverge does not diverge");
-        }
-        if (!value && !is_unit_type(ret_ty)) {
-            throw std::logic_error(
-                "Missing return value for function requiring return value");
-        }
-
-        // Unit-returning: value may be empty; emit_return(nullptr) → ret void.
-        emit_return(std::move(value));
+        // Use central return handling for all return paths
+        handle_return_value(hir_block.final_expr, "Block final expression");
         return;
     }
 
+    // === CASE: Block has no final expression (implicit unit return) ===
     if (!is_reachable()) {
         return;
     }
 
-    if (is_never_type(ret_ty)) {
-        throw std::logic_error("Function promising diverge does not diverge");
-    }
-
-    if (is_unit_type(ret_ty)) {
-        emit_return(std::nullopt);
-        return;
-    }
-    throw std::logic_error("Non-unit,Non-diverged function does not have proper final return");
+    // Implicit unit return at end of reachable block
+    handle_return_value(std::nullopt, "Block implicit return");
 }
 
 std::optional<Operand>
@@ -1382,41 +1358,28 @@ LocalId FunctionLowerer::create_synthetic_local(TypeId type,
   mir_function.locals.push_back(std::move(info));
   return id;
 }
-
 } // namespace detail
 
 ExternalFunction lower_external_function(const FunctionDescriptor &descriptor) {
   ExternalFunction ext_fn;
   ext_fn.name = descriptor.name;
 
-  std::vector<TypeId> param_types;
-  TypeId return_type = type::invalid_type_id;
+  // Build proto signature
+  SigBuilder builder(descriptor.function_or_method);
+  ProtoSig proto_sig = builder.build_proto_sig();
 
-  std::visit(
-      [&return_type, &param_types](const auto *fn_ptr) {
-        if (!fn_ptr) {
-          return;
-        }
-        // Extract return type
-        if (fn_ptr->sig.return_type) {
-          return_type =
-              hir::helper::get_resolved_type(*fn_ptr->sig.return_type);
-        } else {
-          return_type = type::invalid_type_id;
-        }
-
-        // Extract parameter types from param_type_annotations
-        for (const auto &param_annotation :
-             fn_ptr->sig.param_type_annotations) {
-          TypeId param_type =
-              hir::helper::get_resolved_type(param_annotation);
-          param_types.push_back(param_type);
-        }
-      },
-      descriptor.function_or_method);
-
-  ext_fn.return_type = return_type;
-  ext_fn.param_types = std::move(param_types);
+  // Convert proto_sig to full MirFunctionSig for external function
+  ext_fn.sig.return_desc = proto_sig.return_desc;
+  for (const auto &param : proto_sig.proto_params) {
+    MirParam mp;
+    mp.type = param.type;
+    mp.debug_name = param.debug_name;
+    mp.local = 0;  // external functions have no locals
+    ext_fn.sig.params.push_back(std::move(mp));
+  }
+  
+  // Populate ABI parameters
+  populate_abi_params(ext_fn.sig);
 
   return ext_fn;
 }

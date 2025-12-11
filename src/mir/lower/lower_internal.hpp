@@ -198,6 +198,16 @@ private:
 	std::optional<Operand> lower_break_expr(const hir::Break& break_expr);
 	std::optional<Operand> lower_continue_expr(const hir::Continue& continue_expr);
 	std::optional<Operand> lower_return_expr(const hir::Return& return_expr);
+	
+	// Central return handling: unifies logic for block returns and explicit return statements
+	// Takes an optional unique_ptr<Expr> (from HIR) and handles all return types
+	void handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, const char *context);
+	
+	// Process call arguments according to callee's ABI signature
+	// Handles indirect parameters by allocating temp storage and initializing
+	std::vector<Operand> process_call_arguments(
+		const mir::MirFunctionSig& callee_sig,
+		const std::vector<const hir::Expr*>& hir_args);
 };
 
 template <typename T>

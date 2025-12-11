@@ -1,6 +1,7 @@
 #pragma once
 
 #include "type/type.hpp"
+#include "mir/function_sig.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -341,24 +342,18 @@ struct ExternalFunction {
 
     Id id = invalid_id;
     std::string name;
-    std::vector<TypeId> param_types;
-    TypeId return_type = invalid_type_id;
+    MirFunctionSig sig;  // ABI and type information
 };
 
 struct MirFunction {
     FunctionId id = 0;
     std::string name;
-    std::vector<FunctionParameter> params;
+    MirFunctionSig sig;                     // function signature (params, ABI, return info)
+    
     std::vector<TypeId> temp_types;
     std::vector<LocalInfo> locals;
     std::vector<BasicBlock> basic_blocks;
     BasicBlockId start_block = 0;
-    TypeId return_type = invalid_type_id;
-
-    // SRET support: if uses_sret is true, the callee receives an implicit first
-    // parameter (the return destination pointer), and returns void.
-    bool uses_sret = false;
-    std::optional<TempId> sret_temp;  // temp holding the sret pointer (&return_type)
 
     [[nodiscard]] TypeId get_temp_type(TempId temp) const {
         if (temp >= temp_types.size()) {
@@ -379,7 +374,22 @@ struct MirFunction {
         return basic_blocks[bb];
     }
 
-
+    // Convenience methods for common queries
+    [[nodiscard]] TypeId semantic_return_type() const {
+        return return_type(sig.return_desc);
+    }
+    
+    [[nodiscard]] bool uses_sret() const {
+        return is_indirect_sret(sig.return_desc);
+    }
+    
+    [[nodiscard]] bool returns_never() const {
+        return is_never(sig.return_desc);
+    }
+    
+    [[nodiscard]] bool returns_void_semantic() const {
+        return is_void_semantic(sig.return_desc);
+    }
 };
 
 struct MirModule {

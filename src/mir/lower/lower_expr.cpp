@@ -843,47 +843,73 @@ FunctionLowerer::lower_continue_expr(const hir::Continue &continue_expr) {
   return std::nullopt;
 }
 
-std::optional<Operand>
-FunctionLowerer::lower_return_expr(const hir::Return &return_expr) {
-  // Case 1: function returns `never`
-  if (is_never_type(mir_function.return_type)) {
-    if (return_expr.value && *return_expr.value) {
-      (void)lower_expr(**return_expr.value);
+void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, 
+                                           const char *context) {
+  // Central place to handle all return types: never, sret, void, and direct returns
+  
+  // Case 1: function returns `never` - diverges unconditionally
+  if (is_never(mir_function.sig.return_desc)) {
+    if (value_ptr && *value_ptr) {
+      (void)lower_expr(**value_ptr);
     }
     if (is_reachable()) {
-      throw std::logic_error("Diverge function cannot promise divergence");
+      throw std::logic_error(std::string(context) + 
+                            ": diverging function must not reach here");
     }
     UnreachableTerminator term{};
     terminate_current_block(Terminator{std::move(term)});
-    return std::nullopt;
+    return;
   }
 
+  // Case 2: sret return - caller allocated, callee writes to it
   if (uses_sret_) {
-    if (!return_expr.value || !*return_expr.value) {
-      throw std::logic_error(
-          "sret function requires explicit return value");
+    if (!value_ptr || !*value_ptr) {
+      throw std::logic_error(std::string(context) + 
+                            ": sret function requires explicit return value");
     }
     if (!return_place_) {
-      throw std::logic_error("sret function missing return_place");
+      throw std::logic_error(std::string(context) + 
+                            ": sret function missing return_place");
     }
 
-    // Write into sret destination
-    lower_init(**return_expr.value, *return_place_, mir_function.return_type);
+    // Write value into sret destination
+    lower_init(**value_ptr, *return_place_, return_type(mir_function.sig.return_desc));
     emit_return(std::nullopt);
-    return std::nullopt;
+    return;
   }
 
+  // Case 3 & 4: void semantic or direct return
   std::optional<Operand> value;
-  if (return_expr.value && *return_expr.value) {
-    value = lower_expr(**return_expr.value);
+  if (value_ptr && *value_ptr) {
+    value = lower_expr(**value_ptr);
   }
 
-  if (!value && !is_unit_type(mir_function.return_type)) {
-    throw std::logic_error(
-        "Return expression missing value for function requiring return value");
+  if (!value && !is_void_semantic(mir_function.sig.return_desc)) {
+    throw std::logic_error(std::string(context) + 
+                          ": missing return value for non-void function");
   }
 
   emit_return(std::move(value));
+}
+
+std::vector<Operand> FunctionLowerer::process_call_arguments(
+    const mir::MirFunctionSig& callee_sig,
+    const std::vector<const hir::Expr*>& hir_args) {
+  // For now, just pass through - indirect parameter handling will be added later
+  // when we refactor to support address-of operations in the call lowering
+  std::vector<Operand> args;
+  for (const auto& arg : hir_args) {
+    if (!arg) {
+      throw std::logic_error("Missing argument during call lowering");
+    }
+    args.push_back(lower_operand(*arg));
+  }
+  return args;
+}
+
+std::optional<Operand>
+FunctionLowerer::lower_return_expr(const hir::Return &return_expr) {
+  handle_return_value(return_expr.value, "Return statement");
   return std::nullopt;
 }
 

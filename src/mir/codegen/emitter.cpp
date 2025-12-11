@@ -131,46 +131,80 @@ void Emitter::emit_globals() {
   }
 }
 
+std::string Emitter::get_abi_param_type(const mir::AbiParam &abi_param, 
+                                        const mir::MirFunctionSig &sig) {
+  return std::visit(mir::Overloaded{
+    [&](const mir::AbiParamDirect&) {
+      if (abi_param.param_index) {
+        const auto& sem_param = sig.params[*abi_param.param_index];
+        return module_.get_type_name(sem_param.type);
+      }
+      return std::string("");
+    },
+    [&](const mir::AbiParamIndirect&) {
+      if (abi_param.param_index) {
+        const auto& sem_param = sig.params[*abi_param.param_index];
+        return module_.pointer_type_name(sem_param.type);
+      }
+      return std::string("");
+    },
+    [&](const mir::AbiParamSRet&) {
+      const auto& sret_desc = std::get<mir::ReturnDesc::RetIndirectSRet>(sig.return_desc.kind);
+      return module_.pointer_type_name(sret_desc.type);
+    }
+  }, abi_param.kind);
+}
+
 void Emitter::emit_function(const mir::MirFunction &function) {
   current_function_ = &function;
   block_builders_.clear();
 
   std::vector<llvmbuilder::FunctionParameter> params;
+  const mir::MirFunctionSig& sig = function.sig;
 
-  bool is_sret = function.uses_sret &&
-                 function.sret_temp.has_value() &&
-                 mir::detail::is_aggregate_type(function.return_type);
+  // Build LLVM parameter list from abi_params using shared helper
+  for (const auto& abi_param : sig.abi_params) {
+    std::string param_type_name = get_abi_param_type(abi_param, sig);
+    std::string param_name;
 
-  if (is_sret) {
-    mir::TempId t = *function.sret_temp;
-    std::string param_name = llvmbuilder::temp_name(t);  // same as get_temp(t)
+    std::visit(mir::Overloaded{
+      [&](const mir::AbiParamDirect&) {
+        if (abi_param.param_index) {
+          const auto& sem_param = sig.params[*abi_param.param_index];
+          param_name = "%" + std::string("param_") + sem_param.debug_name;
+        }
+      },
+      [&](const mir::AbiParamIndirect&) {
+        if (abi_param.param_index) {
+          const auto& sem_param = sig.params[*abi_param.param_index];
+          param_name = "%" + std::string("param_") + sem_param.debug_name;
+        }
+      },
+      [&](const mir::AbiParamSRet&) {
+        param_name = "%sret.ptr";
+      }
+    }, abi_param.kind);
 
-    params.push_back(llvmbuilder::FunctionParameter{
-        module_.pointer_type_name(function.return_type), // T*
-        param_name
-    });
+    if (!param_type_name.empty()) {
+      params.push_back(llvmbuilder::FunctionParameter{param_type_name, param_name});
+    }
   }
 
-  // then user params
-  params.reserve(params.size() + function.params.size());
-  for (const auto &param : function.params) {
-    params.push_back(
-        llvmbuilder::FunctionParameter{module_.get_type_name(param.type),
-                                       param.name});
-  }
-
-  // Use "void" for unit return types or sret functions
-  std::string return_type;
-  if (is_sret ||
-      std::get_if<type::UnitType>(&type::get_type_from_id(function.return_type).value)) {
-    return_type = "void";
-  } else {
-    return_type = module_.get_type_name(function.return_type);
-  }
+  // Determine LLVM return type from ReturnDesc
+  std::string return_type_name = std::visit(mir::Overloaded{
+    [&](const mir::ReturnDesc::RetNever&) { return std::string("void"); },
+    [&](const mir::ReturnDesc::RetVoid&) { return std::string("void"); },
+    [&](const mir::ReturnDesc::RetDirect& k) {
+      return module_.get_type_name(k.type);
+    },
+    [&](const mir::ReturnDesc::RetIndirectSRet&) {
+      return std::string("void");  // sret functions return void
+    }
+  }, sig.return_desc.kind);
 
   current_function_builder_ =
       &module_.add_function(get_function_name(function.id),
-                  return_type,
+                  return_type_name,
                             std::move(params));
 
   block_builders_.emplace(function.start_block,
@@ -195,20 +229,28 @@ void Emitter::emit_function(const mir::MirFunction &function) {
 }
 
 void Emitter::emit_external_declaration(const mir::ExternalFunction &function) {
-  // Build parameter type list
+  const mir::MirFunctionSig& sig = function.sig;
+  
+  // Build parameter type list from abi_params using shared helper
   std::vector<std::string> param_types;
-  param_types.reserve(function.param_types.size());
-  for (mir::TypeId param_type : function.param_types) {
-    param_types.push_back(module_.get_type_name(param_type));
+  for (const auto& abi_param : sig.abi_params) {
+    std::string param_type = get_abi_param_type(abi_param, sig);
+    if (!param_type.empty()) {
+      param_types.push_back(std::move(param_type));
+    }
   }
   
-  // Build the return type string - use "void" for unit types
-  std::string ret_type;
-  if (std::get_if<type::UnitType>(&type::get_type_from_id(function.return_type).value)) {
-    ret_type = "void";
-  } else {
-    ret_type = module_.get_type_name(function.return_type);
-  }
+  // Build the return type string from ReturnDesc
+  std::string ret_type = std::visit(mir::Overloaded{
+    [](const mir::ReturnDesc::RetNever&) { return std::string("void"); },
+    [](const mir::ReturnDesc::RetVoid&) { return std::string("void"); },
+    [this](const mir::ReturnDesc::RetDirect& k) {
+      return module_.get_type_name(k.type);
+    },
+    [](const mir::ReturnDesc::RetIndirectSRet&) {
+      return std::string("void");  // sret functions return void in LLVM
+    }
+  }, sig.return_desc.kind);
   
   std::string params;
   for (std::size_t i = 0; i < param_types.size(); ++i) {
@@ -245,6 +287,9 @@ void Emitter::emit_block(mir::BasicBlockId block_id) {
 
 void Emitter::emit_entry_block_prologue() {
   auto &entry = *current_block_builder_;
+  const auto &sig = current_function_->sig;
+
+  // 1. Allocate stack storage for locals (except aliases)
   for (std::size_t idx = 0; idx < current_function_->locals.size(); ++idx) {
     const auto &local = current_function_->locals[idx];
 
@@ -257,15 +302,48 @@ void Emitter::emit_entry_block_prologue() {
                            llvm_type, std::nullopt, std::nullopt);
   }
 
-  const auto &params = current_function_builder_->parameters();
-  std::size_t first_user_param = (current_function_->sret_temp ? 1 : 0);
+  // 2. Process ABI parameters and initialize semantic locals
+  const auto &llvm_params = current_function_builder_->parameters();
 
-  for (std::size_t idx = 0; idx < current_function_->params.size(); ++idx) {
-    const auto &param = current_function_->params[idx];
-    std::string type_name = module_.get_type_name(param.type);
-    std::string dest_ptr = get_local_ptr(param.local);
-    entry.emit_store(type_name, params[idx + first_user_param].name,
-                    pointer_type_name(param.type), dest_ptr);
+  for (std::size_t abi_idx = 0; abi_idx < sig.abi_params.size(); ++abi_idx) {
+    const auto &abi_param = sig.abi_params[abi_idx];
+
+    std::visit(mir::Overloaded{
+      [&](const mir::AbiParamDirect&) {
+        if (abi_param.param_index) {
+          const auto& sem_param = sig.params[*abi_param.param_index];
+          std::string type_name = module_.get_type_name(sem_param.type);
+          std::string dest_ptr = get_local_ptr(sem_param.local);
+          entry.emit_store(type_name, llvm_params[abi_idx].name,
+                          pointer_type_name(sem_param.type), dest_ptr);
+        }
+      },
+      [&](const mir::AbiParamIndirect&) {
+        // Caller allocated, callee uses as alias - no load/store needed
+        // Mark the result_local as aliased to the parameter pointer
+        // Get the semantic parameter to find the local
+        if (abi_param.param_index) {
+          const auto& sem_param = sig.params[*abi_param.param_index];
+          mir::LocalId result_local = sem_param.local;
+          
+          if (result_local < current_function_->locals.size()) {
+            auto& local = const_cast<mir::LocalInfo&>(current_function_->locals[result_local]);
+            local.is_alias = true;
+            // The alias points to the parameter pointer
+          }
+        }
+      },
+      [&](const mir::AbiParamSRet&) {
+        // For sret, mark the result_local as aliased to this parameter
+        const auto& sret_desc = std::get<mir::ReturnDesc::RetIndirectSRet>(sig.return_desc.kind);
+        mir::LocalId result_local = sret_desc.result_local;
+        
+        if (result_local < current_function_->locals.size()) {
+          auto& local = const_cast<mir::LocalInfo&>(current_function_->locals[result_local]);
+          local.is_alias = true;
+        }
+      }
+    }, abi_param.kind);
   }
 }
 
@@ -337,47 +415,82 @@ void Emitter::emit_init_statement(const mir::InitStatement &statement) {
 }
 
 void Emitter::emit_call(const mir::CallStatement &statement) {
-  std::vector<std::pair<std::string, std::string>> args;
-  args.reserve(statement.args.size() + (statement.sret_dest ? 1 : 0));
-
-  // If we have an sret destination, make it the first argument.
-  if (statement.sret_dest) {
-    TranslatedPlace dest = translate_place(*statement.sret_dest);
-    std::string ptr_ty = pointer_type_name(dest.pointee_type);
-    args.emplace_back(ptr_ty, dest.pointer);
-  }
-
-  for (const auto &arg : statement.args) {
-    auto operand = get_typed_operand(arg);
-    args.emplace_back(operand.type_name, operand.value_name);
-  }
-
-  // Resolve the call target
-  std::string ret_type;
+  // Resolve the callee and get its signature
+  const mir::MirFunctionSig* sig = nullptr;
   std::string func_name;
 
   if (statement.target.kind == mir::CallTarget::Kind::Internal) {
     const auto& fn = mir_module_.functions.at(statement.target.id);
-    bool abi_returns_void = statement.sret_dest.has_value() ||
-      std::get_if<type::UnitType>(&type::get_type_from_id(fn.return_type).value);
-    ret_type = abi_returns_void ? "void" : module_.get_type_name(fn.return_type);
+    sig = &fn.sig;
     func_name = fn.name;
   } else {
     const auto& ext_fn = mir_module_.external_functions.at(statement.target.id);
-    bool abi_returns_void = statement.sret_dest.has_value() ||
-      std::get_if<type::UnitType>(&type::get_type_from_id(ext_fn.return_type).value);
-    ret_type = abi_returns_void ? "void" : module_.get_type_name(ext_fn.return_type);
+    sig = &ext_fn.sig;
     func_name = ext_fn.name;
   }
 
-  // Trust the dest field set by lowerer: if dest is present, call returns a value
+  if (!sig) {
+    throw std::logic_error("Call target missing signature during codegen");
+  }
+
+  // Build LLVM arguments from ABI parameters
+  std::vector<std::pair<std::string, std::string>> llvm_args;
+  llvm_args.reserve(sig->abi_params.size());
+
+  for (std::size_t abi_idx = 0; abi_idx < sig->abi_params.size(); ++abi_idx) {
+    const auto& abi_param = sig->abi_params[abi_idx];
+
+    std::visit(mir::Overloaded{
+      [&](const mir::AbiParamDirect&) {
+        if (abi_param.param_index) {
+          auto operand = get_typed_operand(statement.args[*abi_param.param_index]);
+          llvm_args.emplace_back(operand.type_name, operand.value_name);
+        }
+      },
+      [&](const mir::AbiParamIndirect&) {
+        if (abi_param.param_index) {
+          // Caller allocated and initialized aggregate - pass the pointer directly
+          auto operand = get_typed_operand(statement.args[*abi_param.param_index]);
+          // operand should already be a pointer (or we need to take address of temp)
+          // For now assume it's already a pointer from caller's initialization
+          llvm_args.emplace_back(operand.type_name, operand.value_name);
+        }
+      },
+      [&](const mir::AbiParamSRet&) {
+        // SRet parameter: must have sret_dest or use a synthetic location
+        if (statement.sret_dest) {
+          TranslatedPlace dest = translate_place(*statement.sret_dest);
+          const auto& sret_desc = std::get<mir::ReturnDesc::RetIndirectSRet>(sig->return_desc.kind);
+          std::string ptr_ty = pointer_type_name(sret_desc.type);
+          llvm_args.emplace_back(ptr_ty, dest.pointer);
+        } else {
+          // Allocate synthetic sret storage
+          throw std::logic_error("SRet call without destination during codegen");
+        }
+      }
+    }, abi_param.kind);
+  }
+
+  // Determine the LLVM return type
+  std::string ret_type = std::visit(mir::Overloaded{
+    [](const mir::ReturnDesc::RetNever&) { return std::string("void"); },
+    [](const mir::ReturnDesc::RetVoid&) { return std::string("void"); },
+    [this](const mir::ReturnDesc::RetDirect& k) {
+      return module_.get_type_name(k.type);
+    },
+    [](const mir::ReturnDesc::RetIndirectSRet&) {
+      return std::string("void");  // sret calls return void in LLVM
+    }
+  }, sig->return_desc.kind);
+
+  // Emit the call
   if (statement.dest) {
     current_block_builder_->emit_call_into(
         llvmbuilder::temp_name(*statement.dest), ret_type,
-        func_name, args);
+        func_name, llvm_args);
   } else {
     current_block_builder_->emit_call(
-        ret_type, func_name, args, {});
+        ret_type, func_name, llvm_args, {});
   }
 }
 
@@ -440,21 +553,25 @@ void Emitter::emit_terminator(const mir::Terminator &terminator) {
                }
              },
              [&](const mir::ReturnTerminator &ret) {
-              bool abi_returns_void =
-                  mir::detail::is_unit_type(current_function_->return_type) ||
-                  current_function_->uses_sret;
+              const mir::ReturnDesc& ret_desc = current_function_->sig.return_desc;
 
-              if (abi_returns_void) {
+              if (is_never(ret_desc)) {
+                  current_block_builder_->emit_unreachable();
+                  return;
+              }
+
+              if (is_void_semantic(ret_desc) || is_indirect_sret(ret_desc)) {
                   if (ret.value) {
-                    std::cerr << "WARNING: function with void ABI return has ReturnTerminator with value; ignoring\n";
+                    std::cerr << "WARNING: void/sret function has ReturnTerminator with value; ignoring\n";
                   }
                   current_block_builder_->emit_ret_void();
                   return;
               }
 
+              // Direct return
               if (!ret.value) {
                   throw std::logic_error(
-                      "Non-unit/non-sret function has ReturnTerminator without value during codegen:");
+                      "Non-void function has ReturnTerminator without value during codegen");
               }
               auto operand = get_typed_operand(*ret.value);
               current_block_builder_->emit_ret(operand.type_name,

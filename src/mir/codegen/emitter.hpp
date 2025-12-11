@@ -55,6 +55,9 @@ private:
   void emit_phi_nodes(const mir::PhiNode &phi_node);
   void emit_globals();
   void emit_entry_block_prologue();
+  
+  // Helper: Extract LLVM parameter type from ABI parameter (used by emit_function, emit_external_declaration)
+  std::string get_abi_param_type(const mir::AbiParam &abi_param, const mir::MirFunctionSig &sig);
   void emit_define(const mir::DefineStatement &statement);
   void emit_load(const mir::LoadStatement &statement);
   void emit_assign(const mir::AssignStatement &statement);
@@ -65,7 +68,7 @@ private:
   TranslatedPlace translate_place(const mir::Place &place);
   void emit_rvalue_into(mir::TempId dest, mir::TypeId dest_type, const mir::RValue &rvalue);
   void emit_constant_rvalue_into(mir::TempId dest,
-                                 mir::TypeId dest_type,
+                            mir::TypeId dest_type,
                                  const mir::ConstantRValue &value);
   TypedOperand materialize_constant_operand(mir::TypeId fallback_type,
                                             const mir::Constant &constant,
@@ -90,7 +93,7 @@ private:
                                      const mir::FieldAccessRValue &value);
 
   // InitPattern-based initialization helpers
-  void emit_init_struct(const std::string &base_ptr,
+  void emit_init_struct(const std::     string &base_ptr,
                         mir::TypeId struct_type,
                         const mir::InitStruct &init_struct);
   void emit_init_array_literal(const std::string &base_ptr,
