@@ -231,7 +231,17 @@ FunctionLowerer::lower_expr_impl(const hir::ArrayLiteral &array_literal,
 std::optional<Operand>
 FunctionLowerer::lower_expr_impl(const hir::ArrayRepeat &array_repeat,
                                  const semantic::ExprInfo &info) {
-  return emit_rvalue_to_temp(build_array_repeat_rvalue(array_repeat), info.type);
+  // Array repeats are aggregated values: construct using InitArrayRepeat pattern
+  // Allocate a temporary local to hold the result
+  TypeId normalized = canonicalize_type_for_mir(info.type);
+  LocalId temp_local = create_synthetic_local(normalized, false);
+  Place temp_place = make_local_place(temp_local);
+  
+  // Use place-directed init (same as array literals)
+  lower_array_repeat_init(array_repeat, std::move(temp_place), normalized);
+  
+  // Load the constructed value from the temporary
+  return load_place_value(make_local_place(temp_local), normalized);
 }
 
 std::optional<Operand>

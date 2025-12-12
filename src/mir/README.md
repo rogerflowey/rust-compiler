@@ -137,7 +137,7 @@ RValues represent pure computations that produce values:
 - **RefRValue**: Take reference to a place
 - **CastRValue**: Type conversion
 - **FieldAccessRValue**: Access struct field (deprecated, use LoadStatement on projected place)
-- **ArrayRepeatRValue**: Repeat array element
+- **ArrayRepeatRValue**: Repeat array element (deprecated, use InitStatement with InitArrayRepeat)
 - **AggregateRValue**: Create aggregate value (deprecated, use InitStatement)
 
 ### Initialization Patterns

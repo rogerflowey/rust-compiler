@@ -214,6 +214,8 @@ struct AggregateRValue {
 };
 
 struct ArrayRepeatRValue {
+    // DEPRECATED: Array repeats should be constructed using InitStatement with InitArrayRepeat.
+    // This is kept for now but should not be used for new code.
     Operand value;
     std::size_t count = 0;
 };

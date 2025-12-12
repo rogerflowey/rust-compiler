@@ -730,6 +730,8 @@ Operand FunctionLowerer::emit_aggregate(AggregateRValue aggregate,
 
 Operand FunctionLowerer::emit_array_repeat(Operand value, std::size_t count,
                                            TypeId result_type) {
+  // DEPRECATED: This function uses ArrayRepeatRValue which is deprecated.
+  // Prefer using lower_array_repeat_init with InitArrayRepeat instead.
   ArrayRepeatRValue repeat;
   repeat.value = std::move(value);
   repeat.count = count;
@@ -1564,6 +1566,7 @@ AggregateRValue FunctionLowerer::build_array_aggregate(
 
 ArrayRepeatRValue FunctionLowerer::build_array_repeat_rvalue(
     const hir::ArrayRepeat &array_repeat) {
+  // DEPRECATED: This function is deprecated. Use lower_array_repeat_init with InitArrayRepeat instead.
   if (!array_repeat.value) {
     throw std::logic_error("Array repeat missing value during MIR lowering");
   }
