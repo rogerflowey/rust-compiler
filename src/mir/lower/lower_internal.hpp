@@ -74,11 +74,8 @@ private:
 	std::vector<std::pair<const void*, LoopContext>> loop_stack;
 	size_t synthetic_local_counter = 0;
 
-        // SRET support
-        bool uses_sret_ = false;
-        std::optional<Place> return_place_;  // where returns should store result, if sret
-        LocalId sret_ptr_local_ = std::numeric_limits<LocalId>::max();  // synthetic local aliasing sret param
-        const hir::Local* nrvo_local_ = nullptr;
+        // Return storage plan - unified representation of where returns go (SRET+NRVO)
+        ReturnStoragePlan return_plan;
 
 	void initialize(FunctionId id, std::string name);
 	const hir::Block* get_body() const;
@@ -86,7 +83,8 @@ private:
 	TypeId resolve_return_type() const;
         void init_locals();
         const hir::Local* pick_nrvo_local() const;
-        void setup_parameter_aliasing();
+        ReturnStoragePlan build_return_plan();
+        void apply_abi_aliasing(const ReturnStoragePlan& plan);
         mir::FunctionRef lookup_function(const void* key) const; // NEW: Returns FunctionRef
         const MirFunctionSig& get_callee_sig(mir::FunctionRef target) const;  // Extract signature from FunctionRef
 	

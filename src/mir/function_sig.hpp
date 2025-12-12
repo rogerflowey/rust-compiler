@@ -62,9 +62,7 @@ struct ReturnDesc {
     };
     struct RetIndirectSRet {
         TypeId type;
-        LocalId result_local;
         AbiParamIndex sret_index;
-        LocalId sret_local_id = std::numeric_limits<std::uint32_t>::max();  // Local aliasing the sret pointer
     };
 
     std::variant<RetNever, RetVoid, RetDirect, RetIndirectSRet> kind;

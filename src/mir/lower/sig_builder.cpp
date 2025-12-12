@@ -49,13 +49,12 @@ ReturnDesc SigBuilder::build_return_desc() {
     TypeId normalized = canonicalize_type_for_mir(ret);
 
     // For aggregates, we'll use indirect sret
-    // Result local and sret index will be filled in later by FunctionLowerer
+    // sret_index will be filled in later by populate_abi_params
     if (is_aggregate_type(normalized)) {
         ReturnDesc r;
         r.kind = ReturnDesc::RetIndirectSRet{
             .type = normalized,
-            .result_local = 0,  // placeholder
-            .sret_index = 0     // placeholder
+            .sret_index = 0     // placeholder, filled in by populate_abi_params
         };
         return r;
     }

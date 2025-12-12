@@ -186,39 +186,20 @@ void FunctionLowerer::initialize(FunctionId id, std::string name) {
   // Set up return_desc in the signature
   mir_function.sig.return_desc = proto_sig.return_desc;
 
-  // Determine if we need SRET
-  uses_sret_ = is_indirect_sret(mir_function.sig.return_desc);
-
-  if (uses_sret_) {
-    // For sret, we don't create a temp - we'll create a local that aliases the sret parameter
-    // This is handled after populate_abi_params, so we just mark that we need it
-  }
-
   // Initialize locals (this must happen before collect_parameters)
   init_locals();
   
   // Collect parameters and build MirParam entries
-  nrvo_local_ = pick_nrvo_local();
   collect_parameters();
   
   // Populate ABI parameters
   populate_abi_params(mir_function.sig);
   
-  // Setup aliasing for indirect parameters (Phase 4)
-  setup_parameter_aliasing();
-
-  // If using sret, set the result_local appropriately
-  if (uses_sret_) {
-    auto& sret = std::get<ReturnDesc::RetIndirectSRet>(mir_function.sig.return_desc.kind);
-    if (nrvo_local_) {
-      // NRVO case: the NRVO local is aliased to the sret destination
-      LocalId nrvo_local_id = require_local_id(nrvo_local_);
-      sret.result_local = nrvo_local_id;
-    } else if (sret_ptr_local_ != std::numeric_limits<LocalId>::max()) {
-      // No NRVO: use the synthetic sret local (which is aliased to sret destination)
-      sret.result_local = sret_ptr_local_;
-    }
-  }
+  // Build the return storage plan (decides SRET+NRVO)
+  return_plan = build_return_plan();
+  
+  // Apply aliasing for indirect parameters and SRET based on the plan
+  apply_abi_aliasing(return_plan);
 
   BasicBlockId entry = create_block();
   current_block = entry;
@@ -244,7 +225,8 @@ FunctionLowerer::get_locals_vector() const {
 }
 
 const hir::Local *FunctionLowerer::pick_nrvo_local() const {
-  if (!uses_sret_) {
+  // Only consider NRVO if we're doing SRET
+  if (!is_indirect_sret(mir_function.sig.return_desc)) {
     return nullptr;
   }
 
@@ -253,46 +235,28 @@ const hir::Local *FunctionLowerer::pick_nrvo_local() const {
     return nullptr;
   }
 
-  const hir::Local *candidate = nullptr;
-  bool multiple = false;
-
-  auto consider = [&](const hir::Local *local_ptr) {
-    if (!local_ptr || !local_ptr->type_annotation) {
-      return;
+  // Helper to check if a local matches the return type
+  auto matches_return_type = [&](const hir::Local *local) -> bool {
+    if (!local || !local->type_annotation) {
+      return false;
     }
-
-    TypeId ty = hir::helper::get_resolved_type(*local_ptr->type_annotation);
-    TypeId normalized = canonicalize_type_for_mir(ty);
-
-    if (normalized != ret_ty) {
-      return;
-    }
-
-    if (candidate && candidate != local_ptr) {
-      multiple = true;
-      return;
-    }
-
-    candidate = local_ptr;
+    TypeId ty = hir::helper::get_resolved_type(*local->type_annotation);
+    return canonicalize_type_for_mir(ty) == ret_ty;
   };
 
-  if (function_kind == FunctionKind::Method && hir_method && hir_method->body &&
-      hir_method->body->self_local) {
-    consider(hir_method->body->self_local.get());
-  }
+  // Do not check self param since it is a input param if indirect param enabled, not a allocated local
 
-  for (const auto &local_ptr : get_locals_vector()) {
-    consider(local_ptr.get());
-    if (multiple) {
-      break;
+  // Then, check other locals starting after parameters to avoid collision with indirect param aliasing
+  const auto &locals = get_locals_vector();
+  size_t start_idx = mir_function.sig.params.size();
+  for (size_t i = start_idx; i < locals.size(); ++i) {
+    const hir::Local *local = locals[i].get();
+    if (matches_return_type(local)) {
+      return local;
     }
   }
 
-  if (multiple) {
-    return nullptr;
-  }
-
-  return candidate;
+  return nullptr;
 }
 
 TypeId FunctionLowerer::resolve_return_type() const {
@@ -330,49 +294,77 @@ void FunctionLowerer::init_locals() {
     register_local(hir_method->body->self_local.get());
   }
 
+  // Note: params are registered into locals in semantic pass, and is guarenteed to be at the first of the local list
   for (const auto &local_ptr : get_locals_vector()) {
     if (local_ptr) {
       register_local(local_ptr.get());
     }
   }
-  
-  // Create synthetic local for sret if needed (will be aliased to sret ABI param)
-  // 
-  // IMPORTANT: SRET "alias local" semantics
-  // This creates a LOCAL that has the *semantic return type* (e.g., Point, not &Point).
-  // The local is marked as an "alias" that points to the ABI sret parameter slot.
-  // 
-  // The alias mechanism means:
-  //   - When code refers to this local (e.g., in a return statement),
-  //     the emitter/backend will interpret accesses as dereferences of the sret pointer.
-  //   - The sret parameter is a hidden first parameter: a pointer to caller-allocated memory.
-  //   - We don't allocate new memory for this local; it's backed by the caller's allocation.
-  //
-  // Key invariant: All loads/stores through this local must go through the alias mechanism.
-  // If this is changed in the future (e.g., to use pointer types), the emitter must be updated
-  // to handle it consistently. Search for "sret_local_id" and "alias" in the emitter code.
-  if (uses_sret_) {
-    TypeId ret_type = return_type(mir_function.sig.return_desc);
-    LocalId sret_local_id = static_cast<LocalId>(mir_function.locals.size());
-    
-    LocalInfo sret_info;
-    sret_info.type = ret_type;
-    sret_info.debug_name = "<sret>";
-    mir_function.locals.push_back(std::move(sret_info));
-    
-    // Store it for later use
-    sret_ptr_local_ = sret_local_id;
-  }
+  // Note: Do NOT create synthetic sret locals here anymore.
+  // The return storage plan (built after ABI params are known) will decide
+  // whether to reuse an NRVO local or create a new synthetic one.
 }
 
-void FunctionLowerer::setup_parameter_aliasing() {
-  // Phase 4: Mark indirect parameters and sret as aliases
-  // Walk through ABI parameters and set up aliasing for indirect/sret params
-  // 
+// Build the return storage plan: determines where returns are stored (SRET+NRVO handling)
+ReturnStoragePlan FunctionLowerer::build_return_plan() {
+  ReturnStoragePlan plan;
+
+  // Determine if we're using SRET
+  if (!is_indirect_sret(mir_function.sig.return_desc)) {
+    // Non-SRET: plan is simple
+    plan.is_sret = false;
+    plan.ret_type = return_type(mir_function.sig.return_desc);
+    return plan;
+  }
+
+  // SRET case: determine which local will be the return slot
+  plan.is_sret = true;
+  plan.ret_type = return_type(mir_function.sig.return_desc);
+
+  // Find the SRET ABI parameter index
+  AbiParamIndex sret_index = std::numeric_limits<AbiParamIndex>::max();
+  for (AbiParamIndex idx = 0; idx < mir_function.sig.abi_params.size(); ++idx) {
+    if (std::holds_alternative<AbiParamSRet>(mir_function.sig.abi_params[idx].kind)) {
+      sret_index = idx;
+      break;
+    }
+  }
+  if (sret_index == std::numeric_limits<AbiParamIndex>::max()) {
+    throw std::logic_error("build_return_plan: SRET required but no AbiParamSRet found");
+  }
+  plan.sret_abi_index = sret_index;
+
+  // Try to find an NRVO local (unique local with return type)
+  const hir::Local* nrvo_candidate = pick_nrvo_local();
+  if (nrvo_candidate) {
+    // NRVO: use the existing local
+    plan.return_slot_local = require_local_id(nrvo_candidate);
+    plan.uses_nrvo_local = true;
+    return plan;
+  }
+
+  // No NRVO: create a synthetic return local
+  TypeId ret_type = plan.ret_type;
+  LocalId synthetic_local_id = static_cast<LocalId>(mir_function.locals.size());
+  
+  LocalInfo return_info;
+  return_info.type = ret_type;
+  return_info.debug_name = "<return>";
+  mir_function.locals.push_back(std::move(return_info));
+  
+  plan.return_slot_local = synthetic_local_id;
+  plan.uses_nrvo_local = false;
+  return plan;
+}
+
+// Apply ABI aliasing based on the return storage plan
+// Sets up locals as aliases to ABI parameters for indirect passing
+void FunctionLowerer::apply_abi_aliasing(const ReturnStoragePlan& plan) {
+  // Process ABI parameters and set up aliasing
   // SRET ALIAS LOCAL SEMANTICS INVARIANT:
   // When a local is marked as an alias to an ABI parameter, the emitter interprets
   // accesses to that local (loads/stores) as going through the alias target (the ABI param).
-  // For SRET locals: the synthetic local has semantic return type, but its actual backing
+  // For SRET locals: the local has semantic return type, but its actual backing
   // is the sret pointer (ABI param). When the emitter sees access to sret_local, it treats
   // it as dereferencing the sret parameter.
   // This implicit pointee-alias model must be maintained if changing how locals are represented.
@@ -382,36 +374,14 @@ void FunctionLowerer::setup_parameter_aliasing() {
     
     // Handle sret parameter (hidden return pointer)
     if (std::holds_alternative<AbiParamSRet>(abi_param.kind)) {
-      if (!std::holds_alternative<ReturnDesc::RetIndirectSRet>(mir_function.sig.return_desc.kind)) {
-        throw std::logic_error("setup_parameter_aliasing: return_desc is not sret but ABI has sret param");
-      }
-      auto& sret_desc = std::get<ReturnDesc::RetIndirectSRet>(mir_function.sig.return_desc.kind);
-      
-      // Determine which local to alias to the sret ABI parameter
-      LocalId sret_alias_local;
-      if (nrvo_local_) {
-        // NRVO case: alias the NRVO local to the sret ABI parameter
-        sret_alias_local = require_local_id(nrvo_local_);
-      } else if (uses_sret_ && sret_ptr_local_ != std::numeric_limits<LocalId>::max()) {
-        // No NRVO: use the synthetic sret local
-        sret_alias_local = sret_ptr_local_;
-      } else {
-        throw std::logic_error("setup_parameter_aliasing: sret required but no alias local available");
+      if (!plan.is_sret) {
+        throw std::logic_error("apply_abi_aliasing: AbiParamSRet found but plan.is_sret is false");
       }
       
-      // Mark the local as an alias to the sret ABI parameter
+      // Mark the return slot local as an alias to the sret ABI parameter
+      LocalId sret_alias_local = plan.return_slot_local;
       mir_function.locals[sret_alias_local].is_alias = true;
       mir_function.locals[sret_alias_local].alias_target = abi_idx;
-      
-      // Update return descriptor
-      sret_desc.sret_local_id = sret_alias_local;
-      
-      // Set up return place - use LocalPlace for the alias local
-      // The alias mechanism will resolve it to the actual sret ABI parameter
-      // when the emitter accesses it
-      Place p;
-      p.base = LocalPlace{sret_alias_local};
-      return_place_ = std::move(p);
       continue;
     }
     

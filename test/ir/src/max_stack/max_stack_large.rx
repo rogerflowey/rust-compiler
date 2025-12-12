@@ -1,0 +1,22 @@
+// Test 5: Large stack allocation stress test
+// Tests handling of very large arrays approaching stack limits
+fn main() {
+    // Allocate a very large array (8KB) on the stack
+    let mut large_arr: [i32; 2048] = [0; 2048];
+    
+    // Fill it with values
+    let mut i: usize = 0;
+    while (i < 2048) {
+        large_arr[i] = (i / 256) as i32;
+        i = i + 1;
+    }
+    
+    // Read scattered values to verify correctness
+    printlnInt(large_arr[0]);
+    printlnInt(large_arr[256]);
+    printlnInt(large_arr[512]);
+    printlnInt(large_arr[1024]);
+    printlnInt(large_arr[2047]);
+    
+    exit(0);
+}

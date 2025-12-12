@@ -123,6 +123,28 @@ struct ValueSource {
     std::variant<Operand, Place> source;
 };
 
+// Return storage plan: determines where return values are stored (SRET+NRVO handling)
+// Computed once during function initialization, encapsulates all return-storage decisions
+struct ReturnStoragePlan {
+    bool is_sret = false;                          // true if using SRET (indirect return)
+    TypeId ret_type = invalid_type_id;             // semantic return type
+
+    // Only valid if is_sret:
+    AbiParamIndex sret_abi_index = 0;             // index of SRET param in abi_params
+    LocalId return_slot_local = std::numeric_limits<LocalId>::max(); // the local aliased to sret (NRVO or synthetic)
+    bool uses_nrvo_local = false;                  // true if return_slot_local is the NRVO local
+
+    // Helper to create the return destination place
+    Place return_place() const {
+        if (is_sret) {
+            Place p;
+            p.base = LocalPlace{return_slot_local};
+            return p;
+        }
+        throw std::logic_error("return_place() called on non-SRET plan");
+    }
+};
+
 struct BinaryOpRValue {
     enum class Kind {
         IAdd,

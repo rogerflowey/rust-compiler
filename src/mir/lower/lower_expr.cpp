@@ -868,7 +868,7 @@ FunctionLowerer::lower_continue_expr(const hir::Continue &continue_expr) {
 
 void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, 
                                            const char *context) {
-  // Central place to handle all return types using the new return spec system
+  // Central place to handle all return types using the return storage plan
   
   const auto& return_desc = mir_function.sig.return_desc;
   
@@ -893,12 +893,14 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
                             ": sret function requires explicit return value");
     }
 
-    // Get the result local from ReturnDesc - this is where the result should be stored
-    const auto& sret_desc = std::get<ReturnDesc::RetIndirectSRet>(return_desc.kind);
-    const TypeId ret_type = sret_desc.type;
-    
-    // Create a place that refers to the result_local
-    Place result_place = make_local_place(sret_desc.result_local);
+    // Use the return plan to determine the result destination
+    if (!return_plan.is_sret) {
+      throw std::logic_error(std::string(context) + 
+                            ": return descriptor is sret but plan is not");
+    }
+
+    const TypeId ret_type = return_plan.ret_type;
+    Place result_place = return_plan.return_place();
 
     // Use the Init machinery to initialize the result local with the return value
     try {
@@ -926,8 +928,6 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
 
   // Case 4: direct return - value is returned directly via return value
   if (std::holds_alternative<ReturnDesc::RetDirect>(return_desc.kind)) {
-    const auto& direct_desc = std::get<ReturnDesc::RetDirect>(return_desc.kind);
-    
     std::optional<Operand> value;
     if (value_ptr && *value_ptr) {
       value = lower_expr(**value_ptr);
