@@ -1,0 +1,50 @@
+// Test NRVO with method returns
+// Method that creates and returns a struct (sret aliasing with local)
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Point {
+    // Method returns Point via NRVO
+    fn clone(self) -> Point {
+        let p: Point = Point { x: self.x, y: self.y };
+        p
+    }
+    
+    // Method with operations before return
+    fn reflect_x(self) -> Point {
+        let reflected: Point = Point { x: -self.x, y: self.y };
+        reflected
+    }
+    
+    fn reflect_y(self) -> Point {
+        let reflected: Point = Point { x: self.x, y: -self.y };
+        reflected
+    }
+}
+
+fn apply_point(p: Point) -> i32 {
+    p.x + p.y
+}
+
+fn main() {
+    let p: Point = Point { x: 3, y: 4 };
+    
+    // Test method returning Point via NRVO
+    let cloned: Point = p.clone();
+    printlnInt(cloned.x);  // 3
+    printlnInt(cloned.y);  // 4
+    
+    // Test method with computations returning Point via NRVO
+    let reflected_x: Point = p.reflect_x();
+    printlnInt(reflected_x.x);  // -3
+    printlnInt(reflected_x.y);  // 4
+    
+    let reflected_y: Point = p.reflect_y();
+    printlnInt(reflected_y.x);  // 3
+    printlnInt(reflected_y.y);  // -4
+    
+    exit(0);
+}

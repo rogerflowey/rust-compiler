@@ -1,0 +1,65 @@
+// Test method calls where receiver is passed as AbiParamByValCallerCopy
+// The receiver (self) is the first argument and uses byval caller-copy semantics
+
+struct Counter {
+    value: i32,
+}
+
+impl Counter {
+    // Method with only self receiver (no additional params)
+    fn get(self) -> i32 {
+        self.value
+    }
+    
+    // Method that modifies via mutation
+    fn increment(mut self) -> i32 {
+        self.value = self.value + 1;
+        self.value
+    }
+    
+    // Method with additional byval param
+    fn add_value(self, x: i32) -> i32 {
+        self.value + x
+    }
+}
+
+struct Rectangle {
+    width: i32,
+    height: i32,
+}
+
+impl Rectangle {
+    fn area(self) -> i32 {
+        self.width * self.height
+    }
+    
+    fn perimeter(self) -> i32 {
+        (self.width + self.height) * 2
+    }
+    
+    fn scale(self, factor: i32) -> i32 {
+        (self.width * factor) + (self.height * factor)
+    }
+}
+
+fn main() {
+    // Test simple method with receiver only
+    let c: Counter = Counter { value: 42 };
+    printlnInt(c.get());  // 42
+    
+    // Test method with receiver and one param
+    printlnInt(c.add_value(8));  // 50
+    
+    // Test multiple receivers passed
+    let c2: Counter = Counter { value: 100 };
+    printlnInt(c2.get());  // 100
+    printlnInt(c2.add_value(50));  // 150
+    
+    // Test Rectangle methods
+    let rect: Rectangle = Rectangle { width: 10, height: 5 };
+    printlnInt(rect.area());  // 50
+    printlnInt(rect.perimeter());  // 30
+    printlnInt(rect.scale(2));  // 30
+    
+    exit(0);
+}

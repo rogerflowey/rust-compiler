@@ -1,0 +1,22 @@
+// Test AbiParamDirect: primitive types passed by value directly
+// Functions with direct parameters (i32, i64, etc.) should use AbiParamDirect
+
+fn add_direct(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+fn mul_three(x: i32, y: i32, z: i32) -> i32 {
+    x * y * z
+}
+
+fn main() {
+    // Test simple direct params
+    printlnInt(add_direct(5, 3));  // 8
+    printlnInt(add_direct(100, 200));  // 300
+    
+    // Test multiple direct params
+    printlnInt(mul_three(2, 3, 4));  // 24
+    printlnInt(mul_three(10, 20, 1));  // 200
+    
+    exit(0);
+}

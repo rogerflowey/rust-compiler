@@ -542,11 +542,11 @@ TEST(MirLowerTest, RecordsFunctionParameters) {
     mir::MirModule module = mir::lower_program(program);
     ASSERT_EQ(module.functions.size(), 1u);
     const auto& lowered = module.functions.front();
-    ASSERT_EQ(lowered.params.size(), 1u);
-    EXPECT_EQ(lowered.params[0].local, 0u);
+    ASSERT_EQ(lowered.sig.params.size(), 1u);
+    EXPECT_EQ(lowered.sig.params[0].local, 0u);
     TypeId expected_param_type = mir::detail::canonicalize_type_for_mir(int_type);
-    EXPECT_EQ(lowered.params[0].type, expected_param_type);
-    EXPECT_EQ(lowered.params[0].name, "%param_x");
+    EXPECT_EQ(lowered.sig.params[0].type, expected_param_type);
+    EXPECT_EQ(lowered.sig.params[0].debug_name, "x");
 }
 
 TEST(MirLowerTest, LowersBinaryAddition) {
@@ -758,7 +758,7 @@ TEST(MirLowerTest, LowersEnumVariantExpression) {
     function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
-    EXPECT_EQ(lowered.return_type, usize_type);
+    EXPECT_EQ(return_type(lowered.sig.return_desc), usize_type);
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
     const auto& ret = std::get<mir::ReturnTerminator>(block.terminator.value);
@@ -1165,9 +1165,9 @@ TEST(MirLowerTest, LowersStructLiteralAggregate) {
     function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
-    // With SRET support, aggregate return types should create sret_temp
-    ASSERT_TRUE(lowered.uses_sret);
-    ASSERT_TRUE(lowered.sret_temp.has_value());
+    // With SRET support, aggregate return types should use RetIndirectSRet
+    ASSERT_TRUE(lowered.uses_sret());
+    ASSERT_TRUE(mir::is_indirect_sret(lowered.sig.return_desc));
     
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
@@ -1201,9 +1201,9 @@ TEST(MirLowerTest, LowersArrayLiteralAggregate) {
     function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
-    // With SRET support, aggregate return types should create sret_temp
-    ASSERT_TRUE(lowered.uses_sret);
-    ASSERT_TRUE(lowered.sret_temp.has_value());
+    // With SRET support, aggregate return types should use RetIndirectSRet
+    ASSERT_TRUE(lowered.uses_sret());
+    ASSERT_TRUE(mir::is_indirect_sret(lowered.sig.return_desc));
     
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
@@ -1237,9 +1237,9 @@ TEST(MirLowerTest, LowersArrayRepeatAggregate) {
     function.body = std::move(func_body);
 
     mir::MirFunction lowered = lower_function_for_test(function);
-    // With SRET support, aggregate return types should create sret_temp
-    ASSERT_TRUE(lowered.uses_sret);
-    ASSERT_TRUE(lowered.sret_temp.has_value());
+    // With SRET support, aggregate return types should use RetIndirectSRet
+    ASSERT_TRUE(lowered.uses_sret());
+    ASSERT_TRUE(mir::is_indirect_sret(lowered.sig.return_desc));
     
     ASSERT_EQ(lowered.basic_blocks.size(), 1u);
     const auto& block = lowered.basic_blocks.front();
@@ -1322,8 +1322,10 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
     const auto& call_stmt = std::get<mir::CallStatement>(entry.statements[1].value);
     EXPECT_EQ(call_stmt.target.kind, mir::CallTarget::Kind::Internal);
     ASSERT_EQ(call_stmt.args.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<mir::TempId>(call_stmt.args[0].value));
-    EXPECT_EQ(std::get<mir::TempId>(call_stmt.args[0].value), aggregate_define.dest);
+    ASSERT_TRUE(std::holds_alternative<mir::Operand>(call_stmt.args[0].source));
+    const auto& arg_operand = std::get<mir::Operand>(call_stmt.args[0].source);
+    ASSERT_TRUE(std::holds_alternative<mir::TempId>(arg_operand.value));
+    EXPECT_EQ(std::get<mir::TempId>(arg_operand.value), aggregate_define.dest);
 }
 
 TEST(MirLowerTest, LowersReferenceToLocalPlace) {
@@ -1584,7 +1586,8 @@ TEST(MirLowerTest, LowersReferenceToRValueByMaterializingLocal) {
     ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(assign.dest.base));
     EXPECT_EQ(std::get<mir::LocalPlace>(assign.dest.base).id, 0u);
     // The literal is now optimized to a direct Constant operand, not a temp
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(assign.src.value));
+    ASSERT_TRUE(std::holds_alternative<mir::Operand>(assign.src.source));
+    ASSERT_TRUE(std::holds_alternative<mir::Constant>(std::get<mir::Operand>(assign.src.source).value));
 
     const auto& define = std::get<mir::DefineStatement>(block.statements[1].value);
     ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define.rvalue.value));
@@ -1632,7 +1635,8 @@ TEST(MirLowerTest, LowersMutableReferenceToRValueByMaterializingLocal) {
     ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(assign.dest.base));
     EXPECT_EQ(std::get<mir::LocalPlace>(assign.dest.base).id, 0u);
     // The literal is now optimized to a direct Constant operand, not a temp
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(assign.src.value));
+    ASSERT_TRUE(std::holds_alternative<mir::Operand>(assign.src.source));
+    ASSERT_TRUE(std::holds_alternative<mir::Constant>(std::get<mir::Operand>(assign.src.source).value));
 
     const auto& define = std::get<mir::DefineStatement>(block.statements[1].value);
     ASSERT_TRUE(std::holds_alternative<mir::RefRValue>(define.rvalue.value));

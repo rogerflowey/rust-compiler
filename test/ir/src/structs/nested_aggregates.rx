@@ -1,0 +1,53 @@
+// Test nested aggregates: structs containing other structs
+// Tests that byval copying works correctly for nested structures
+
+struct Inner {
+    a: i32,
+    b: i32,
+}
+
+struct Outer {
+    inner: Inner,
+    c: i32,
+}
+
+// Function taking nested aggregate
+fn extract_inner_a(o: Outer) -> i32 {
+    o.inner.a
+}
+
+fn extract_all(o: Outer) -> i32 {
+    o.inner.a + o.inner.b + o.c
+}
+
+// Function returning nested aggregate
+fn make_outer(a: i32, b: i32, c: i32) -> Outer {
+    let inner: Inner = Inner { a: a, b: b };
+    Outer { inner: inner, c: c }
+}
+
+// Function with multiple nested aggregates
+fn combine_outers(o1: Outer, o2: Outer) -> i32 {
+    o1.inner.a + o1.inner.b + o1.c + o2.inner.a + o2.inner.b + o2.c
+}
+
+fn main() {
+    // Test passing nested aggregate
+    let inner: Inner = Inner { a: 10, b: 20 };
+    let outer: Outer = Outer { inner: inner, c: 30 };
+    
+    printlnInt(extract_inner_a(outer));  // 10
+    printlnInt(extract_all(outer));  // 60
+    
+    // Test returning nested aggregate
+    let o1: Outer = make_outer(5, 6, 7);
+    printlnInt(o1.inner.a);  // 5
+    printlnInt(o1.inner.b);  // 6
+    printlnInt(o1.c);  // 7
+    
+    // Test multiple nested aggregates
+    let o2: Outer = make_outer(1, 2, 3);
+    printlnInt(combine_outers(o1, o2));  // 31 (5+6+7+1+2+3)
+    
+    exit(0);
+}

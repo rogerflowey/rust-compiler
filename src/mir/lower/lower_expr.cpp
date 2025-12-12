@@ -186,7 +186,7 @@ Place FunctionLowerer::ensure_reference_operand_place(
       create_synthetic_local(operand_info.type, mutable_reference);
   AssignStatement assign;
   assign.dest = make_local_place(temp_local);
-  assign.src = value;
+  assign.src = ValueSource{value};
   Statement stmt;
   stmt.value = std::move(assign);
   append_statement(std::move(stmt));
@@ -499,30 +499,41 @@ FunctionLowerer::lower_expr_impl(const hir::Call &call_expr,
   }
 
   const hir::Function *hir_fn = func_use->def;
-  bool use_sret = function_uses_sret(*hir_fn);
-
   mir::FunctionRef target = lookup_function(hir_fn);
-
-  std::vector<Operand> args;
-  args.reserve(call_expr.args.size());
-  for (const auto &arg : call_expr.args) {
+  const MirFunctionSig& callee_sig = get_callee_sig(target);
+  
+  // Build CallSite for unified lowering
+  CallSite cs;
+  cs.target = target;
+  cs.callee_sig = &callee_sig;
+  cs.result_type = info.type;
+  cs.ctx = CallSite::Context::Expr;
+  
+  // For function calls: args are the direct arguments
+  cs.args_exprs.reserve(call_expr.args.size());
+  for (const auto& arg : call_expr.args) {
     if (!arg) {
-      throw std::logic_error("Call argument missing during MIR lowering");
+      throw std::logic_error("Function call argument missing");
     }
-    args.push_back(lower_operand(*arg));
+    cs.args_exprs.push_back(arg.get());
   }
-
-  if (!use_sret) {
-    // current behavior
-    return emit_call(target, info.type, std::move(args));
+  
+  // Handle SRET result placement
+  if (std::holds_alternative<mir::ReturnDesc::RetIndirectSRet>(callee_sig.return_desc.kind)) {
+    // Create synthetic local to receive result
+    LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
+    cs.sret_dest = make_local_place(tmp_local);
+    
+    // Lower the call with sret destination
+    lower_callsite(cs);
+    
+    // Load result from sret destination
+    return load_place_value(*cs.sret_dest, info.type);
+  } else {
+    // Direct return: lower without sret destination
+    cs.sret_dest = std::nullopt;
+    return lower_callsite(cs);
   }
-
-  // sret in expression context: create a synthetic local + load
-  LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
-  Place dest_place = make_local_place(tmp_local);
-
-  emit_call_into_place(target, info.type, dest_place, std::move(args));
-  return load_place_value(std::move(dest_place), info.type);
 }
 
 std::optional<Operand>
@@ -533,32 +544,44 @@ FunctionLowerer::lower_expr_impl(const hir::MethodCall &method_call,
     throw std::logic_error("Method call missing receiver during MIR lowering");
   }
 
-  bool use_sret = method_uses_sret(*method_def);
   mir::FunctionRef target = lookup_function(method_def);
-
-  std::vector<Operand> args;
-  args.reserve(method_call.args.size() + 1);
-  args.push_back(lower_operand(*method_call.receiver));
-
-  for (const auto &arg : method_call.args) {
+  const MirFunctionSig& callee_sig = get_callee_sig(target);
+  
+  // Build CallSite for unified lowering
+  // For method calls: args_exprs = [receiver] + method_call.args
+  CallSite cs;
+  cs.target = target;
+  cs.callee_sig = &callee_sig;
+  cs.result_type = info.type;
+  cs.ctx = CallSite::Context::Expr;
+  
+  // Receiver is the first argument
+  cs.args_exprs.push_back(method_call.receiver.get());
+  
+  // Add explicit arguments
+  for (const auto& arg : method_call.args) {
     if (!arg) {
-      throw std::logic_error(
-          "Method call argument missing during MIR lowering");
+      throw std::logic_error("Method call argument missing during MIR lowering");
     }
-    args.push_back(lower_operand(*arg));
+    cs.args_exprs.push_back(arg.get());
   }
-
-  if (!use_sret) {
-    // current behavior
-    return emit_call(target, info.type, std::move(args));
+  
+  // Handle SRET result placement
+  if (std::holds_alternative<mir::ReturnDesc::RetIndirectSRet>(callee_sig.return_desc.kind)) {
+    // Create synthetic local to receive result
+    LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
+    cs.sret_dest = make_local_place(tmp_local);
+    
+    // Lower the call with sret destination
+    lower_callsite(cs);
+    
+    // Load result from sret destination
+    return load_place_value(*cs.sret_dest, info.type);
+  } else {
+    // Direct return: lower without sret destination
+    cs.sret_dest = std::nullopt;
+    return lower_callsite(cs);
   }
-
-  // sret in expression context: create a synthetic local + load
-  LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
-  Place dest_place = make_local_place(tmp_local);
-
-  emit_call_into_place(target, info.type, dest_place, std::move(args));
-  return load_place_value(std::move(dest_place), info.type);
 }
 
 std::optional<Operand>
@@ -872,8 +895,16 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
                             ": sret function missing return_place");
     }
 
-    // Write value into sret destination
-    lower_init(**value_ptr, *return_place_, return_type(mir_function.sig.return_desc));
+    // For sret: the return_place contains a local that holds a pointer
+    // We need to dereference that pointer to get the actual destination
+    // The Init machinery will handle loading the pointer and initializing through it
+    try {
+      const TypeId ret_type = return_type(mir_function.sig.return_desc);
+      lower_init(**value_ptr, *return_place_, ret_type);
+    } catch (const std::exception& e) {
+      throw std::logic_error(std::string(context) + 
+                            ": error in sret return value initialization: " + e.what());
+    }
     emit_return(std::nullopt);
     return;
   }

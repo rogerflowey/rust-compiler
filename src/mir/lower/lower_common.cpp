@@ -457,8 +457,8 @@ void populate_abi_params(MirFunctionSig& sig) {
     
     // For now: classify based on type
     if (is_aggregate_type(p.type)) {
-      // Indirect: caller allocates, callee uses as alias (like sret)
-      abi_param.kind = AbiParamIndirect{};
+      // Caller-owned byval copy: caller allocates, callee receives pointer (no-escape)
+      abi_param.kind = AbiParamByValCallerCopy{};
     } else {
       abi_param.kind = AbiParamDirect{};
     }

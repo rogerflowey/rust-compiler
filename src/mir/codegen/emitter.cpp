@@ -99,7 +99,7 @@ std::string Emitter::emit() {
 
   // Always declare builtins for array repeat and memcpy
   module_.add_global("declare dso_local void @__builtin_array_repeat_copy(i8*, i64, i64)");
-  module_.add_global("declare i32 @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)");
+  module_.add_global("declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)");
   
   // Emit external function declarations first
   for (const auto &external_function : mir_module_.external_functions) {
@@ -141,7 +141,7 @@ std::string Emitter::get_abi_param_type(const mir::AbiParam &abi_param,
       }
       return std::string("");
     },
-    [&](const mir::AbiParamIndirect&) {
+    [&](const mir::AbiParamByValCallerCopy&) {
       if (abi_param.param_index) {
         const auto& sem_param = sig.params[*abi_param.param_index];
         return module_.pointer_type_name(sem_param.type);
@@ -174,7 +174,7 @@ void Emitter::emit_function(const mir::MirFunction &function) {
           param_name = "%" + std::string("param_") + sem_param.debug_name;
         }
       },
-      [&](const mir::AbiParamIndirect&) {
+      [&](const mir::AbiParamByValCallerCopy&) {
         if (abi_param.param_index) {
           const auto& sem_param = sig.params[*abi_param.param_index];
           param_name = "%" + std::string("param_") + sem_param.debug_name;
@@ -318,30 +318,14 @@ void Emitter::emit_entry_block_prologue() {
                           pointer_type_name(sem_param.type), dest_ptr);
         }
       },
-      [&](const mir::AbiParamIndirect&) {
+      [&](const mir::AbiParamByValCallerCopy&) {
         // Caller allocated, callee uses as alias - no load/store needed
-        // Mark the result_local as aliased to the parameter pointer
-        // Get the semantic parameter to find the local
-        if (abi_param.param_index) {
-          const auto& sem_param = sig.params[*abi_param.param_index];
-          mir::LocalId result_local = sem_param.local;
-          
-          if (result_local < current_function_->locals.size()) {
-            auto& local = const_cast<mir::LocalInfo&>(current_function_->locals[result_local]);
-            local.is_alias = true;
-            // The alias points to the parameter pointer
-          }
-        }
+        // The local should already be marked as alias by setup_parameter_aliasing()
+        // in the lowering phase - do not modify it here
       },
       [&](const mir::AbiParamSRet&) {
-        // For sret, mark the result_local as aliased to this parameter
-        const auto& sret_desc = std::get<mir::ReturnDesc::RetIndirectSRet>(sig.return_desc.kind);
-        mir::LocalId result_local = sret_desc.result_local;
-        
-        if (result_local < current_function_->locals.size()) {
-          auto& local = const_cast<mir::LocalInfo&>(current_function_->locals[result_local]);
-          local.is_alias = true;
-        }
+        // For sret, the local should already be marked as alias by setup_parameter_aliasing()
+        // in the lowering phase - do not modify it here
       }
     }, abi_param.kind);
   }
@@ -377,14 +361,43 @@ void Emitter::emit_load(const mir::LoadStatement &statement) {
 }
 
 void Emitter::emit_assign(const mir::AssignStatement &statement) {
-  auto operand = get_typed_operand(statement.src);
   TranslatedPlace dest = translate_place(statement.dest);
   if (dest.pointee_type == mir::invalid_type_id) {
     throw std::logic_error("Assign destination missing pointee type during codegen");
   }
-  current_block_builder_->emit_store(
-      operand.type_name, operand.value_name,
-      pointer_type_name(dest.pointee_type), dest.pointer);
+
+  // Handle ValueSource: either Operand (direct value) or Place (copy from location)
+  std::visit(mir::Overloaded{
+      [&](const mir::Operand &operand) {
+        auto typed_operand = get_typed_operand(operand);
+        current_block_builder_->emit_store(
+            typed_operand.type_name, typed_operand.value_name,
+            pointer_type_name(dest.pointee_type), dest.pointer);
+      },
+      [&](const mir::Place &src_place) {
+        // Copy from source place to destination place (memcpy)
+        TranslatedPlace src = translate_place(src_place);
+        if (src.pointee_type == mir::invalid_type_id) {
+          throw std::logic_error("Assign source missing pointee type during codegen");
+        }
+        if (src.pointee_type != dest.pointee_type) {
+          throw std::logic_error("Assign source and destination types mismatch");
+        }
+        // Emit a memcpy from src to dest
+        std::string size = emit_sizeof_bytes(dest.pointee_type);
+        std::string dest_byte_ptr = current_block_builder_->emit_cast(
+            "bitcast", pointer_type_name(dest.pointee_type), dest.pointer, "i8*", "assign.dest");
+        std::string src_byte_ptr = current_block_builder_->emit_cast(
+            "bitcast", pointer_type_name(src.pointee_type), src.pointer, "i8*", "assign.src");
+        
+        std::vector<std::pair<std::string, std::string>> args;
+        args.emplace_back("i8*", dest_byte_ptr);
+        args.emplace_back("i8*", src_byte_ptr);
+        args.emplace_back("i64", size);
+        args.emplace_back("i1", "false");
+        current_block_builder_->emit_call("void", "llvm.memcpy.p0i8.p0i8.i64", args, "");
+      }
+  }, statement.src.source);
 }
 
 void Emitter::emit_init_statement(const mir::InitStatement &statement) {
@@ -443,17 +456,33 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
     std::visit(mir::Overloaded{
       [&](const mir::AbiParamDirect&) {
         if (abi_param.param_index) {
-          auto operand = get_typed_operand(statement.args[*abi_param.param_index]);
-          llvm_args.emplace_back(operand.type_name, operand.value_name);
+          const auto& value_source = statement.args[*abi_param.param_index];
+          // Direct parameters must be Operand
+          if (auto* operand = std::get_if<mir::Operand>(&value_source.source)) {
+            auto typed_operand = get_typed_operand(*operand);
+            llvm_args.emplace_back(typed_operand.type_name, typed_operand.value_name);
+          } else {
+            throw std::logic_error("AbiParamDirect expects Operand, got Place");
+          }
         }
       },
-      [&](const mir::AbiParamIndirect&) {
+      [&](const mir::AbiParamByValCallerCopy&) {
         if (abi_param.param_index) {
-          // Caller allocated and initialized aggregate - pass the pointer directly
-          auto operand = get_typed_operand(statement.args[*abi_param.param_index]);
-          // operand should already be a pointer (or we need to take address of temp)
-          // For now assume it's already a pointer from caller's initialization
-          llvm_args.emplace_back(operand.type_name, operand.value_name);
+          // Indirect parameters can be either Operand (pointer) or Place (needs address)
+          const auto& value_source = statement.args[*abi_param.param_index];
+          std::visit(mir::Overloaded{
+              [&](const mir::Operand &operand) {
+                // Operand should be a pointer type
+                auto typed_operand = get_typed_operand(operand);
+                llvm_args.emplace_back(typed_operand.type_name, typed_operand.value_name);
+              },
+              [&](const mir::Place &place) {
+                // Place needs its address
+                TranslatedPlace translated = translate_place(place);
+                std::string ptr_ty = pointer_type_name(translated.pointee_type);
+                llvm_args.emplace_back(ptr_ty, translated.pointer);
+              }
+          }, value_source.source);
         }
       },
       [&](const mir::AbiParamSRet&) {
@@ -912,10 +941,28 @@ std::string Emitter::get_local_ptr(mir::LocalId local) {
   const auto &info = current_function_->locals[local];
 
   if (info.is_alias) {
-    if (!info.alias_temp) {
-      throw std::logic_error("Alias local missing alias_temp");
-    }
-    return get_temp(*info.alias_temp);
+    return std::visit(
+        Overloaded{
+            [&](std::monostate) -> std::string {
+              throw std::logic_error("Alias local with no alias_target");
+            },
+            [&](mir::TempId temp) -> std::string {
+              return get_temp(temp);
+            },
+            [&](mir::AbiParamIndex abi_idx) -> std::string {
+              // For ABI parameters, get the LLVM argument name from the current function
+              if (!current_function_builder_) {
+                throw std::logic_error("No current function builder for ABI param lookup");
+              }
+              const auto &llvm_params = current_function_builder_->parameters();
+              if (abi_idx >= llvm_params.size()) {
+                throw std::out_of_range("ABI parameter index out of range");
+              }
+              return llvm_params[abi_idx].name;
+            }
+        },
+        info.alias_target
+    );
   }
 
   return local_ptr_name(local);
@@ -1046,9 +1093,6 @@ void Emitter::emit_init_struct(const std::string &base_ptr,
       continue;
     }
 
-    // Get the operand value
-    auto operand = get_typed_operand(leaf.operand);
-
     // Compute field pointer: gep struct, 0, field_idx
     std::vector<std::pair<std::string, std::string>> indices;
     indices.emplace_back("i32", "0");
@@ -1062,12 +1106,36 @@ void Emitter::emit_init_struct(const std::string &base_ptr,
         /*inbounds=*/true,
         "field");
 
-    // Store the operand into the field
-    current_block_builder_->emit_store(
-        operand.type_name,
-        operand.value_name,
-        pointer_type_name(operand.type),
-        field_ptr);
+    // Handle ValueSource: either Operand or Place
+    std::visit(mir::Overloaded{
+        [&](const mir::Operand &operand) {
+          auto typed_operand = get_typed_operand(operand);
+          current_block_builder_->emit_store(
+              typed_operand.type_name,
+              typed_operand.value_name,
+              pointer_type_name(typed_operand.type),
+              field_ptr);
+        },
+        [&](const mir::Place &src_place) {
+          // Copy from source place to field (memcpy)
+          TranslatedPlace src = translate_place(src_place);
+          if (src.pointee_type == mir::invalid_type_id) {
+            throw std::logic_error("InitLeaf source missing pointee type during codegen");
+          }
+          std::string size = emit_sizeof_bytes(src.pointee_type);
+          std::string dest_byte_ptr = current_block_builder_->emit_cast(
+              "bitcast", pointer_type_name(src.pointee_type), field_ptr, "i8*", "field.dest");
+          std::string src_byte_ptr = current_block_builder_->emit_cast(
+              "bitcast", pointer_type_name(src.pointee_type), src.pointer, "i8*", "field.src");
+          
+          std::vector<std::pair<std::string, std::string>> args;
+          args.emplace_back("i8*", dest_byte_ptr);
+          args.emplace_back("i8*", src_byte_ptr);
+          args.emplace_back("i64", size);
+          args.emplace_back("i1", "false");
+          current_block_builder_->emit_call("void", "llvm.memcpy.p0i8.p0i8.i64", args, "");
+        }
+    }, leaf.value.source);
   }
 }
 
@@ -1085,9 +1153,6 @@ void Emitter::emit_init_array_literal(const std::string &base_ptr,
       continue;
     }
 
-    // Get the operand value
-    auto operand = get_typed_operand(leaf.operand);
-
     // Compute element pointer: gep array, 0, elem_idx
     std::vector<std::pair<std::string, std::string>> indices;
     indices.emplace_back("i32", "0");
@@ -1101,12 +1166,36 @@ void Emitter::emit_init_array_literal(const std::string &base_ptr,
         /*inbounds=*/true,
         "elem");
 
-    // Store the operand into the element
-    current_block_builder_->emit_store(
-        operand.type_name,
-        operand.value_name,
-        pointer_type_name(operand.type),
-        elem_ptr);
+    // Handle ValueSource: either Operand or Place
+    std::visit(mir::Overloaded{
+        [&](const mir::Operand &operand) {
+          auto typed_operand = get_typed_operand(operand);
+          current_block_builder_->emit_store(
+              typed_operand.type_name,
+              typed_operand.value_name,
+              pointer_type_name(typed_operand.type),
+              elem_ptr);
+        },
+        [&](const mir::Place &src_place) {
+          // Copy from source place to element (memcpy)
+          TranslatedPlace src = translate_place(src_place);
+          if (src.pointee_type == mir::invalid_type_id) {
+            throw std::logic_error("InitLeaf source missing pointee type during codegen");
+          }
+          std::string size = emit_sizeof_bytes(src.pointee_type);
+          std::string dest_byte_ptr = current_block_builder_->emit_cast(
+              "bitcast", pointer_type_name(src.pointee_type), elem_ptr, "i8*", "elem.dest");
+          std::string src_byte_ptr = current_block_builder_->emit_cast(
+              "bitcast", pointer_type_name(src.pointee_type), src.pointer, "i8*", "elem.src");
+          
+          std::vector<std::pair<std::string, std::string>> args;
+          args.emplace_back("i8*", dest_byte_ptr);
+          args.emplace_back("i8*", src_byte_ptr);
+          args.emplace_back("i64", size);
+          args.emplace_back("i1", "false");
+          current_block_builder_->emit_call("void", "llvm.memcpy.p0i8.p0i8.i64", args, "");
+        }
+    }, leaf.value.source);
   }
 }
 
@@ -1156,46 +1245,54 @@ void Emitter::emit_init_array_repeat(const std::string &base_ptr,
     return;
   }
 
-  // Handle Operand leaf
-  auto element_operand = get_typed_operand(element_leaf.operand);
+  // Handle Operand or Place leaf
+  std::string elem0_ptr;
+  {
+    // Compute pointer to element 0: gep [count x T]* base, 0, 0
+    std::vector<std::pair<std::string, std::string>> indices;
+    indices.emplace_back("i32", "0");
+    indices.emplace_back("i32", "0");
 
-  // Optimize: if the operand is zero and element type is zero-initializable,
-  // use zeroinitializer
-  //if (is_const_zero(element_leaf.operand) &&
-  //    type::helper::type_helper::is_zero_initializable(array_type_info->element_type)) {
-  //  std::string array_type_name = module_.get_type_name(array_type);
-  //  current_block_builder_->emit_store(
-  //      array_type_name,
-  //      "zeroinitializer",
-  //      pointer_type_name(array_type),
-  //      base_ptr);
-  //  return;
-  //}
-  // DO NOT do that since zeroinitializer produce huge sw blocks. Use memset if needed.
+    std::string array_type_name = module_.get_type_name(array_type);
+    elem0_ptr = current_block_builder_->emit_getelementptr(
+        array_type_name,
+        pointer_type_name(array_type),
+        base_ptr,
+        indices,
+        /*inbounds=*/true,
+        "elem0");
+  }
 
-
-  // Standard path: store element[0], then use __builtin_array_repeat_copy for the rest
-
-  // 1) Compute pointer to element 0: gep [count x T]* base, 0, 0
-  std::vector<std::pair<std::string, std::string>> indices;
-  indices.emplace_back("i32", "0");
-  indices.emplace_back("i32", "0");
-
-  std::string array_type_name = module_.get_type_name(array_type);
-  std::string elem0_ptr = current_block_builder_->emit_getelementptr(
-      array_type_name,
-      pointer_type_name(array_type),
-      base_ptr,
-      indices,
-      /*inbounds=*/true,
-      "elem0");
-
-  // 2) Store the element value at element[0]
-  current_block_builder_->emit_store(
-      element_operand.type_name,
-      element_operand.value_name,
-      pointer_type_name(array_type_info->element_type),
-      elem0_ptr);
+  // Store the element value at element[0]
+  std::visit(mir::Overloaded{
+      [&](const mir::Operand &operand) {
+        auto element_operand = get_typed_operand(operand);
+        current_block_builder_->emit_store(
+            element_operand.type_name,
+            element_operand.value_name,
+            pointer_type_name(array_type_info->element_type),
+            elem0_ptr);
+      },
+      [&](const mir::Place &src_place) {
+        // Copy from source place to element[0] (memcpy)
+        TranslatedPlace src = translate_place(src_place);
+        if (src.pointee_type == mir::invalid_type_id) {
+          throw std::logic_error("InitLeaf source missing pointee type during codegen");
+        }
+        std::string size = emit_sizeof_bytes(src.pointee_type);
+        std::string dest_byte_ptr = current_block_builder_->emit_cast(
+            "bitcast", pointer_type_name(src.pointee_type), elem0_ptr, "i8*", "elem0.dest");
+        std::string src_byte_ptr = current_block_builder_->emit_cast(
+            "bitcast", pointer_type_name(src.pointee_type), src.pointer, "i8*", "elem0.src");
+        
+        std::vector<std::pair<std::string, std::string>> args;
+        args.emplace_back("i8*", dest_byte_ptr);
+        args.emplace_back("i8*", src_byte_ptr);
+        args.emplace_back("i64", size);
+        args.emplace_back("i1", "false");
+        current_block_builder_->emit_call("void", "llvm.memcpy.p0i8.p0i8.i64", args, "");
+      }
+  }, element_leaf.value.source);
 
   // If count == 1, we're done
   if (count == 1) {
@@ -1251,7 +1348,7 @@ void Emitter::emit_init_copy(const std::string &dest_ptr,
   args.emplace_back("i64", size);
   args.emplace_back("i1", "false");
 
-  current_block_builder_->emit_call("i32", "llvm.memcpy.p0i8.p0i8.i64", args, "");
+  current_block_builder_->emit_call("void", "llvm.memcpy.p0i8.p0i8.i64", args, "");
 }
 
 } // namespace codegen

@@ -1,0 +1,45 @@
+// Test method calls with receiver and multiple parameters
+// Combination of receiver (byval param), direct params, and sret return
+
+struct Vector2 {
+    x: i32,
+    y: i32,
+}
+
+impl Vector2 {
+    // receiver + direct param + sret return
+    fn scale(self, factor: i32) -> Vector2 {
+        Vector2 { x: self.x * factor, y: self.y * factor }
+    }
+    
+    // receiver + multiple direct params + sret return
+    fn add_offset(self, dx: i32, dy: i32) -> Vector2 {
+        Vector2 { x: self.x + dx, y: self.y + dy }
+    }
+    
+    // receiver + byval param + sret return
+    fn add_vector(self, other: Vector2) -> Vector2 {
+        Vector2 { x: self.x + other.x, y: self.y + other.y }
+    }
+}
+
+fn main() {
+    // Test method with receiver and direct param returning sret
+    let v1: Vector2 = Vector2 { x: 2, y: 3 };
+    let scaled: Vector2 = v1.scale(5);
+    printlnInt(scaled.x);  // 10
+    printlnInt(scaled.y);  // 15
+    
+    // Test method with receiver and multiple direct params returning sret
+    let offset: Vector2 = v1.add_offset(10, 20);
+    printlnInt(offset.x);  // 12
+    printlnInt(offset.y);  // 23
+    
+    // Test method with receiver and byval param returning sret
+    let v2: Vector2 = Vector2 { x: 5, y: 7 };
+    let sum: Vector2 = v1.add_vector(v2);
+    printlnInt(sum.x);  // 7
+    printlnInt(sum.y);  // 10
+    
+    exit(0);
+}

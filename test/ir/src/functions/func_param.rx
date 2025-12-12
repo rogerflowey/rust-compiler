@@ -1,0 +1,17 @@
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn add(a: Point, b: Point) -> Point {
+    Point { x: a.x + b.x, y: a.y + b.y }
+}
+
+fn main() {
+    let a: Point = Point { x: 1, y: 2 };
+    let b: Point = Point { x: 3, y: 4 };
+    let result: Point = add(a, b);
+    printlnInt(result.x);
+    printlnInt(result.y);
+    exit(0);
+}

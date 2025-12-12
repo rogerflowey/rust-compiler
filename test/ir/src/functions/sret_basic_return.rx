@@ -1,0 +1,56 @@
+// Test SRET (indirect return): aggregate return values
+// When functions return structs, the return value is passed via a hidden AbiParamSRet pointer
+// The caller allocates space and passes a pointer, the function fills it via sret parameter
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Rect {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+// Returns a Point struct via sret (caller allocates space)
+fn make_point(x: i32, y: i32) -> Point {
+    Point { x: x, y: y }
+}
+
+// Returns a Rect struct via sret
+fn make_rect(x: i32, y: i32, w: i32, h: i32) -> Rect {
+    Rect { x: x, y: y, w: w, h: h }
+}
+
+// Takes a Point (byval param) and returns a Point (sret)
+fn translate_point(p: Point, dx: i32, dy: i32) -> Point {
+    Point { x: p.x + dx, y: p.y + dy }
+}
+
+fn main() {
+    // Test simple sret return
+    let p1: Point = make_point(3, 4);
+    printlnInt(p1.x);  // 3
+    printlnInt(p1.y);  // 4
+    
+    // Test another sret return
+    let p2: Point = make_point(10, 20);
+    printlnInt(p2.x);  // 10
+    printlnInt(p2.y);  // 20
+    
+    // Test sret with more fields
+    let r: Rect = make_rect(1, 2, 100, 200);
+    printlnInt(r.x);  // 1
+    printlnInt(r.y);  // 2
+    printlnInt(r.w);  // 100
+    printlnInt(r.h);  // 200
+    
+    // Test function with both byval param and sret return
+    let p3: Point = translate_point(p1, 5, 6);
+    printlnInt(p3.x);  // 8 (3+5)
+    printlnInt(p3.y);  // 10 (4+6)
+    
+    exit(0);
+}

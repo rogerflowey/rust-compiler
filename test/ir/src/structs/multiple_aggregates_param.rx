@@ -1,0 +1,53 @@
+// Test multiple aggregates in a single function call
+// All passed as byval (caller-copy) parameters
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Size {
+    width: i32,
+    height: i32,
+}
+
+struct Region {
+    min: Point,
+    max: Point,
+}
+
+// Function with two aggregate params
+fn combine_points(p1: Point, p2: Point) -> i32 {
+    p1.x + p1.y + p2.x + p2.y
+}
+
+// Function with three aggregate params
+fn three_way_combine(p: Point, s: Size, r: Region) -> i32 {
+    p.x + p.y + s.width + s.height + r.min.x + r.max.x
+}
+
+// Function taking aggregate and returning different aggregate
+fn scale_point_to_size(p: Point) -> Size {
+    Size { width: p.x * 2, height: p.y * 3 }
+}
+
+fn main() {
+    // Test two aggregate params
+    let p1: Point = Point { x: 1, y: 2 };
+    let p2: Point = Point { x: 3, y: 4 };
+    printlnInt(combine_points(p1, p2));  // 10
+    
+    // Test three aggregate params
+    let s: Size = Size { width: 5, height: 6 };
+    let min: Point = Point { x: 0, y: 0 };
+    let max: Point = Point { x: 10, y: 10 };
+    let r: Region = Region { min: min, max: max };
+    printlnInt(three_way_combine(p1, s, r));  // 36 (1+2+5+6+0+10)
+    
+    // Test aggregate result from aggregate param
+    let result_size: Size = scale_point_to_size(p1);
+    printlnInt(result_size.width);  // 2
+    printlnInt(result_size.height);  // 6
+    
+    exit(0);
+}

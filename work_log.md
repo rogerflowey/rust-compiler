@@ -61,4 +61,23 @@ and then the emitter is trivial: for a slot, if it is Omitted, we do nothing, el
 
 ## 2025-12-9 fuck sret
 
-We are back here again. I previously think that since llvm will actually do sret for me, I don't
+We are back here again. I previously think that since llvm will actually do sret for me. But it does not. To be more precisely, the problem is actually with llvm handle sret, we don't have a place to do memcpy and is forced to use temp copy for aggregated, which is always just l/s
+
+## 2025-12-10 rvo&nrvo
+
+it is nearly trivial consider that we have sret. All we need to do is reuse the current init mechanism to init in sret slot for rvo. For nrvo, I use a simple strategy: pick the first local that have same type as the return, and just speculatively assume it will be returned. All speculative have 2 path, a good one, a fail one. Good one is: if we guess it right, it returns this local, we don't need to do anything since it is already in the slot all the time. If our guess failed: something else is being returned, then, since it is a return, so the original local is dead after the return expr is evaluated, so we just overwrite. This requires the return expr to be evaluated independently rather than in place, else it will clobber the local before we read it. But that is no big deal.
+
+## 2025-12-10 function param
+
+I decide to design a more extensive function param system, by seperating semantic param and abi param. Semantic param is the param in the function signature, abi param is how it is passed in the abi level. 
+
+## 2025-12-11 Aggregate always pointer
+
+After thinking about the whole design and fed up with back doors everywhere to pass aggregates by place, I decide to directly make all aggregates represented by place. Aggregate cannot be a temp anymore
+
+This simplifies a lot of things. First, we don't need sret anymore, since all aggregate is passed by place, so caller always provide a place for callee to init into. Also, we don't need to care about rvo for the same reason.
+
+
+## Rule: lowerer is lowering
+
+I established a rule: lowerer is the place to bridge the gap between semantic and abi. Everything after it should only care about abi level things. For example, optimization should only care about "turning a valid mir to another valid mir", and emitter should only care about turning mir into llvm ir by just translating mir.

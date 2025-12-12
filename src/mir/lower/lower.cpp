@@ -190,14 +190,8 @@ void FunctionLowerer::initialize(FunctionId id, std::string name) {
   uses_sret_ = is_indirect_sret(mir_function.sig.return_desc);
 
   if (uses_sret_) {
-    // Create a temp whose type is &ReturnType
-    TypeId ref_ty = make_ref_type(return_type(mir_function.sig.return_desc));
-    TempId t = allocate_temp(ref_ty);
-
-    // Return destination is a PointerPlace based on this temp
-    Place p;
-    p.base = PointerPlace{t};
-    return_place_ = std::move(p);
+    // For sret, we don't create a temp - we'll create a local that aliases the sret parameter
+    // This is handled after populate_abi_params, so we just mark that we need it
   }
 
   // Initialize locals (this must happen before collect_parameters)
@@ -218,6 +212,9 @@ void FunctionLowerer::initialize(FunctionId id, std::string name) {
   
   // Populate ABI parameters
   populate_abi_params(mir_function.sig);
+  
+  // Setup aliasing for indirect parameters (Phase 4)
+  setup_parameter_aliasing();
 
   BasicBlockId entry = create_block();
   current_block = entry;
@@ -334,6 +331,72 @@ void FunctionLowerer::init_locals() {
       register_local(local_ptr.get());
     }
   }
+  
+  // Create synthetic local for sret if needed (will be aliased to sret ABI param)
+  // The local's type is the return type (Point, not &Point)
+  // The alias mechanism means: use the sret pointer param as the address, don't allocate
+  if (uses_sret_) {
+    TypeId ret_type = return_type(mir_function.sig.return_desc);
+    LocalId sret_local_id = static_cast<LocalId>(mir_function.locals.size());
+    
+    LocalInfo sret_info;
+    sret_info.type = ret_type;
+    sret_info.debug_name = "<sret>";
+    mir_function.locals.push_back(std::move(sret_info));
+    
+    // Store it for later use
+    sret_ptr_local_ = sret_local_id;
+  }
+}
+
+void FunctionLowerer::setup_parameter_aliasing() {
+  // Phase 4: Mark indirect parameters and sret as aliases
+  // Walk through ABI parameters and set up aliasing for indirect/sret params
+  
+  for (AbiParamIndex abi_idx = 0; abi_idx < mir_function.sig.abi_params.size(); ++abi_idx) {
+    const AbiParam& abi_param = mir_function.sig.abi_params[abi_idx];
+    
+    // Handle sret parameter (hidden return pointer)
+    if (std::holds_alternative<AbiParamSRet>(abi_param.kind)) {
+      // Mark the sret synthetic local as an alias to the sret ABI parameter
+      if (uses_sret_ && sret_ptr_local_ != std::numeric_limits<LocalId>::max()) {
+        mir_function.locals[sret_ptr_local_].is_alias = true;
+        mir_function.locals[sret_ptr_local_].alias_target = abi_idx;
+        
+        // Update return descriptor
+        if (!std::holds_alternative<ReturnDesc::RetIndirectSRet>(mir_function.sig.return_desc.kind)) {
+          throw std::logic_error("setup_parameter_aliasing: return_desc is not sret but ABI has sret param");
+        }
+        auto& sret_desc = std::get<ReturnDesc::RetIndirectSRet>(mir_function.sig.return_desc.kind);
+        sret_desc.sret_local_id = sret_ptr_local_;
+        
+        // Set up return place - use LocalPlace for the alias local
+        // The alias mechanism will resolve it to the actual sret ABI parameter
+        // when the emitter accesses it
+        Place p;
+        p.base = LocalPlace{sret_ptr_local_};
+        return_place_ = std::move(p);
+      } else if (uses_sret_) {
+        throw std::logic_error("setup_parameter_aliasing: uses_sret is true but sret_ptr_local is max");
+      }
+      continue;
+    }
+    
+    // Handle indirect parameters (aggregate types passed by pointer)
+    if (std::holds_alternative<AbiParamByValCallerCopy>(abi_param.kind)) {
+      if (abi_param.param_index) {
+        ParamIndex param_idx = *abi_param.param_index;
+        if (param_idx < mir_function.sig.params.size()) {
+          const MirParam& param = mir_function.sig.params[param_idx];
+          LocalId local_id = param.local;
+          
+          // Mark this local as an alias to the ABI parameter
+          mir_function.locals[local_id].is_alias = true;
+          mir_function.locals[local_id].alias_target = abi_idx;
+        }
+      }
+    }
+  }
 }
 
 void FunctionLowerer::collect_parameters() {
@@ -440,25 +503,213 @@ mir::FunctionRef FunctionLowerer::lookup_function(const void *key) const {
   return it->second;
 }
 
-std::optional<Operand> FunctionLowerer::emit_call(mir::FunctionRef target,
-                                                  TypeId result_type,
-                                                  std::vector<Operand> &&args) {
-  bool result_needed =
-      !is_unit_type(result_type) && !is_never_type(result_type);
-  std::optional<TempId> dest;
+const MirFunctionSig& FunctionLowerer::get_callee_sig(mir::FunctionRef target) const {
+  if (auto *internal = std::get_if<MirFunction *>(&target)) {
+    return (*internal)->sig;
+  } else if (auto *external = std::get_if<ExternalFunction *>(&target)) {
+    return (*external)->sig;
+  }
+  throw std::logic_error("Invalid FunctionRef in get_callee_sig");
+}
+
+std::optional<Operand> FunctionLowerer::lower_callsite(const CallSite& cs) {
+  // Unified call lowering: handles function calls, method calls, and init-context calls
+  // Validates ABI invariants and applies ABI rules
+  
+  // Invariant check 1: SRET consistency
+  if (std::holds_alternative<mir::ReturnDesc::RetIndirectSRet>(cs.callee_sig->return_desc.kind)) {
+    // Callee has sret return
+    if (!cs.sret_dest) {
+      // In expr context: must create synthetic local
+      // This is handled below by the caller passing sret_dest
+      throw std::logic_error("SRET function requires sret_dest in lower_callsite");
+    }
+    
+    // Verify callee has an AbiParamSRet
+    bool has_sret_param = false;
+    for (const auto& abi_param : cs.callee_sig->abi_params) {
+      if (std::holds_alternative<AbiParamSRet>(abi_param.kind)) {
+        has_sret_param = true;
+        break;
+      }
+    }
+    if (!has_sret_param) {
+      throw std::logic_error("SRET return without AbiParamSRet in callee signature");
+    }
+  } else {
+    // Callee does NOT have sret return
+    if (cs.sret_dest) {
+      throw std::logic_error("Non-SRET function with sret_dest provided to lower_callsite");
+    }
+  }
+  
+  // Invariant check 2: Argument mapping
+  // Every non-sret ABI param must have a param_index pointing to a semantic param
+  for (const auto& abi_param : cs.callee_sig->abi_params) {
+    if (std::holds_alternative<AbiParamSRet>(abi_param.kind)) {
+      continue; // SRET is not part of args
+    }
+    if (!abi_param.param_index) {
+      throw std::logic_error("Non-SRET ABI param missing param_index");
+    }
+    ParamIndex param_idx = *abi_param.param_index;
+    if (param_idx >= cs.args_exprs.size()) {
+      throw std::logic_error("ABI param index exceeds argument count");
+    }
+  }
+  
+  // Build args vector indexed by semantic parameter index
+  std::vector<ValueSource> call_args(cs.callee_sig->params.size());
+  
+  for (AbiParamIndex abi_idx = 0; abi_idx < cs.callee_sig->abi_params.size(); ++abi_idx) {
+    const AbiParam& abi_param = cs.callee_sig->abi_params[abi_idx];
+    
+    // Skip SRET parameter (handled separately)
+    if (std::holds_alternative<AbiParamSRet>(abi_param.kind)) {
+      continue;
+    }
+    
+    ParamIndex param_idx = *abi_param.param_index;
+    const hir::Expr& arg_expr = *cs.args_exprs[param_idx];
+    const MirParam& semantic_param = cs.callee_sig->params[param_idx];
+    
+    // Apply ABI rule: byval caller copy parameters
+    if (std::holds_alternative<AbiParamByValCallerCopy>(abi_param.kind)) {
+      // Caller allocates and manages the copy
+      LocalId tmp_local = create_synthetic_local(semantic_param.type, /*is_mut_ref*/ false);
+      Place tmp_place = make_local_place(tmp_local);
+      
+      // Lower expression into temporary
+      lower_init(arg_expr, tmp_place, semantic_param.type);
+      
+      // Pass the address of the caller-owned copy
+      call_args[param_idx] = ValueSource{tmp_place};
+    }
+    // Apply ABI rule: direct parameters
+    else if (std::holds_alternative<AbiParamDirect>(abi_param.kind)) {
+      Operand arg_operand = lower_operand(arg_expr);
+      call_args[param_idx] = ValueSource{arg_operand};
+    }
+  }
+  
+  // Emit the call statement
+  CallStatement call_stmt;
+  
+  // Handle result based on return descriptor and context
   std::optional<Operand> result;
-  if (result_needed) {
-    TempId temp = allocate_temp(result_type);
-    dest = temp;
+  
+  if (cs.sret_dest) {
+    // SRET return: result written to sret_dest
+    call_stmt.dest = std::nullopt;
+    call_stmt.sret_dest = *cs.sret_dest;
+    result = std::nullopt;
+  } else if (std::holds_alternative<mir::ReturnDesc::RetDirect>(cs.callee_sig->return_desc.kind)) {
+    // Direct return: materialize in temp
+    TempId temp = allocate_temp(cs.result_type);
+    call_stmt.dest = temp;
     result = make_temp_operand(temp);
+  } else {
+    // Void or never: no result
+    call_stmt.dest = std::nullopt;
+    result = std::nullopt;
+  }
+  
+  // Set call target
+  if (auto *internal = std::get_if<MirFunction *>(&cs.target)) {
+    call_stmt.target.kind = mir::CallTarget::Kind::Internal;
+    call_stmt.target.id = (*internal)->id;
+  } else if (auto *external = std::get_if<ExternalFunction *>(&cs.target)) {
+    call_stmt.target.kind = mir::CallTarget::Kind::External;
+    call_stmt.target.id = (*external)->id;
+  }
+  
+  call_stmt.args = std::move(call_args);
+  
+  Statement stmt;
+  stmt.value = std::move(call_stmt);
+  append_statement(std::move(stmt));
+  
+  return result;
+}
+
+std::optional<Operand> FunctionLowerer::emit_call_with_abi(
+    mir::FunctionRef target, const MirFunctionSig& callee_sig, TypeId result_type,
+    const std::vector<std::unique_ptr<hir::Expr>>& args,
+    const std::optional<Place>& sret_dest) {
+  // UNIFIED ABI-aware call path for expression-based arguments
+  // Handles all ABI parameter kinds and return modes
+  // - Direct params: lower to operand, pass directly
+  // - Indirect params: allocate temp, lower_init into temp, pass address
+  // - SRET: handled via sret_dest parameter
+  // - Result: either written to sret_dest (if present) or materialized in temp
+  
+  // Build args vector indexed by semantic parameter index (matching callee_sig.params)
+  // This matches the MIR invariant: statement.args[i] corresponds to sig.params[i]
+  std::vector<ValueSource> abi_args(callee_sig.params.size());
+  
+  for (AbiParamIndex abi_idx = 0; abi_idx < callee_sig.abi_params.size(); ++abi_idx) {
+    const AbiParam& abi_param = callee_sig.abi_params[abi_idx];
+    
+    // SRET parameter is handled separately via sret_dest, skip it in args
+    if (std::holds_alternative<AbiParamSRet>(abi_param.kind)) {
+      continue;
+    }
+    
+    // All non-SRET ABI params must have a param_index pointing to a semantic param
+    if (!abi_param.param_index) {
+      throw std::logic_error("Non-SRET ABI param missing param_index");
+    }
+    ParamIndex param_idx = *abi_param.param_index;
+    
+    // Bounds check: semantic parameters
+    if (param_idx >= args.size()) {
+      throw std::logic_error("ABI param index exceeds argument count");
+    }
+    
+    const hir::Expr& arg_expr = *args[param_idx];
+    const MirParam& semantic_param = callee_sig.params[param_idx];
+    
+    // Handle indirect parameters (aggregates): caller-managed copying
+    if (std::holds_alternative<AbiParamByValCallerCopy>(abi_param.kind)) {
+      // Create a temporary local to hold the copy
+      LocalId tmp_local = create_synthetic_local(semantic_param.type, /*is_mut_ref*/ false);
+      Place tmp_place = make_local_place(tmp_local);
+      
+      // Lower the argument expression into the temporary via lower_init
+      // This handles both lvalue (InitCopy) and rvalue (InitStmt + in-place init) cases
+      lower_init(arg_expr, tmp_place, semantic_param.type);
+      
+      // Pass the address of the temporary (caller-allocated, caller-managed)
+      abi_args[param_idx] = ValueSource{tmp_place};
+    } 
+    // Handle direct parameters (scalars): just lower and wrap
+    else if (std::holds_alternative<AbiParamDirect>(abi_param.kind)) {
+      Operand arg_operand = lower_operand(arg_expr);
+      abi_args[param_idx] = ValueSource{arg_operand};
+    }
+  }
+  
+  // ReturnDesc determines how to handle the result
+  CallStatement call_stmt;
+  std::optional<Operand> result;
+  
+  if (sret_dest) {
+    // sret return: result is written to sret destination
+    call_stmt.dest = std::nullopt;
+    call_stmt.sret_dest = *sret_dest;
+    result = std::nullopt; // sret calls don't return an operand
+  } else if (std::holds_alternative<mir::ReturnDesc::RetDirect>(callee_sig.return_desc.kind)) {
+    // Direct return: allocate temp for result
+    TempId temp = allocate_temp(result_type);
+    call_stmt.dest = temp;
+    result = make_temp_operand(temp);
+  } else {
+    // Void or never: no result
+    call_stmt.dest = std::nullopt;
+    result = std::nullopt;
   }
 
-  CallStatement call_stmt;
-  // Only set dest if result is needed (not unit/never type)
-  // This applies same logic for both internal and external calls
-  call_stmt.dest = dest;
-
-  // Phase 4: Set correct CallTarget::Kind and ID based on function type
+  // Set correct CallTarget based on function type
   if (auto *internal = std::get_if<MirFunction *>(&target)) {
     call_stmt.target.kind = mir::CallTarget::Kind::Internal;
     call_stmt.target.id = (*internal)->id;
@@ -467,7 +718,8 @@ std::optional<Operand> FunctionLowerer::emit_call(mir::FunctionRef target,
     call_stmt.target.id = (*external)->id;
   }
 
-  call_stmt.args = std::move(args);
+  call_stmt.args = std::move(abi_args);
+
   Statement stmt;
   stmt.value = std::move(call_stmt);
   append_statement(std::move(stmt));
@@ -487,53 +739,6 @@ Operand FunctionLowerer::emit_array_repeat(Operand value, std::size_t count,
   return emit_rvalue_to_temp(std::move(repeat), result_type);
 }
 
-bool FunctionLowerer::function_uses_sret(const hir::Function &fn) const {
-  if (!fn.body) {
-    return false; // external/builtin: leave ABI alone for now
-  }
-  if (!fn.sig.return_type) {
-    return false; // unit
-  }
-  TypeId ret = canonicalize_type_for_mir(
-      hir::helper::get_resolved_type(*fn.sig.return_type));
-  return is_aggregate_type(ret);
-}
-
-bool FunctionLowerer::method_uses_sret(const hir::Method &m) const {
-  if (!m.body) {
-    return false;
-  }
-  if (!m.sig.return_type) {
-    return false;
-  }
-  TypeId ret = canonicalize_type_for_mir(
-      hir::helper::get_resolved_type(*m.sig.return_type));
-  return is_aggregate_type(ret);
-}
-
-void FunctionLowerer::emit_call_into_place(mir::FunctionRef target,
-                                          TypeId /* result_type */,
-                                          Place dest,
-                                          std::vector<Operand> &&args) {
-  CallStatement call_stmt;
-  call_stmt.dest = std::nullopt; // sret-style: no result temp
-
-  if (auto *internal = std::get_if<MirFunction *>(&target)) {
-    call_stmt.target.kind = mir::CallTarget::Kind::Internal;
-    call_stmt.target.id = (*internal)->id;
-  } else if (auto *external = std::get_if<ExternalFunction *>(&target)) {
-    call_stmt.target.kind = mir::CallTarget::Kind::External;
-    call_stmt.target.id = (*external)->id;
-  }
-
-  call_stmt.args = std::move(args);
-  call_stmt.sret_dest = std::move(dest);
-
-  Statement stmt;
-  stmt.value = std::move(call_stmt);
-  append_statement(std::move(stmt));
-}
-
 bool FunctionLowerer::try_lower_init_call(const hir::Call &call_expr,
                                          Place dest,
                                          TypeId dest_type) {
@@ -548,22 +753,45 @@ bool FunctionLowerer::try_lower_init_call(const hir::Call &call_expr,
   }
 
   const hir::Function *hir_fn = func_use->def;
-  if (!function_uses_sret(*hir_fn)) {
-    return false; // not an internal aggregate-returning function
+  
+  // Check if return type is an aggregate (sret candidate)
+  if (!hir_fn->sig.return_type) {
+    return false; // void function
+  }
+  
+  TypeId ret_type = canonicalize_type_for_mir(
+      hir::helper::get_resolved_type(*hir_fn->sig.return_type));
+  if (!is_aggregate_type(ret_type)) {
+    return false; // not an aggregate return
   }
 
   mir::FunctionRef target = lookup_function(hir_fn);
-
-  std::vector<Operand> args;
-  args.reserve(call_expr.args.size());
-  for (const auto &arg : call_expr.args) {
-    if (!arg) {
-      throw std::logic_error("Call argument missing during MIR lowering");
-    }
-    args.push_back(lower_operand(*arg));
+  const MirFunctionSig& callee_sig = get_callee_sig(target);
+  
+  // Verify callee has SRET return in its ABI signature
+  if (!std::holds_alternative<mir::ReturnDesc::RetIndirectSRet>(callee_sig.return_desc.kind)) {
+    return false; // Not an SRET function
   }
-
-  emit_call_into_place(target, dest_type, std::move(dest), std::move(args));
+  
+  // Build CallSite for init-context lowering
+  CallSite cs;
+  cs.target = target;
+  cs.callee_sig = &callee_sig;
+  cs.result_type = ret_type;
+  cs.ctx = CallSite::Context::Init;
+  cs.sret_dest = std::move(dest);
+  
+  // Add arguments as expressions
+  cs.args_exprs.reserve(call_expr.args.size());
+  for (const auto& arg : call_expr.args) {
+    if (!arg) {
+      throw std::logic_error("Function call argument missing during init lowering");
+    }
+    cs.args_exprs.push_back(arg.get());
+  }
+  
+  // Lower the call with the destination place
+  lower_callsite(cs);
   return true;
 }
 
@@ -571,8 +799,19 @@ bool FunctionLowerer::try_lower_init_method_call(const hir::MethodCall &mcall,
                                                 Place dest,
                                                 TypeId dest_type) {
   const hir::Method *method_def = hir::helper::get_method_def(mcall);
-  if (!method_def || !method_uses_sret(*method_def)) {
+  if (!method_def) {
     return false;
+  }
+  
+  // Check if return type is an aggregate (sret candidate)
+  if (!method_def->sig.return_type) {
+    return false; // void method
+  }
+  
+  TypeId ret_type = canonicalize_type_for_mir(
+      hir::helper::get_resolved_type(*method_def->sig.return_type));
+  if (!is_aggregate_type(ret_type)) {
+    return false; // not an aggregate return
   }
 
   if (!mcall.receiver) {
@@ -580,21 +819,35 @@ bool FunctionLowerer::try_lower_init_method_call(const hir::MethodCall &mcall,
   }
 
   mir::FunctionRef target = lookup_function(method_def);
-
-  std::vector<Operand> args;
-  args.reserve(mcall.args.size() + 1);
-
-  // receiver first
-  args.push_back(lower_operand(*mcall.receiver));
-
+  const MirFunctionSig& callee_sig = get_callee_sig(target);
+  
+  // Verify callee has SRET return in its ABI signature
+  if (!std::holds_alternative<mir::ReturnDesc::RetIndirectSRet>(callee_sig.return_desc.kind)) {
+    return false; // Not an SRET function
+  }
+  
+  // Build CallSite for init-context lowering
+  // For method calls: args_exprs = [receiver] + explicit args
+  CallSite cs;
+  cs.target = target;
+  cs.callee_sig = &callee_sig;
+  cs.result_type = ret_type;
+  cs.ctx = CallSite::Context::Init;
+  cs.sret_dest = std::move(dest);
+  
+  // Add receiver as first argument
+  cs.args_exprs.push_back(mcall.receiver.get());
+  
+  // Add explicit arguments
   for (const auto &arg : mcall.args) {
     if (!arg) {
-      throw std::logic_error("Method call argument missing during MIR lowering");
+      throw std::logic_error("Method call argument missing during init lowering");
     }
-    args.push_back(lower_operand(*arg));
+    cs.args_exprs.push_back(arg.get());
   }
-
-  emit_call_into_place(target, dest_type, std::move(dest), std::move(args));
+  
+  // Lower the call with the destination place
+  lower_callsite(cs);
   return true;
 }
 
@@ -935,7 +1188,7 @@ void FunctionLowerer::lower_init(
 
   AssignStatement assign;
   assign.dest = std::move(dest);
-  assign.src  = std::move(value);
+  assign.src  = ValueSource{std::move(value)};
 
   Statement stmt;
   stmt.value = std::move(assign);
@@ -1071,7 +1324,7 @@ void FunctionLowerer::lower_struct_init(
     } else {
       // Fall back: compute an Operand and store via InitPattern
       Operand value = lower_operand(field_expr);
-      leaf = make_operand_leaf(std::move(value));
+      leaf = make_value_leaf(std::move(value));
     }
   }
 
@@ -1092,6 +1345,14 @@ void FunctionLowerer::lower_array_literal_init(
   InitArrayLiteral init_array;
   init_array.elements.resize(array_literal.elements.size());
 
+  // Get the element type
+  const type::Type &array_ty = type::get_type_from_id(dest_type);
+  const auto *array_type_info = std::get_if<type::ArrayType>(&array_ty.value);
+  if (!array_type_info) {
+    throw std::logic_error("Array literal init requires array destination type");
+  }
+  TypeId element_type = array_type_info->element_type;
+
   for (std::size_t idx = 0; idx < array_literal.elements.size(); ++idx) {
     const auto &elem_expr_ptr = array_literal.elements[idx];
     if (!elem_expr_ptr) {
@@ -1108,11 +1369,11 @@ void FunctionLowerer::lower_array_literal_init(
     Operand idx_operand = make_const_operand(idx, usize_ty, false);
     elem_place.projections.push_back(IndexProjection{std::move(idx_operand)});
 
-    if (try_lower_init_outside(elem_expr, std::move(elem_place), dest_type)) {
+    if (try_lower_init_outside(elem_expr, std::move(elem_place), element_type)) {
       leaf = make_omitted_leaf();
     } else {
       Operand op = lower_operand(elem_expr);
-      leaf = make_operand_leaf(std::move(op));
+      leaf = make_value_leaf(std::move(op));
     }
   }
 
@@ -1136,6 +1397,14 @@ void FunctionLowerer::lower_array_repeat_init(
         "Array repeat count must be a compile-time constant during MIR lowering");
   }
 
+  // Get the element type
+  const type::Type &array_ty = type::get_type_from_id(dest_type);
+  const auto *array_type_info = std::get_if<type::ArrayType>(&array_ty.value);
+  if (!array_type_info) {
+    throw std::logic_error("Array repeat init requires array destination type");
+  }
+  TypeId element_type = array_type_info->element_type;
+
   // Try to initialize the element via place-directed init
   Place elem_place = dest;
   IntConstant zero_const;
@@ -1149,13 +1418,13 @@ void FunctionLowerer::lower_array_repeat_init(
   zero_operand.value = std::move(c);
   elem_place.projections.push_back(IndexProjection{std::move(zero_operand)});
 
-  if (try_lower_init_outside(*array_repeat.value, std::move(elem_place), dest_type)) {
+  if (try_lower_init_outside(*array_repeat.value, std::move(elem_place), element_type)) {
     // Element is handled by separate MIR statements
     init_repeat.element = make_omitted_leaf();
   } else {
     // Fall back: compute an Operand
     Operand op = lower_operand(*array_repeat.value);
-    init_repeat.element = make_operand_leaf(std::move(op));
+    init_repeat.element = make_value_leaf(std::move(op));
   }
 
   InitPattern pattern;
@@ -1447,6 +1716,56 @@ MirModule lower_program(const hir::Program &program) {
 
     // Map HIR pointer to internal function reference
     function_map.emplace(descriptor.key, &module.functions.back());
+  }
+
+  // CRITICAL PRE-PASS: Fill signatures in placeholders before lowering any bodies
+  // This ensures that when function A calls function B (both internal), we can consult B's 
+  // signature during A's lowering, even before B's body is lowered.
+  for (size_t i = 0; i < internal_descriptors.size(); ++i) {
+    MirFunction& placeholder = module.functions[i];
+    const FunctionDescriptor& descriptor = internal_descriptors[i];
+    
+    // Build proto signature from HIR (same as in FunctionLowerer::initialize)
+    SigBuilder builder(std::visit(
+        [](const auto *fn_ptr) -> detail::SigBuilder::FnOrMethod {
+          return fn_ptr;
+        },
+        descriptor.function_or_method));
+    ProtoSig proto_sig = builder.build_proto_sig();
+    
+    // Set up return_desc
+    placeholder.sig.return_desc = proto_sig.return_desc;
+    
+    // Extract parameter types from HIR signature (without allocating locals)
+    std::visit(
+        [&](const auto *fn_ptr) {
+          if (!fn_ptr) return;
+          
+          // Add parameters (skip self for methods - it's added implicitly)
+          for (const auto& annotation : fn_ptr->sig.param_type_annotations) {
+            TypeId param_type = canonicalize_type_for_mir(
+                hir::helper::get_resolved_type(annotation));
+            MirParam param;
+            param.type = param_type;
+            placeholder.sig.params.push_back(param);
+          }
+          
+          // For methods, prepend self parameter
+          if constexpr (std::is_same_v<std::decay_t<decltype(*fn_ptr)>, hir::Method>) {
+            if (fn_ptr->body && fn_ptr->body->self_local && 
+                fn_ptr->body->self_local->type_annotation) {
+              TypeId self_type = canonicalize_type_for_mir(
+                  hir::helper::get_resolved_type(*fn_ptr->body->self_local->type_annotation));
+              MirParam self_param;
+              self_param.type = self_type;
+              placeholder.sig.params.insert(placeholder.sig.params.begin(), self_param);
+            }
+          }
+        },
+        descriptor.function_or_method);
+    
+    // Populate ABI parameters based on proto signature and parameters
+    populate_abi_params(placeholder.sig);
   }
 
   // Lower internal function bodies with unified mapping

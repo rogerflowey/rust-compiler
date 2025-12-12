@@ -20,6 +20,24 @@
 
 namespace mir::detail {
 
+// Mid-layer call representation: unifies function calls and method calls
+// Keeps expressions in "expr form" until ABI shaping (no early operand lowering)
+struct CallSite {
+  mir::FunctionRef target;
+  const mir::MirFunctionSig* callee_sig;
+
+  // Always in "expr form" at this layer
+  // For function calls: args_exprs = call.args
+  // For method calls: args_exprs = [receiver] + mcall.args (receiver at index 0)
+  std::vector<const hir::Expr*> args_exprs;
+
+  // Result handling
+  std::optional<mir::Place> sret_dest;  // present iff callee return is sret
+  mir::TypeId result_type;               // semantic result type
+  
+  enum class Context { Expr, Init } ctx; // lowering context (expr or init-dest)
+};
+
 struct FunctionLowerer {
         enum class FunctionKind { Function, Method };
 
@@ -59,6 +77,7 @@ private:
         // SRET support
         bool uses_sret_ = false;
         std::optional<Place> return_place_;  // where returns should store result, if sret
+        LocalId sret_ptr_local_ = std::numeric_limits<LocalId>::max();  // synthetic local aliasing sret param
         const hir::Local* nrvo_local_ = nullptr;
 
 	void initialize(FunctionId id, std::string name);
@@ -67,11 +86,35 @@ private:
 	TypeId resolve_return_type() const;
         void init_locals();
         const hir::Local* pick_nrvo_local() const;
+        void setup_parameter_aliasing();
         mir::FunctionRef lookup_function(const void* key) const; // NEW: Returns FunctionRef
-	std::optional<Operand> emit_call(mir::FunctionRef target, TypeId result_type, std::vector<Operand>&& args);
-	bool function_uses_sret(const hir::Function &fn) const;
-	bool method_uses_sret(const hir::Method &m) const;
-	void emit_call_into_place(mir::FunctionRef target, TypeId result_type, Place dest, std::vector<Operand> &&args);
+        const MirFunctionSig& get_callee_sig(mir::FunctionRef target) const;  // Extract signature from FunctionRef
+	
+	// Unified call lowering: single path for function calls, method calls, and init-context calls
+	// Handles all ABI parameter kinds and return modes (direct/sret/void/never)
+	// Returns: operand result if in expr context and callee returns directly; nullopt otherwise
+	std::optional<Operand> lower_callsite(const CallSite& cs);
+	
+	// Unified ABI-aware call emission - single path for all call scenarios
+	// Takes AST expressions and transforms them per ABI requirements
+	// sret_dest: if present, result written to this place; if absent, materialized in temp
+	std::optional<Operand> emit_call_with_abi(
+	    mir::FunctionRef target, 
+	    const MirFunctionSig& callee_sig, 
+	    TypeId result_type, 
+	    const std::vector<std::unique_ptr<hir::Expr>>& args,
+	    const std::optional<Place>& sret_dest = std::nullopt);
+	
+	// Helper: Transform operand-based arguments into CallStatement with ABI-aware handling
+	// Used by method calls which have operands, not expressions
+	// Handles indirect parameter copying and direct parameter passing
+	void emit_call_from_operands(
+	    mir::FunctionRef target,
+	    const MirFunctionSig& callee_sig,
+	    const std::vector<Operand>& operand_args,
+	    const std::optional<Place>& sret_dest,
+	    std::optional<Operand>& out_result);
+	
 	bool try_lower_init_call(const hir::Call &call_expr, Place dest, TypeId dest_type);
 	bool try_lower_init_method_call(const hir::MethodCall &mcall, Place dest, TypeId dest_type);
 	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
@@ -233,10 +276,10 @@ Operand FunctionLowerer::emit_rvalue_to_temp(RValueT rvalue_kind, TypeId result_
 }
 
 // Utility helpers for InitLeaf construction
-inline InitLeaf make_operand_leaf(Operand op) {
+inline InitLeaf make_value_leaf(Operand op) {
 	InitLeaf leaf;
-	leaf.kind = InitLeaf::Kind::Operand;
-	leaf.operand = std::move(op);
+	leaf.kind = InitLeaf::Kind::Value;
+	leaf.value = ValueSource{op};
 	return leaf;
 }
 

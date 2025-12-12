@@ -1,0 +1,74 @@
+// Test interaction of all ABI mechanisms together:
+// - AbiParamDirect (primitive types)
+// - AbiParamByValCallerCopy (aggregate types) 
+// - AbiParamSRet (aggregate return)
+// - Method calls with receiver
+
+struct Matrix2x2 {
+    a: i32,
+    b: i32,
+    c: i32,
+    d: i32,
+}
+
+impl Matrix2x2 {
+    // Method with receiver (byval), direct param, returns sret
+    fn scale(self, factor: i32) -> Matrix2x2 {
+        Matrix2x2 {
+            a: self.a * factor,
+            b: self.b * factor,
+            c: self.c * factor,
+            d: self.d * factor,
+        }
+    }
+    
+    // Method with receiver (byval) and aggregate param, returns sret
+    fn add_matrix(self, other: Matrix2x2) -> Matrix2x2 {
+        Matrix2x2 {
+            a: self.a + other.a,
+            b: self.b + other.b,
+            c: self.c + other.c,
+            d: self.d + other.d,
+        }
+    }
+    
+    // Method computing trace
+    fn trace(self) -> i32 {
+        self.a + self.d
+    }
+}
+
+// Function with direct and aggregate params, returns sret
+fn make_matrix(a: i32, b: i32, c: i32, d: i32) -> Matrix2x2 {
+    Matrix2x2 { a: a, b: b, c: c, d: d }
+}
+
+// Function combining direct and aggregate operations
+fn matrix_operation(scale_factor: i32, m: Matrix2x2) -> i32 {
+    let scaled: Matrix2x2 = m.scale(scale_factor);
+    scaled.trace()
+}
+
+fn main() {
+    // Create matrix using function (sret)
+    let m1: Matrix2x2 = make_matrix(1, 2, 3, 4);
+    printlnInt(m1.trace());  // 5
+    
+    // Method with direct param (byval receiver + direct param = sret)
+    let scaled: Matrix2x2 = m1.scale(2);
+    printlnInt(scaled.a);  // 2
+    printlnInt(scaled.d);  // 8
+    
+    // Create another matrix
+    let m2: Matrix2x2 = make_matrix(5, 6, 7, 8);
+    
+    // Method with two byval params returning sret
+    let sum: Matrix2x2 = m1.add_matrix(m2);
+    printlnInt(sum.a);  // 6
+    printlnInt(sum.d);  // 12
+    
+    // Function mixing direct and aggregate params
+    printlnInt(matrix_operation(3, m1));  // trace(scaled) = 3+12 = 15
+    
+    exit(0);
+}

@@ -33,8 +33,11 @@ struct LocalInfo {
     TypeId type = invalid_type_id;
     std::string debug_name;
 
+
+    // Alias means: not allocating the local
+    // instead, treat the temp as the storage of the local
     bool is_alias = false;
-    std::optional<TempId> alias_temp;
+    std::variant<std::monostate, TempId, AbiParamIndex> alias_target;
 };
 
 struct FunctionParameter {
@@ -113,6 +116,13 @@ struct Place {
     std::vector<Projection> projections;
 };
 
+/// ValueSource: Reference to a value at MIR semantic level.
+/// Represents "use this value" without specifying HOW to obtain it.
+/// Can be either a direct value (Operand) or a location in memory (Place).
+struct ValueSource {
+    std::variant<Operand, Place> source;
+};
+
 struct BinaryOpRValue {
     enum class Kind {
         IAdd,
@@ -170,6 +180,8 @@ struct RefRValue {
 };
 
 struct AggregateRValue {
+    // DEPRECATED: Aggregates should be constructed using InitStatement.
+    // This is kept for now but should not be used for new code.
     enum class Kind {
         Struct,
         Array
@@ -225,17 +237,17 @@ struct LoadStatement {
 
 struct AssignStatement {
     Place dest;
-    Operand src;
+    ValueSource src;
 };
 
 struct InitLeaf {
     enum class Kind {
         Omitted,   // this slot is initialized by other MIR statements
-        Operand    // write this operand into the slot
+        Value      // write this value into the slot
     };
 
     Kind kind = Kind::Omitted;
-    Operand operand;  // meaningful iff kind == Operand
+    ValueSource value;  // meaningful iff kind == Value
 };
 
 struct InitStruct {
@@ -281,7 +293,7 @@ struct CallTarget {
 struct CallStatement {
     std::optional<TempId> dest;      // normal value return (non-sret)
     CallTarget target;
-    std::vector<Operand> args;
+    std::vector<ValueSource> args;    // args[i] corresponds to sig.params[i]
 
     // If set, callee must write its result into this place (sret-style).
     std::optional<Place> sret_dest;

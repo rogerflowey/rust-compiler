@@ -40,7 +40,7 @@ TEST(MirEmitterTest, EmitsSwitchAndPhiControlFlow) {
     mir::MirFunction function;
     function.id = 0;
     function.name = "@switch_select";
-    function.return_type = int_type;
+    function.sig.return_desc.kind = mir::ReturnDesc::RetDirect{int_type};
     function.temp_types = {int_type, int_type, int_type, int_type};
     function.start_block = 0;
 
