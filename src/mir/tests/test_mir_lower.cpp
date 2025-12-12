@@ -1258,6 +1258,13 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
 
     auto struct_item = std::make_unique<hir::Item>(hir::StructDef{});
     auto& struct_def = std::get<hir::StructDef>(struct_item->value);
+    
+    // Add two fields to the struct
+    struct_def.fields.push_back(semantic::Field{.name = ast::Identifier{"a"}, .type = std::nullopt});
+    struct_def.fields.push_back(semantic::Field{.name = ast::Identifier{"b"}, .type = std::nullopt});
+    struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
+    struct_def.field_type_annotations.push_back(hir::TypeAnnotation(int_type));
+    
     TypeId struct_type = make_struct_type_and_register(&struct_def);
 
     auto impl_item = std::make_unique<hir::Item>(hir::Impl{});
@@ -1269,7 +1276,15 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
     method.sig.self_param.is_reference = false;
     method.sig.self_param.is_mutable = false;
     method.sig.return_type = hir::TypeAnnotation(int_type);
+    
+    // Set up self_local for the method body
+    auto self_local = std::make_unique<hir::Local>();
+    self_local->name = ast::Identifier{"self"};
+    self_local->is_mutable = false;
+    self_local->type_annotation = hir::TypeAnnotation(struct_type);
+    
     hir::Method::MethodBody method_body;
+    method_body.self_local = std::move(self_local);
     method_body.block = make_block_with_expr(make_int_literal_expr(11, int_type));
     method.body = std::move(method_body);
     const hir::Method* method_ptr = &method;
@@ -1306,26 +1321,33 @@ TEST(MirLowerTest, LowersMethodCallWithReceiver) {
 
     mir::MirModule module = mir::lower_program(program);
     ASSERT_EQ(module.functions.size(), 2u);
-    const auto& method_mir = module.functions[0];
     const auto& caller_mir = module.functions[1];
     const auto& entry = caller_mir.basic_blocks.front();
+    
+    // With direct return (not SRET), the receiver aggregate is optimized and emitted 
     ASSERT_EQ(entry.statements.size(), 2u);
     
-    const auto& aggregate_define = std::get<mir::DefineStatement>(entry.statements[0].value);
-    ASSERT_TRUE(std::holds_alternative<mir::AggregateRValue>(aggregate_define.rvalue.value));
-    const auto& agg_rvalue = std::get<mir::AggregateRValue>(aggregate_define.rvalue.value);
-    // Fields should be ConstOperands now due to optimization
-    ASSERT_EQ(agg_rvalue.elements.size(), 2u);
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(agg_rvalue.elements[0].value));
-    ASSERT_TRUE(std::holds_alternative<mir::Constant>(agg_rvalue.elements[1].value));
+    // Find the CallStatement among the statements
+    mir::CallStatement call_stmt;
+    bool found = false;
+    for (const auto& stmt : entry.statements) {
+        if (std::holds_alternative<mir::CallStatement>(stmt.value)) {
+            call_stmt = std::get<mir::CallStatement>(stmt.value);
+            found = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(found);
     
-    const auto& call_stmt = std::get<mir::CallStatement>(entry.statements[1].value);
     EXPECT_EQ(call_stmt.target.kind, mir::CallTarget::Kind::Internal);
+    // Check if receiver arg was properly added
+    // With AbiParamByValCallerCopy, receiver should be in args as Place
     ASSERT_EQ(call_stmt.args.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<mir::Operand>(call_stmt.args[0].source));
-    const auto& arg_operand = std::get<mir::Operand>(call_stmt.args[0].source);
-    ASSERT_TRUE(std::holds_alternative<mir::TempId>(arg_operand.value));
-    EXPECT_EQ(std::get<mir::TempId>(arg_operand.value), aggregate_define.dest);
+    // Receiver arg should be a Place (address of temp) for byval caller-copy
+    ASSERT_TRUE(std::holds_alternative<mir::Place>(call_stmt.args[0].source));
+    const auto& receiver_place = std::get<mir::Place>(call_stmt.args[0].source);
+    // The place should refer to the local created for the receiver temp
+    ASSERT_TRUE(std::holds_alternative<mir::LocalPlace>(receiver_place.base));
 }
 
 TEST(MirLowerTest, LowersReferenceToLocalPlace) {

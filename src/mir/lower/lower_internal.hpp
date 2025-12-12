@@ -95,26 +95,6 @@ private:
 	// Returns: operand result if in expr context and callee returns directly; nullopt otherwise
 	std::optional<Operand> lower_callsite(const CallSite& cs);
 	
-	// Unified ABI-aware call emission - single path for all call scenarios
-	// Takes AST expressions and transforms them per ABI requirements
-	// sret_dest: if present, result written to this place; if absent, materialized in temp
-	std::optional<Operand> emit_call_with_abi(
-	    mir::FunctionRef target, 
-	    const MirFunctionSig& callee_sig, 
-	    TypeId result_type, 
-	    const std::vector<std::unique_ptr<hir::Expr>>& args,
-	    const std::optional<Place>& sret_dest = std::nullopt);
-	
-	// Helper: Transform operand-based arguments into CallStatement with ABI-aware handling
-	// Used by method calls which have operands, not expressions
-	// Handles indirect parameter copying and direct parameter passing
-	void emit_call_from_operands(
-	    mir::FunctionRef target,
-	    const MirFunctionSig& callee_sig,
-	    const std::vector<Operand>& operand_args,
-	    const std::optional<Place>& sret_dest,
-	    std::optional<Operand>& out_result);
-	
 	bool try_lower_init_call(const hir::Call &call_expr, Place dest, TypeId dest_type);
 	bool try_lower_init_method_call(const hir::MethodCall &mcall, Place dest, TypeId dest_type);
 	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
@@ -247,10 +227,6 @@ private:
 	void handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, const char *context);
 	
 	// Process call arguments according to callee's ABI signature
-	// Handles indirect parameters by allocating temp storage and initializing
-	std::vector<Operand> process_call_arguments(
-		const mir::MirFunctionSig& callee_sig,
-		const std::vector<const hir::Expr*>& hir_args);
 };
 
 template <typename T>

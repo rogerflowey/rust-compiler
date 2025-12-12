@@ -426,7 +426,7 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
     // Optimization doesn't apply; reuse already-lowered places
     // to avoid double-evaluation of RHS place expression
     Operand value = load_place_value(std::move(src_place), rhs_info.type);
-    AssignStatement assign{.dest = std::move(dest_place), .src = value};
+    AssignStatement assign{.dest = std::move(dest_place), .src = ValueSource{std::move(value)}};
     Statement stmt;
     stmt.value = std::move(assign);
     append_statement(std::move(stmt));
@@ -436,7 +436,7 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
   Place dest = lower_expr_place(*assignment.lhs);
   Operand value = expect_operand(lower_expr(*assignment.rhs),
                                  "Assignment rhs must produce value");
-  AssignStatement assign{.dest = std::move(dest), .src = value};
+  AssignStatement assign{.dest = std::move(dest), .src = ValueSource{std::move(value)}};
   Statement stmt;
   stmt.value = std::move(assign);
   append_statement(std::move(stmt));
@@ -868,10 +868,12 @@ FunctionLowerer::lower_continue_expr(const hir::Continue &continue_expr) {
 
 void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, 
                                            const char *context) {
-  // Central place to handle all return types: never, sret, void, and direct returns
+  // Central place to handle all return types using the new return spec system
+  
+  const auto& return_desc = mir_function.sig.return_desc;
   
   // Case 1: function returns `never` - diverges unconditionally
-  if (is_never(mir_function.sig.return_desc)) {
+  if (is_never(return_desc)) {
     if (value_ptr && *value_ptr) {
       (void)lower_expr(**value_ptr);
     }
@@ -884,58 +886,69 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
     return;
   }
 
-  // Case 2: sret return - caller allocated, callee writes to it
-  if (uses_sret_) {
+  // Case 2: sret return - indirect return via caller-allocated result location
+  if (is_indirect_sret(return_desc)) {
     if (!value_ptr || !*value_ptr) {
       throw std::logic_error(std::string(context) + 
                             ": sret function requires explicit return value");
     }
-    if (!return_place_) {
-      throw std::logic_error(std::string(context) + 
-                            ": sret function missing return_place");
-    }
 
-    // For sret: the return_place contains a local that holds a pointer
-    // We need to dereference that pointer to get the actual destination
-    // The Init machinery will handle loading the pointer and initializing through it
+    // Get the result local from ReturnDesc - this is where the result should be stored
+    const auto& sret_desc = std::get<ReturnDesc::RetIndirectSRet>(return_desc.kind);
+    const TypeId ret_type = sret_desc.type;
+    
+    // Create a place that refers to the result_local
+    Place result_place = make_local_place(sret_desc.result_local);
+
+    // Use the Init machinery to initialize the result local with the return value
     try {
-      const TypeId ret_type = return_type(mir_function.sig.return_desc);
-      lower_init(**value_ptr, *return_place_, ret_type);
+      lower_init(**value_ptr, result_place, ret_type);
     } catch (const std::exception& e) {
       throw std::logic_error(std::string(context) + 
                             ": error in sret return value initialization: " + e.what());
+    }
+    
+    // For sret, we emit a void return since the result is stored in the result_local
+    emit_return(std::nullopt);
+    return;
+  }
+
+  // Case 3: void semantic return
+  if (is_void_semantic(return_desc)) {
+    std::cerr<<"WARNING: void semantic but returns a value, lowering for side effects only\n";
+    // Void semantic: compute the value (for side effects) but don't return it
+    if (value_ptr && *value_ptr) {
+      (void)lower_expr(**value_ptr);
     }
     emit_return(std::nullopt);
     return;
   }
 
-  // Case 3 & 4: void semantic or direct return
-  std::optional<Operand> value;
-  if (value_ptr && *value_ptr) {
-    value = lower_expr(**value_ptr);
-  }
-
-  if (!value && !is_void_semantic(mir_function.sig.return_desc)) {
-    throw std::logic_error(std::string(context) + 
-                          ": missing return value for non-void function");
-  }
-
-  emit_return(std::move(value));
-}
-
-std::vector<Operand> FunctionLowerer::process_call_arguments(
-    const mir::MirFunctionSig& callee_sig,
-    const std::vector<const hir::Expr*>& hir_args) {
-  // For now, just pass through - indirect parameter handling will be added later
-  // when we refactor to support address-of operations in the call lowering
-  std::vector<Operand> args;
-  for (const auto& arg : hir_args) {
-    if (!arg) {
-      throw std::logic_error("Missing argument during call lowering");
+  // Case 4: direct return - value is returned directly via return value
+  if (std::holds_alternative<ReturnDesc::RetDirect>(return_desc.kind)) {
+    const auto& direct_desc = std::get<ReturnDesc::RetDirect>(return_desc.kind);
+    
+    std::optional<Operand> value;
+    if (value_ptr && *value_ptr) {
+      value = lower_expr(**value_ptr);
     }
-    args.push_back(lower_operand(*arg));
+    if(!is_reachable()){
+      // Function is not reachable here - no return needed
+      return;
+    }
+
+    if (!value) {
+      throw std::logic_error(std::string(context) + 
+                            ": missing return value for direct return function");
+    }
+
+    emit_return(std::move(value));
+    return;
   }
-  return args;
+
+  // Should not reach here - all cases handled above
+  throw std::logic_error(std::string(context) + 
+                        ": unhandled return descriptor type");
 }
 
 std::optional<Operand>

@@ -1,0 +1,39 @@
+// Test various combinations of final expr and return statements.
+
+fn add1(a:i32, b:i32) -> i32 {
+    return a + b;
+}
+fn add2(a:i32, b:i32) -> i32 {
+    a + b
+}
+fn add3(a:i32, b:i32) -> i32 {
+    if(true){
+        a + b
+    } else {
+        a - b
+    }
+}
+fn add4(a:i32, b:i32) -> i32 {
+    if(true){
+        return a + b;
+    } else {
+        return a - b;
+    }
+}
+fn add5(a:i32, b:i32) -> i32 {
+    return a + b; // with no semicolon(disabled)
+}
+
+fn main() {
+    let x = add1(2,3);
+    let y = add2(4,5);
+    let z = add3(6,7);
+    let w = add4(8,9);
+    let v = add5(10,11);
+    printlnInt(x); // 5
+    printlnInt(y); // 9
+    printlnInt(z); // 13
+    printlnInt(w); // 17
+    printlnInt(v); // 21
+    exit(0);
+}
