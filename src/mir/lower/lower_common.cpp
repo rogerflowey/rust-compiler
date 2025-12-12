@@ -433,5 +433,41 @@ std::string derive_method_name(const hir::Method& method, const std::string& sco
     return make_scoped_name(scope, base);
 }
 
+void populate_abi_params(MirFunctionSig& sig) {
+  // 1. If we have an indirect sret return, add the sret parameter first
+  if (is_indirect_sret(sig.return_desc)) {
+    AbiParam sret_param;
+    sret_param.param_index = std::nullopt;  // hidden parameter
+    sret_param.kind = AbiParamSRet{};
+    
+    AbiParamIndex sret_index = static_cast<AbiParamIndex>(sig.abi_params.size());
+    sig.abi_params.push_back(std::move(sret_param));
+
+    // Update the return descriptor with the sret index
+    auto& sret_desc = std::get<ReturnDesc::RetIndirectSRet>(sig.return_desc.kind);
+    sret_desc.sret_index = sret_index;
+  }
+
+  // 2. Add semantic parameters as ABI parameters
+  for (ParamIndex i = 0; i < sig.params.size(); ++i) {
+    const MirParam& p = sig.params[i];
+    
+    AbiParam abi_param;
+    abi_param.param_index = i;
+    
+    // For now: classify based on type
+    if (is_aggregate_type(p.type)) {
+      // Caller-owned byval copy: caller allocates, callee receives pointer (no-escape)
+      abi_param.kind = AbiParamByValCallerCopy{};
+    } else {
+      abi_param.kind = AbiParamDirect{};
+    }
+    
+    sig.abi_params.push_back(std::move(abi_param));
+  }
+}
+
+
 } // namespace detail
 } // namespace mir
+

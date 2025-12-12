@@ -1,0 +1,17 @@
+// Test 2: Deep recursion to test stack frame allocation
+// Tests stack usage through recursive function calls
+fn factorial(n: i32) -> i32 {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+fn main() {
+    // Test factorial with increasing depths
+    printlnInt(factorial(5));   // 120
+    printlnInt(factorial(10));  // 3628800
+    printlnInt(factorial(15));  // 1932053504 (wraps due to i32)
+    
+    exit(0);
+}

@@ -1,0 +1,41 @@
+// Test AbiParamByValCallerCopy: aggregate types (structs) passed by value
+// Aggregates are passed via a pointer to a caller-allocated copy (byval semantics)
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+struct Box {
+    width: i32,
+    height: i32,
+    depth: i32,
+}
+
+fn distance_from_origin(p: Point) -> i32 {
+    p.x + p.y
+}
+
+fn volume(b: Box) -> i32 {
+    b.width * b.height * b.depth
+}
+
+fn combine_points(p1: Point, p2: Point) -> i32 {
+    p1.x + p1.y + p2.x + p2.y
+}
+
+fn main() {
+    let p1: Point = Point { x: 3, y: 4 };
+    printlnInt(distance_from_origin(p1));  // 7
+    
+    let p2: Point = Point { x: 5, y: 6 };
+    printlnInt(distance_from_origin(p2));  // 11
+    
+    // Test function with multiple aggregate params
+    printlnInt(combine_points(p1, p2));  // 18
+    
+    let b: Box = Box { width: 2, height: 3, depth: 4 };
+    printlnInt(volume(b));  // 24
+    
+    exit(0);
+}

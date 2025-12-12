@@ -1,4 +1,5 @@
 #include "mir/codegen/emitter.hpp"
+#include "mir/lower/lower_common.hpp"
 
 #include "tests/catch_gtest_compat.hpp"
 #include "type/type.hpp"
@@ -55,7 +56,7 @@ TEST(MirEmitterTest, EmitsDeterministicTempsAndStrings) {
     type::ReferenceType ref_char{.referenced_type = char_type, .is_mutable = false};
     type::TypeId char_ptr_type = type::get_typeID(type::Type{ref_char});
 
-    function.return_type = int_type;
+    function.sig.return_desc.kind = mir::ReturnDesc::RetDirect{int_type};
     function.temp_types = {int_type, char_ptr_type};
 
     mir::BasicBlock entry;
@@ -98,8 +99,14 @@ TEST(MirEmitterTest, EmitsExternalFunctionDeclarations) {
     mir::ExternalFunction ext_fn;
     ext_fn.id = 0;
     ext_fn.name = "print";
-    ext_fn.return_type = unit_type;
-    ext_fn.param_types.push_back(char_ptr_type);
+    ext_fn.sig.return_desc.kind = mir::ReturnDesc::RetVoid{};
+    mir::MirParam param1;
+    param1.local = 0;
+    param1.type = char_ptr_type;
+    param1.debug_name = "s";
+    ext_fn.sig.params.push_back(std::move(param1));
+    using mir::detail::populate_abi_params;
+    populate_abi_params(ext_fn.sig);
     
     module.external_functions.push_back(ext_fn);
     
@@ -107,7 +114,8 @@ TEST(MirEmitterTest, EmitsExternalFunctionDeclarations) {
     mir::ExternalFunction getint_fn;
     getint_fn.id = 1;
     getint_fn.name = "getInt";
-    getint_fn.return_type = i32_type;
+    getint_fn.sig.return_desc.kind = mir::ReturnDesc::RetDirect{i32_type};
+    populate_abi_params(getint_fn.sig);
     
     module.external_functions.push_back(getint_fn);
     
@@ -130,7 +138,7 @@ TEST(MirEmitterTest, OptimizesArrayRepeatWithZeroInitializer) {
     type::TypeId int_type = type::get_typeID(type::Type{type::PrimitiveKind::I32});
     type::TypeId array_type = type::get_typeID(type::Type{type::ArrayType{int_type, 10}});
 
-    function.return_type = array_type;
+    function.sig.return_desc.kind = mir::ReturnDesc::RetDirect{array_type};
     function.temp_types = {array_type};
 
     mir::BasicBlock entry;
@@ -196,7 +204,7 @@ TEST(MirEmitterTest, OptimizesArrayRepeatWithBoolZero) {
     type::TypeId bool_type = type::get_typeID(type::Type{type::PrimitiveKind::BOOL});
     type::TypeId array_type = type::get_typeID(type::Type{type::ArrayType{bool_type, 5}});
 
-    function.return_type = array_type;
+    function.sig.return_desc.kind = mir::ReturnDesc::RetDirect{array_type};
     function.temp_types = {array_type};
 
     mir::BasicBlock entry;

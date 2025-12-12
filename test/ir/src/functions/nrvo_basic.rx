@@ -1,0 +1,44 @@
+// Test NRVO (Named Return Value Optimization)
+// When a function returns a struct that it created in a local variable,
+// the compiler can alias the sret destination with the local variable
+// This avoids an extra copy
+
+struct Data {
+    value: i32,
+    count: i32,
+}
+
+// NRVO opportunity: result is created locally and directly returned
+fn create_data(v: i32, c: i32) -> Data {
+    let result: Data = Data { value: v, count: c };
+    result
+}
+
+// NRVO with struct operations
+fn make_doubled(v: i32) -> Data {
+    let d: Data = Data { value: v, count: 1 };
+    let d2: Data = Data { value: d.value * 2, count: 2 };
+    d2
+}
+
+// Passing sret result to another function
+fn process_data(d: Data) -> i32 {
+    d.value + d.count
+}
+
+fn main() {
+    // Test basic NRVO
+    let d1: Data = create_data(42, 5);
+    printlnInt(d1.value);  // 42
+    printlnInt(d1.count);  // 5
+    
+    // Test NRVO result with operations
+    let d2: Data = make_doubled(10);
+    printlnInt(d2.value);  // 20
+    printlnInt(d2.count);  // 2
+    
+    // Test passing NRVO result to function
+    printlnInt(process_data(create_data(100, 3)));  // 103
+    
+    exit(0);
+}

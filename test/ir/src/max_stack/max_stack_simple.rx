@@ -1,0 +1,19 @@
+// Test 1: Simple large array allocation on stack
+// Tests basic stack space usage with a large contiguous allocation
+fn main() {
+    let mut arr: [i32; 1024] = [0; 1024];
+    
+    // Fill array with values
+    let mut i: usize = 0;
+    while (i < 1024) {
+        arr[i] = i as i32;
+        i = i + 1;
+    }
+    
+    // Print some values to verify array is working
+    printlnInt(arr[0]);
+    printlnInt(arr[512]);
+    printlnInt(arr[1023]);
+    
+    exit(0);
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "type/type.hpp"
+#include "mir/function_sig.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -32,8 +33,11 @@ struct LocalInfo {
     TypeId type = invalid_type_id;
     std::string debug_name;
 
+
+    // Alias means: not allocating the local
+    // instead, treat the temp as the storage of the local
     bool is_alias = false;
-    std::optional<TempId> alias_temp;
+    std::variant<std::monostate, TempId, AbiParamIndex> alias_target;
 };
 
 struct FunctionParameter {
@@ -112,6 +116,35 @@ struct Place {
     std::vector<Projection> projections;
 };
 
+/// ValueSource: Reference to a value at MIR semantic level.
+/// Represents "use this value" without specifying HOW to obtain it.
+/// Can be either a direct value (Operand) or a location in memory (Place).
+struct ValueSource {
+    std::variant<Operand, Place> source;
+};
+
+// Return storage plan: determines where return values are stored (SRET+NRVO handling)
+// Computed once during function initialization, encapsulates all return-storage decisions
+struct ReturnStoragePlan {
+    bool is_sret = false;                          // true if using SRET (indirect return)
+    TypeId ret_type = invalid_type_id;             // semantic return type
+
+    // Only valid if is_sret:
+    AbiParamIndex sret_abi_index = 0;             // index of SRET param in abi_params
+    LocalId return_slot_local = std::numeric_limits<LocalId>::max(); // the local aliased to sret (NRVO or synthetic)
+    bool uses_nrvo_local = false;                  // true if return_slot_local is the NRVO local
+
+    // Helper to create the return destination place
+    Place return_place() const {
+        if (is_sret) {
+            Place p;
+            p.base = LocalPlace{return_slot_local};
+            return p;
+        }
+        throw std::logic_error("return_place() called on non-SRET plan");
+    }
+};
+
 struct BinaryOpRValue {
     enum class Kind {
         IAdd,
@@ -169,6 +202,8 @@ struct RefRValue {
 };
 
 struct AggregateRValue {
+    // DEPRECATED: Aggregates should be constructed using InitStatement.
+    // This is kept for now but should not be used for new code.
     enum class Kind {
         Struct,
         Array
@@ -224,17 +259,17 @@ struct LoadStatement {
 
 struct AssignStatement {
     Place dest;
-    Operand src;
+    ValueSource src;
 };
 
 struct InitLeaf {
     enum class Kind {
         Omitted,   // this slot is initialized by other MIR statements
-        Operand    // write this operand into the slot
+        Value      // write this value into the slot
     };
 
     Kind kind = Kind::Omitted;
-    Operand operand;  // meaningful iff kind == Operand
+    ValueSource value;  // meaningful iff kind == Value
 };
 
 struct InitStruct {
@@ -280,7 +315,7 @@ struct CallTarget {
 struct CallStatement {
     std::optional<TempId> dest;      // normal value return (non-sret)
     CallTarget target;
-    std::vector<Operand> args;
+    std::vector<ValueSource> args;    // args[i] corresponds to sig.params[i]
 
     // If set, callee must write its result into this place (sret-style).
     std::optional<Place> sret_dest;
@@ -341,24 +376,18 @@ struct ExternalFunction {
 
     Id id = invalid_id;
     std::string name;
-    std::vector<TypeId> param_types;
-    TypeId return_type = invalid_type_id;
+    MirFunctionSig sig;  // ABI and type information
 };
 
 struct MirFunction {
     FunctionId id = 0;
     std::string name;
-    std::vector<FunctionParameter> params;
+    MirFunctionSig sig;                     // function signature (params, ABI, return info)
+    
     std::vector<TypeId> temp_types;
     std::vector<LocalInfo> locals;
     std::vector<BasicBlock> basic_blocks;
     BasicBlockId start_block = 0;
-    TypeId return_type = invalid_type_id;
-
-    // SRET support: if uses_sret is true, the callee receives an implicit first
-    // parameter (the return destination pointer), and returns void.
-    bool uses_sret = false;
-    std::optional<TempId> sret_temp;  // temp holding the sret pointer (&return_type)
 
     [[nodiscard]] TypeId get_temp_type(TempId temp) const {
         if (temp >= temp_types.size()) {
@@ -379,7 +408,22 @@ struct MirFunction {
         return basic_blocks[bb];
     }
 
-
+    // Convenience methods for common queries
+    [[nodiscard]] TypeId semantic_return_type() const {
+        return return_type(sig.return_desc);
+    }
+    
+    [[nodiscard]] bool uses_sret() const {
+        return is_indirect_sret(sig.return_desc);
+    }
+    
+    [[nodiscard]] bool returns_never() const {
+        return is_never(sig.return_desc);
+    }
+    
+    [[nodiscard]] bool returns_void_semantic() const {
+        return is_void_semantic(sig.return_desc);
+    }
 };
 
 struct MirModule {

@@ -33,6 +33,8 @@ BinaryOpRValue::Kind classify_binary_kind(const hir::BinaryOp& binary,
                                           TypeId rhs_type,
                                           TypeId result_type);
 
+void populate_abi_params(MirFunctionSig& sig);
+
 std::string type_name(TypeId type);
 std::string derive_function_name(const hir::Function& function, const std::string& scope);
 std::string derive_method_name(const hir::Method& method, const std::string& scope);

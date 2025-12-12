@@ -1,0 +1,37 @@
+// Test nested sret and byval interactions
+// Test passing struct-returning function results to functions expecting byval params
+
+struct Color {
+    r: i32,
+    g: i32,
+    b: i32,
+}
+
+fn make_color(r: i32, g: i32, b: i32) -> Color {
+    Color { r: r, g: g, b: b }
+}
+
+fn sum_color(c: Color) -> i32 {
+    c.r + c.g + c.b
+}
+
+fn mix_colors(c1: Color, c2: Color) -> Color {
+    Color { r: (c1.r + c2.r) / 2, g: (c1.g + c2.g) / 2, b: (c1.b + c2.b) / 2 }
+}
+
+fn main() {
+    // Create colors via sret and pass them to byval param
+    let red: Color = make_color(255, 0, 0);
+    printlnInt(sum_color(red));  // 255
+    
+    let blue: Color = make_color(0, 0, 255);
+    printlnInt(sum_color(blue));  // 255
+    
+    // Pass two sret results to a function requiring two byval params (and returning sret)
+    let mixed: Color = mix_colors(red, blue);
+    printlnInt(mixed.r);  // 127 (255+0)/2
+    printlnInt(mixed.g);  // 0 (0+0)/2
+    printlnInt(mixed.b);  // 127 (0+255)/2
+    
+    exit(0);
+}

@@ -186,7 +186,7 @@ Place FunctionLowerer::ensure_reference_operand_place(
       create_synthetic_local(operand_info.type, mutable_reference);
   AssignStatement assign;
   assign.dest = make_local_place(temp_local);
-  assign.src = value;
+  assign.src = ValueSource{value};
   Statement stmt;
   stmt.value = std::move(assign);
   append_statement(std::move(stmt));
@@ -426,7 +426,7 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
     // Optimization doesn't apply; reuse already-lowered places
     // to avoid double-evaluation of RHS place expression
     Operand value = load_place_value(std::move(src_place), rhs_info.type);
-    AssignStatement assign{.dest = std::move(dest_place), .src = value};
+    AssignStatement assign{.dest = std::move(dest_place), .src = ValueSource{std::move(value)}};
     Statement stmt;
     stmt.value = std::move(assign);
     append_statement(std::move(stmt));
@@ -436,7 +436,7 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
   Place dest = lower_expr_place(*assignment.lhs);
   Operand value = expect_operand(lower_expr(*assignment.rhs),
                                  "Assignment rhs must produce value");
-  AssignStatement assign{.dest = std::move(dest), .src = value};
+  AssignStatement assign{.dest = std::move(dest), .src = ValueSource{std::move(value)}};
   Statement stmt;
   stmt.value = std::move(assign);
   append_statement(std::move(stmt));
@@ -499,30 +499,41 @@ FunctionLowerer::lower_expr_impl(const hir::Call &call_expr,
   }
 
   const hir::Function *hir_fn = func_use->def;
-  bool use_sret = function_uses_sret(*hir_fn);
-
   mir::FunctionRef target = lookup_function(hir_fn);
-
-  std::vector<Operand> args;
-  args.reserve(call_expr.args.size());
-  for (const auto &arg : call_expr.args) {
+  const MirFunctionSig& callee_sig = get_callee_sig(target);
+  
+  // Build CallSite for unified lowering
+  CallSite cs;
+  cs.target = target;
+  cs.callee_sig = &callee_sig;
+  cs.result_type = info.type;
+  cs.ctx = CallSite::Context::Expr;
+  
+  // For function calls: args are the direct arguments
+  cs.args_exprs.reserve(call_expr.args.size());
+  for (const auto& arg : call_expr.args) {
     if (!arg) {
-      throw std::logic_error("Call argument missing during MIR lowering");
+      throw std::logic_error("Function call argument missing");
     }
-    args.push_back(lower_operand(*arg));
+    cs.args_exprs.push_back(arg.get());
   }
-
-  if (!use_sret) {
-    // current behavior
-    return emit_call(target, info.type, std::move(args));
+  
+  // Handle SRET result placement
+  if (std::holds_alternative<mir::ReturnDesc::RetIndirectSRet>(callee_sig.return_desc.kind)) {
+    // Create synthetic local to receive result
+    LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
+    cs.sret_dest = make_local_place(tmp_local);
+    
+    // Lower the call with sret destination
+    lower_callsite(cs);
+    
+    // Load result from sret destination
+    return load_place_value(*cs.sret_dest, info.type);
+  } else {
+    // Direct return: lower without sret destination
+    cs.sret_dest = std::nullopt;
+    return lower_callsite(cs);
   }
-
-  // sret in expression context: create a synthetic local + load
-  LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
-  Place dest_place = make_local_place(tmp_local);
-
-  emit_call_into_place(target, info.type, dest_place, std::move(args));
-  return load_place_value(std::move(dest_place), info.type);
 }
 
 std::optional<Operand>
@@ -533,32 +544,44 @@ FunctionLowerer::lower_expr_impl(const hir::MethodCall &method_call,
     throw std::logic_error("Method call missing receiver during MIR lowering");
   }
 
-  bool use_sret = method_uses_sret(*method_def);
   mir::FunctionRef target = lookup_function(method_def);
-
-  std::vector<Operand> args;
-  args.reserve(method_call.args.size() + 1);
-  args.push_back(lower_operand(*method_call.receiver));
-
-  for (const auto &arg : method_call.args) {
+  const MirFunctionSig& callee_sig = get_callee_sig(target);
+  
+  // Build CallSite for unified lowering
+  // For method calls: args_exprs = [receiver] + method_call.args
+  CallSite cs;
+  cs.target = target;
+  cs.callee_sig = &callee_sig;
+  cs.result_type = info.type;
+  cs.ctx = CallSite::Context::Expr;
+  
+  // Receiver is the first argument
+  cs.args_exprs.push_back(method_call.receiver.get());
+  
+  // Add explicit arguments
+  for (const auto& arg : method_call.args) {
     if (!arg) {
-      throw std::logic_error(
-          "Method call argument missing during MIR lowering");
+      throw std::logic_error("Method call argument missing during MIR lowering");
     }
-    args.push_back(lower_operand(*arg));
+    cs.args_exprs.push_back(arg.get());
   }
-
-  if (!use_sret) {
-    // current behavior
-    return emit_call(target, info.type, std::move(args));
+  
+  // Handle SRET result placement
+  if (std::holds_alternative<mir::ReturnDesc::RetIndirectSRet>(callee_sig.return_desc.kind)) {
+    // Create synthetic local to receive result
+    LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
+    cs.sret_dest = make_local_place(tmp_local);
+    
+    // Lower the call with sret destination
+    lower_callsite(cs);
+    
+    // Load result from sret destination
+    return load_place_value(*cs.sret_dest, info.type);
+  } else {
+    // Direct return: lower without sret destination
+    cs.sret_dest = std::nullopt;
+    return lower_callsite(cs);
   }
-
-  // sret in expression context: create a synthetic local + load
-  LocalId tmp_local = create_synthetic_local(info.type, /*is_mut_ref*/ false);
-  Place dest_place = make_local_place(tmp_local);
-
-  emit_call_into_place(target, info.type, dest_place, std::move(args));
-  return load_place_value(std::move(dest_place), info.type);
 }
 
 std::optional<Operand>
@@ -843,47 +866,94 @@ FunctionLowerer::lower_continue_expr(const hir::Continue &continue_expr) {
   return std::nullopt;
 }
 
-std::optional<Operand>
-FunctionLowerer::lower_return_expr(const hir::Return &return_expr) {
-  // Case 1: function returns `never`
-  if (is_never_type(mir_function.return_type)) {
-    if (return_expr.value && *return_expr.value) {
-      (void)lower_expr(**return_expr.value);
+void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, 
+                                           const char *context) {
+  // Central place to handle all return types using the return storage plan
+  
+  const auto& return_desc = mir_function.sig.return_desc;
+  
+  // Case 1: function returns `never` - diverges unconditionally
+  if (is_never(return_desc)) {
+    if (value_ptr && *value_ptr) {
+      (void)lower_expr(**value_ptr);
     }
     if (is_reachable()) {
-      throw std::logic_error("Diverge function cannot promise divergence");
+      throw std::logic_error(std::string(context) + 
+                            ": diverging function must not reach here");
     }
     UnreachableTerminator term{};
     terminate_current_block(Terminator{std::move(term)});
-    return std::nullopt;
+    return;
   }
 
-  if (uses_sret_) {
-    if (!return_expr.value || !*return_expr.value) {
-      throw std::logic_error(
-          "sret function requires explicit return value");
-    }
-    if (!return_place_) {
-      throw std::logic_error("sret function missing return_place");
+  // Case 2: sret return - indirect return via caller-allocated result location
+  if (is_indirect_sret(return_desc)) {
+    if (!value_ptr || !*value_ptr) {
+      throw std::logic_error(std::string(context) + 
+                            ": sret function requires explicit return value");
     }
 
-    // Write into sret destination
-    lower_init(**return_expr.value, *return_place_, mir_function.return_type);
+    // Use the return plan to determine the result destination
+    if (!return_plan.is_sret) {
+      throw std::logic_error(std::string(context) + 
+                            ": return descriptor is sret but plan is not");
+    }
+
+    const TypeId ret_type = return_plan.ret_type;
+    Place result_place = return_plan.return_place();
+
+    // Use the Init machinery to initialize the result local with the return value
+    try {
+      lower_init(**value_ptr, result_place, ret_type);
+    } catch (const std::exception& e) {
+      throw std::logic_error(std::string(context) + 
+                            ": error in sret return value initialization: " + e.what());
+    }
+    
+    // For sret, we emit a void return since the result is stored in the result_local
     emit_return(std::nullopt);
-    return std::nullopt;
+    return;
   }
 
-  std::optional<Operand> value;
-  if (return_expr.value && *return_expr.value) {
-    value = lower_expr(**return_expr.value);
+  // Case 3: void semantic return
+  if (is_void_semantic(return_desc)) {
+    std::cerr<<"WARNING: void semantic but returns a value, lowering for side effects only\n";
+    // Void semantic: compute the value (for side effects) but don't return it
+    if (value_ptr && *value_ptr) {
+      (void)lower_expr(**value_ptr);
+    }
+    emit_return(std::nullopt);
+    return;
   }
 
-  if (!value && !is_unit_type(mir_function.return_type)) {
-    throw std::logic_error(
-        "Return expression missing value for function requiring return value");
+  // Case 4: direct return - value is returned directly via return value
+  if (std::holds_alternative<ReturnDesc::RetDirect>(return_desc.kind)) {
+    std::optional<Operand> value;
+    if (value_ptr && *value_ptr) {
+      value = lower_expr(**value_ptr);
+    }
+    if(!is_reachable()){
+      // Function is not reachable here - no return needed
+      return;
+    }
+
+    if (!value) {
+      throw std::logic_error(std::string(context) + 
+                            ": missing return value for direct return function");
+    }
+
+    emit_return(std::move(value));
+    return;
   }
 
-  emit_return(std::move(value));
+  // Should not reach here - all cases handled above
+  throw std::logic_error(std::string(context) + 
+                        ": unhandled return descriptor type");
+}
+
+std::optional<Operand>
+FunctionLowerer::lower_return_expr(const hir::Return &return_expr) {
+  handle_return_value(return_expr.value, "Return statement");
   return std::nullopt;
 }
 

@@ -15,6 +15,15 @@ CLANG_CANDIDATES = ["clang-18", "clang-17", "clang-16", "clang-15", "clang"]
 RED = "\033[31m"
 GREEN = "\033[32m"
 RESET = "\033[0m"
+HOST_WRAPPER_SOURCE = """
+extern void __real_main(void);
+int __wrap_main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    __real_main();
+    return 0;
+}
+""".strip() + "\n"
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +61,11 @@ def parse_args() -> argparse.Namespace:
         "--reimu",
         default="reimu",
         help="Reimu executable to run the generated assembly.",
+    )
+    parser.add_argument(
+        "--run-locally",
+        action="store_true",
+        help="Skip reimu/RISC-V by compiling tests for the host machine and executing the native binary.",
     )
     parser.add_argument(
         "--output-root",
@@ -148,6 +162,30 @@ def normalize_output(path: Path) -> list[str]:
     return [line.rstrip() for line in lines if line.rstrip()]
 
 
+def run_native_executable(executable: Path, stdin_path: Path, stdout_path: Path, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+    try:
+        with stdin_path.open("rb") as stdin_file, stdout_path.open("wb") as stdout_file:
+            result = subprocess.run(
+                [str(executable)],
+                stdin=stdin_file,
+                stdout=stdout_file,
+                stderr=subprocess.PIPE,
+                text=False,
+                timeout=timeout,
+            )
+    except subprocess.TimeoutExpired as e:
+        result = subprocess.CompletedProcess([str(executable)], returncode=-1)
+        result.stdout = ""
+        stderr_bytes = e.stderr if e.stderr else b""
+        result.stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else f"Process timed out after {timeout} seconds"
+        return result
+
+    result.stdout = ""
+    stderr_bytes = result.stderr if result.stderr else b""
+    result.stderr = stderr_bytes.decode("utf-8", errors="replace")
+    return result
+
+
 def compile_builtin(clang: str, target: str, builtin_path: Path, work_root: Path, timeout: int | None = None) -> Path:
     builtin_source = work_root / "builtin.s.source"
     builtin_clean = work_root / "builtin.s"
@@ -163,6 +201,31 @@ def compile_builtin(clang: str, target: str, builtin_path: Path, work_root: Path
 
     remove_plt(builtin_source, builtin_clean)
     return builtin_clean
+
+
+def compile_builtin_native(clang: str, builtin_path: Path, work_root: Path, timeout: int | None = None) -> Path:
+    builtin_obj = work_root / "builtin_native.o"
+    result = run_cmd(
+        [clang, "-c", "-O2", "-fno-builtin", str(builtin_path), "-o", str(builtin_obj)],
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        sys.stderr.write("error: failed to compile builtin.c for host execution\n")
+        sys.stderr.write(result.stderr)
+        sys.exit(1)
+    return builtin_obj
+
+
+def compile_host_wrapper(clang: str, work_root: Path, timeout: int | None = None) -> Path:
+    wrapper_src = work_root / "host_wrapper.c"
+    wrapper_obj = work_root / "host_wrapper.o"
+    wrapper_src.write_text(HOST_WRAPPER_SOURCE, encoding="utf-8")
+    result = run_cmd([clang, "-c", str(wrapper_src), "-o", str(wrapper_obj)], timeout=timeout)
+    if result.returncode != 0:
+        sys.stderr.write("error: failed to compile host wrapper\n")
+        sys.stderr.write(result.stderr)
+        sys.exit(1)
+    return wrapper_obj
 
 
 def extract_last_line(text: str) -> str:
@@ -229,7 +292,10 @@ def main() -> int:
             sys.stderr.write(f"warning: no .rx files found under {src_dir}\n")
         return 0
 
-    print(f"Using clang='{clang}', reimu='{args.reimu}', target='{args.target}'")
+    if args.run_locally:
+        print(f"Using clang='{clang}' (host execution)")
+    else:
+        print(f"Using clang='{clang}', reimu='{args.reimu}', target='{args.target}'")
 
     temp_dir_obj = tempfile.TemporaryDirectory(prefix="rcompiler-ir-")
     temp_root = Path(temp_dir_obj.name)
@@ -238,7 +304,12 @@ def main() -> int:
     else:
         print(f"Working directory: {temp_root}")
 
-    compiled_builtin = compile_builtin(clang, args.target, builtin_path, temp_root, timeout=args.timeout_builtin)
+    host_wrapper: Path | None = None
+    if args.run_locally:
+        compiled_builtin = compile_builtin_native(clang, builtin_path, temp_root, timeout=args.timeout_builtin)
+        host_wrapper = compile_host_wrapper(clang, temp_root, timeout=args.timeout_clang)
+    else:
+        compiled_builtin = compile_builtin(clang, args.target, builtin_path, temp_root, timeout=args.timeout_builtin)
 
     failures: list[tuple[Path, str]] = []
     total = len(cases)
@@ -259,13 +330,12 @@ def main() -> int:
         work_dir.mkdir(parents=True, exist_ok=True)
 
         # Prepare inputs.
-        shutil.copy(compiled_builtin, work_dir / "builtin.s")
+        if not args.run_locally:
+            shutil.copy(compiled_builtin, work_dir / "builtin.s")
         shutil.copy(case_in, work_dir / "test.in")
         shutil.copy(case_out, work_dir / "test.ans")
 
         ir_path = work_dir / "test.ll"
-        asm_source = work_dir / "test.s.source"
-        asm_clean = work_dir / "test.s"
         actual_output = work_dir / "test.out"
 
         log_lines: list[str] = []
@@ -290,51 +360,99 @@ def main() -> int:
                 preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
             continue
 
-        # 2) clang assemble
-        result_clang = run_cmd([clang, "-S", f"--target={args.target}", str(ir_path), "-o", str(asm_source)], timeout=args.timeout_clang)
-        log_lines.append("== clang ==")
-        if result_clang.stdout:
-            log_lines.append(result_clang.stdout.rstrip())
-        if result_clang.stderr:
-            log_lines.append(result_clang.stderr.rstrip())
+        if args.run_locally:
+            exe_path = work_dir / "test.bin"
+            assert host_wrapper is not None
+            result_clang = run_cmd([
+                clang,
+                "-O2",
+                str(ir_path),
+                str(compiled_builtin),
+                str(host_wrapper),
+                "-Wl,--wrap=main",
+                "-o",
+                str(exe_path),
+            ], timeout=args.timeout_clang)
+            log_lines.append("== clang (host) ==")
+            if result_clang.stdout:
+                log_lines.append(result_clang.stdout.rstrip())
+            if result_clang.stderr:
+                log_lines.append(result_clang.stderr.rstrip())
 
-        if result_clang.returncode != 0:
-            reason = f"clang exit {result_clang.returncode}: {extract_last_line(result_clang.stderr or result_clang.stdout)}"
-            if result_clang.returncode == -1:
-                reason = f"clang timeout (>{args.timeout_clang}s): {extract_last_line(result_clang.stderr or result_clang.stdout)}"
-            failures.append((rel_case, reason))
-            print(f"[{idx}/{total}] {rel_case}: {RED}fail (clang){RESET}")
-            (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
-            (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
-            if args.preserve_intermediates:
-                preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
-            continue
+            if result_clang.returncode != 0:
+                reason = f"clang exit {result_clang.returncode}: {extract_last_line(result_clang.stderr or result_clang.stdout)}"
+                if result_clang.returncode == -1:
+                    reason = f"clang timeout (>{args.timeout_clang}s): {extract_last_line(result_clang.stderr or result_clang.stdout)}"
+                failures.append((rel_case, reason))
+                print(f"[{idx}/{total}] {rel_case}: {RED}fail (clang){RESET}")
+                (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
+                (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
+                if args.preserve_intermediates:
+                    preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
+                continue
 
-        remove_plt(asm_source, asm_clean)
+            result_run = run_native_executable(exe_path, work_dir / "test.in", actual_output, timeout=args.timeout_reimu)
+            log_lines.append("== host run ==")
+            if result_run.stderr:
+                log_lines.append(result_run.stderr.rstrip())
 
-        # 3) run reimu
-        result_run = run_cmd([
-            args.reimu,
-            f"-i={work_dir / 'test.in'}",
-            f"-o={actual_output}",
-        ], cwd=work_dir, timeout=args.timeout_reimu)
-        log_lines.append("== reimu ==")
-        if result_run.stdout:
-            log_lines.append(result_run.stdout.rstrip())
-        if result_run.stderr:
-            log_lines.append(result_run.stderr.rstrip())
+            if result_run.returncode != 0:
+                reason = f"program exit {result_run.returncode}: {extract_last_line(result_run.stderr or result_run.stdout)}"
+                if result_run.returncode == -1:
+                    reason = f"program timeout (>{args.timeout_reimu}s): {extract_last_line(result_run.stderr or result_run.stdout)}"
+                failures.append((rel_case, reason))
+                print(f"[{idx}/{total}] {rel_case}: {RED}fail (runtime){RESET}")
+                (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
+                (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
+                if args.preserve_intermediates:
+                    preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
+                continue
+        else:
+            asm_source = work_dir / "test.s.source"
+            asm_clean = work_dir / "test.s"
+            result_clang = run_cmd([clang, "-S", f"--target={args.target}", str(ir_path), "-o", str(asm_source)], timeout=args.timeout_clang)
+            log_lines.append("== clang ==")
+            if result_clang.stdout:
+                log_lines.append(result_clang.stdout.rstrip())
+            if result_clang.stderr:
+                log_lines.append(result_clang.stderr.rstrip())
 
-        if result_run.returncode != 0:
-            reason = f"reimu exit {result_run.returncode}: {extract_last_line(result_run.stderr or result_run.stdout)}"
-            if result_run.returncode == -1:
-                reason = f"reimu timeout (>{args.timeout_reimu}s): {extract_last_line(result_run.stderr or result_run.stdout)}"
-            failures.append((rel_case, reason))
-            print(f"[{idx}/{total}] {rel_case}: {RED}fail (runtime){RESET}")
-            (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
-            (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
-            if args.preserve_intermediates:
-                preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
-            continue
+            if result_clang.returncode != 0:
+                reason = f"clang exit {result_clang.returncode}: {extract_last_line(result_clang.stderr or result_clang.stdout)}"
+                if result_clang.returncode == -1:
+                    reason = f"clang timeout (>{args.timeout_clang}s): {extract_last_line(result_clang.stderr or result_clang.stdout)}"
+                failures.append((rel_case, reason))
+                print(f"[{idx}/{total}] {rel_case}: {RED}fail (clang){RESET}")
+                (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
+                (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
+                if args.preserve_intermediates:
+                    preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
+                continue
+
+            remove_plt(asm_source, asm_clean)
+
+            result_run = run_cmd([
+                args.reimu,
+                f"-i={work_dir / 'test.in'}",
+                f"-o={actual_output}",
+            ], cwd=work_dir, timeout=args.timeout_reimu)
+            log_lines.append("== reimu ==")
+            if result_run.stdout:
+                log_lines.append(result_run.stdout.rstrip())
+            if result_run.stderr:
+                log_lines.append(result_run.stderr.rstrip())
+
+            if result_run.returncode != 0:
+                reason = f"reimu exit {result_run.returncode}: {extract_last_line(result_run.stderr or result_run.stdout)}"
+                if result_run.returncode == -1:
+                    reason = f"reimu timeout (>{args.timeout_reimu}s): {extract_last_line(result_run.stderr or result_run.stdout)}"
+                failures.append((rel_case, reason))
+                print(f"[{idx}/{total}] {rel_case}: {RED}fail (runtime){RESET}")
+                (output_root / rel_case.parent).mkdir(parents=True, exist_ok=True)
+                (output_root / rel_case.with_suffix(".log")).write_text("\n".join(log_lines).rstrip() + "\n", encoding="utf-8")
+                if args.preserve_intermediates:
+                    preserve_intermediates(output_root / rel_case.parent, rel_case.stem, work_dir)
+                continue
 
         # 4) compare outputs
         actual_lines = normalize_output(actual_output)

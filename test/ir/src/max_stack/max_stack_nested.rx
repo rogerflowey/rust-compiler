@@ -1,0 +1,50 @@
+// Test 3: Deeply nested function calls with local variables
+// Tests stack usage through multiple nested function calls with local allocations
+fn func_level_5(x: i32) -> i32 {
+    let a: i32 = x + 1;
+    let b: i32 = x + 2;
+    return a + b;
+}
+
+fn func_level_4(x: i32) -> i32 {
+    let a: i32 = x + 10;
+    let b: i32 = func_level_5(a);
+    return b + 1;
+}
+
+fn func_level_3(x: i32) -> i32 {
+    let a: i32 = x + 20;
+    let b: i32 = func_level_4(a);
+    return b + 2;
+}
+
+fn func_level_2(x: i32) -> i32 {
+    let a: i32 = x + 30;
+    let b: i32 = func_level_3(a);
+    return b + 3;
+}
+
+fn func_level_1(x: i32) -> i32 {
+    let a: i32 = x + 40;
+    let b: i32 = func_level_2(a);
+    return b + 4;
+}
+
+fn main() {
+    // Start with value 0, pass through 5 nested functions
+    let result: i32 = func_level_1(0);
+    printlnInt(result);
+    
+    // Verify the computation:
+    // func_level_1(0) -> a=40, func_level_2(40)
+    // func_level_2(40) -> a=70, func_level_3(70)
+    // func_level_3(70) -> a=90, func_level_4(90)
+    // func_level_4(90) -> a=100, func_level_5(100)
+    // func_level_5(100) -> a=101, b=102, return 203
+    // func_level_4: return 203 + 1 = 204
+    // func_level_3: return 204 + 2 = 206
+    // func_level_2: return 206 + 3 = 209
+    // func_level_1: return 209 + 4 = 213
+    
+    exit(0);
+}
