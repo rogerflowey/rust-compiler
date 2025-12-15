@@ -41,9 +41,9 @@ void* builtin_memset(void* dest, int ch, size_t n) {
 void* builtin_memcpy(void* dest, const void* src, size_t n) {
     return memcpy(dest, src, n);
 }
-
+int exit_val;
 void exit(int status){
-    //fuck it
+    exit_val = status;
 }
 
 // builtin.c
@@ -66,4 +66,11 @@ void __builtin_array_repeat_copy(uint8_t *first_elem,
             dst[b] = src[b];
         }
     }
+}
+
+extern void _Rmain();
+
+int main(){
+  _Rmain();
+  return exit_val;
 }

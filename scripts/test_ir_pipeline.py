@@ -109,6 +109,12 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="Timeout in seconds for builtin.c compilation. Default: 10s.",
     )
+    parser.add_argument(
+        "--stack-size",
+        type=int,
+        default=1024,
+        help="Stack size (in kB) for reimu execution. Default: 1024 kB.",
+    )
     return parser.parse_args()
 
 
@@ -435,6 +441,7 @@ def main() -> int:
                 args.reimu,
                 f"-i={work_dir / 'test.in'}",
                 f"-o={actual_output}",
+                f"-s={args.stack_size}K",
             ], cwd=work_dir, timeout=args.timeout_reimu)
             log_lines.append("== reimu ==")
             if result_run.stdout:

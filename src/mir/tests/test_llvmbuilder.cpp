@@ -9,9 +9,9 @@ TEST(LLVMBuilderTest, EmitsBranchesAndPhi) {
 
     auto &fn = module.add_function(
         "select", "i32",
-        {llvmbuilder::FunctionParameter{"i32", ""},
-         llvmbuilder::FunctionParameter{"i32", ""},
-         llvmbuilder::FunctionParameter{"i1", ""}});
+        {llvmbuilder::FunctionParameter{"i32", "", {}},
+         llvmbuilder::FunctionParameter{"i32", "", {}},
+         llvmbuilder::FunctionParameter{"i1", "", {}}});
 
     auto &then_block = fn.create_block("then");
     auto &else_block = fn.create_block("else");

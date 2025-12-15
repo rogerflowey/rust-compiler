@@ -30,14 +30,20 @@ struct MirParam {
     std::string debug_name; // original parameter name
 };
 
-// LLVM parameter attributes (placeholder for future expansion)
+// LLVM parameter attributes
 struct LlvmParamAttrs {
-    // Future: byval, sret, noalias, readonly, nonnull, dereferenceable, ...
+    bool noalias = false;
+    bool nonnull = false;
+    bool readonly = false;
+    bool noundef = false;
+    // Note: sret and byval are handled via AbiParam::kind because they need Types
 };
 
-// LLVM return attributes (placeholder for future expansion)
+// LLVM return attributes
 struct LlvmReturnAttrs {
-    // Future: noundef, noalias, nonnull, ...
+    bool noalias = false;
+    bool nonnull = false;
+    bool noundef = false;
 };
 
 // ABI parameter kinds

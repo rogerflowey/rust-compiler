@@ -6,6 +6,7 @@
 #include "type/helper.hpp"
 #include "type/type.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <optional>
 #include <sstream>
@@ -75,6 +76,15 @@ bool is_const_zero(const mir::Operand &operand) {
         }
       },
       constant->value);
+}
+
+/**
+ * @brief Mangle a function name with the _R prefix for internal functions
+ * @param name The original function name
+ * @return The mangled function name (prefixed with _R)
+ */
+std::string mangle_function_name(const std::string& name) {
+  return "_R" + name;
 }
 
 } // namespace
@@ -155,6 +165,56 @@ std::string Emitter::get_abi_param_type(const mir::AbiParam &abi_param,
   }, abi_param.kind);
 }
 
+std::vector<std::string> Emitter::resolve_param_attributes(
+    const mir::AbiParam& abi_param, 
+    const mir::MirFunctionSig& sig) {
+    
+    std::vector<std::string> attrs;
+
+    // 1. Apply Generic Attributes from LlvmParamAttrs
+    if (abi_param.attrs.noalias) attrs.push_back("noalias");
+    if (abi_param.attrs.nonnull) attrs.push_back("nonnull");
+    if (abi_param.attrs.readonly) attrs.push_back("readonly");
+    if (abi_param.attrs.noundef) attrs.push_back("noundef");
+
+    // 2. Apply ABI-Kind specific attributes (sret, byval)
+    std::visit(mir::Overloaded{
+        [&](const mir::AbiParamDirect&) {
+            // Direct params usually don't imply extra ABI attributes
+        },
+        [&](const mir::AbiParamByValCallerCopy&) {
+            // "byval" requires a type in opaque pointer LLVM
+            if (abi_param.param_index) {
+                const auto& sem_param = sig.params[*abi_param.param_index];
+                std::string type_name = module_.get_type_name(sem_param.type);
+                attrs.push_back("byval(" + type_name + ")");
+                
+                // byval implies noalias and valid alignment usually
+                // We add noalias explicitly as good practice for C++-like semantics
+                if (std::find(attrs.begin(), attrs.end(), "noalias") == attrs.end()) {
+                    attrs.push_back("noalias");
+                }
+                // We could add "nocapture" here too if strictly caller-owned copy
+                attrs.push_back("nocapture");
+            }
+        },
+        [&](const mir::AbiParamSRet&) {
+            // "sret" requires a type in opaque pointer LLVM
+            const auto& sret_desc = std::get<mir::ReturnDesc::RetIndirectSRet>(sig.return_desc.kind);
+            std::string type_name = module_.get_type_name(sret_desc.type);
+            attrs.push_back("sret(" + type_name + ")");
+            
+            // sret pointers are always noalias and nocapture
+            if (std::find(attrs.begin(), attrs.end(), "noalias") == attrs.end()) {
+                attrs.push_back("noalias");
+            }
+            attrs.push_back("nocapture");
+        }
+    }, abi_param.kind);
+
+    return attrs;
+}
+
 void Emitter::emit_function(const mir::MirFunction &function) {
   current_function_ = &function;
   block_builders_.clear();
@@ -186,7 +246,13 @@ void Emitter::emit_function(const mir::MirFunction &function) {
     }, abi_param.kind);
 
     if (!param_type_name.empty()) {
-      params.push_back(llvmbuilder::FunctionParameter{param_type_name, param_name});
+      // Resolve and pass attributes
+      std::vector<std::string> attrs = resolve_param_attributes(abi_param, sig);
+      params.push_back(llvmbuilder::FunctionParameter{
+          std::move(param_type_name), 
+          std::move(param_name),
+          std::move(attrs)
+      });
     }
   }
 
@@ -232,12 +298,20 @@ void Emitter::emit_external_declaration(const mir::ExternalFunction &function) {
   const mir::MirFunctionSig& sig = function.sig;
   
   // Build parameter type list from abi_params using shared helper
-  std::vector<std::string> param_types;
+  std::vector<std::string> param_defs;
   for (const auto& abi_param : sig.abi_params) {
     std::string param_type = get_abi_param_type(abi_param, sig);
-    if (!param_type.empty()) {
-      param_types.push_back(std::move(param_type));
+    if (param_type.empty()) continue;
+
+    // Resolve attributes
+    std::vector<std::string> attrs = resolve_param_attributes(abi_param, sig);
+    
+    std::ostringstream p_ss;
+    p_ss << param_type;
+    for (const auto& attr : attrs) {
+        p_ss << " " << attr;
     }
+    param_defs.push_back(p_ss.str());
   }
   
   // Build the return type string from ReturnDesc
@@ -253,11 +327,11 @@ void Emitter::emit_external_declaration(const mir::ExternalFunction &function) {
   }, sig.return_desc.kind);
   
   std::string params;
-  for (std::size_t i = 0; i < param_types.size(); ++i) {
+  for (std::size_t i = 0; i < param_defs.size(); ++i) {
     if (i > 0) {
       params += ", ";
     }
-    params += param_types[i];
+    params += param_defs[i];
   }
   
   // Emit as LLVM declare statement
@@ -435,11 +509,11 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
   if (statement.target.kind == mir::CallTarget::Kind::Internal) {
     const auto& fn = mir_module_.functions.at(statement.target.id);
     sig = &fn.sig;
-    func_name = fn.name;
+    func_name = mangle_function_name(fn.name);
   } else {
     const auto& ext_fn = mir_module_.external_functions.at(statement.target.id);
     sig = &ext_fn.sig;
-    func_name = ext_fn.name;
+    func_name = ext_fn.name;  // External functions are not mangled
   }
 
   if (!sig) {
@@ -452,6 +526,9 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
 
   for (std::size_t abi_idx = 0; abi_idx < sig->abi_params.size(); ++abi_idx) {
     const auto& abi_param = sig->abi_params[abi_idx];
+    
+    // Resolve attributes for this parameter
+    std::vector<std::string> attrs = resolve_param_attributes(abi_param, *sig);
 
     std::visit(mir::Overloaded{
       [&](const mir::AbiParamDirect&) {
@@ -460,7 +537,15 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
           // Direct parameters must be Operand
           if (auto* operand = std::get_if<mir::Operand>(&value_source.source)) {
             auto typed_operand = get_typed_operand(*operand);
-            llvm_args.emplace_back(typed_operand.type_name, typed_operand.value_name);
+            
+            // Build type with attributes
+            std::ostringstream type_ss;
+            type_ss << typed_operand.type_name;
+            for (const auto& attr : attrs) {
+              type_ss << " " << attr;
+            }
+            
+            llvm_args.emplace_back(type_ss.str(), typed_operand.value_name);
           } else {
             throw std::logic_error("AbiParamDirect expects Operand, got Place");
           }
@@ -474,13 +559,29 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
               [&](const mir::Operand &operand) {
                 // Operand should be a pointer type
                 auto typed_operand = get_typed_operand(operand);
-                llvm_args.emplace_back(typed_operand.type_name, typed_operand.value_name);
+                
+                // Build type with attributes
+                std::ostringstream type_ss;
+                type_ss << typed_operand.type_name;
+                for (const auto& attr : attrs) {
+                  type_ss << " " << attr;
+                }
+                
+                llvm_args.emplace_back(type_ss.str(), typed_operand.value_name);
               },
               [&](const mir::Place &place) {
                 // Place needs its address
                 TranslatedPlace translated = translate_place(place);
                 std::string ptr_ty = pointer_type_name(translated.pointee_type);
-                llvm_args.emplace_back(ptr_ty, translated.pointer);
+                
+                // Build type with attributes
+                std::ostringstream type_ss;
+                type_ss << ptr_ty;
+                for (const auto& attr : attrs) {
+                  type_ss << " " << attr;
+                }
+                
+                llvm_args.emplace_back(type_ss.str(), translated.pointer);
               }
           }, value_source.source);
         }
@@ -491,7 +592,15 @@ void Emitter::emit_call(const mir::CallStatement &statement) {
           TranslatedPlace dest = translate_place(*statement.sret_dest);
           const auto& sret_desc = std::get<mir::ReturnDesc::RetIndirectSRet>(sig->return_desc.kind);
           std::string ptr_ty = pointer_type_name(sret_desc.type);
-          llvm_args.emplace_back(ptr_ty, dest.pointer);
+          
+          // Build type with attributes
+          std::ostringstream type_ss;
+          type_ss << ptr_ty;
+          for (const auto& attr : attrs) {
+            type_ss << " " << attr;
+          }
+          
+          llvm_args.emplace_back(type_ss.str(), dest.pointer);
         } else {
           // Allocate synthetic sret storage
           throw std::logic_error("SRet call without destination during codegen");
@@ -996,7 +1105,7 @@ std::string Emitter::get_function_name(mir::FunctionId id) const {
   if (id >= mir_module_.functions.size()) {
     throw std::out_of_range("Invalid FunctionId");
   }
-  return mir_module_.functions[id].name;
+  return mangle_function_name(mir_module_.functions[id].name);
 }
 
 std::string Emitter::get_global(mir::GlobalId id) const {

@@ -58,6 +58,9 @@ private:
   
   // Helper: Extract LLVM parameter type from ABI parameter (used by emit_function, emit_external_declaration)
   std::string get_abi_param_type(const mir::AbiParam &abi_param, const mir::MirFunctionSig &sig);
+  
+  // Helper: Resolve parameter attributes from AbiParam (combines generic attrs and ABI-specific attrs)
+  std::vector<std::string> resolve_param_attributes(const mir::AbiParam &abi_param, const mir::MirFunctionSig &sig);
   void emit_define(const mir::DefineStatement &statement);
   void emit_load(const mir::LoadStatement &statement);
   void emit_assign(const mir::AssignStatement &statement);

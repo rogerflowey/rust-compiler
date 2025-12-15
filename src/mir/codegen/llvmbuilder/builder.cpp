@@ -474,7 +474,14 @@ std::string FunctionBuilder::str() const {
         if (i > 0) {
             oss << ", ";
         }
-        oss << params_[i].type << " " << params_[i].name;
+        oss << params_[i].type;
+        
+        // Emit attributes
+        for (const auto& attr : params_[i].attributes) {
+            oss << " " << attr;
+        }
+
+        oss << " " << params_[i].name;
     }
     oss << ") {\n";
     for (const auto& block : blocks_) {

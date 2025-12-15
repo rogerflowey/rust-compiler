@@ -18,6 +18,7 @@ namespace llvmbuilder {
 struct FunctionParameter {
     std::string type;
     std::string name;
+    std::vector<std::string> attributes;  // LLVM parameter attributes (e.g., "noalias", "sret(%T)")
 };
 
 class FunctionBuilder;
