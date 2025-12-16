@@ -28,6 +28,8 @@ bool is_bool_type(TypeId type);
 TypeId canonicalize_type_for_mir(TypeId type);
 TypeId make_ref_type(TypeId pointee);  // Return a &T / reference type
 
+bool are_places_definitely_disjoint(const Place& a, const Place& b);
+
 BinaryOpRValue::Kind classify_binary_kind(const hir::BinaryOp& binary,
                                           TypeId lhs_type,
                                           TypeId rhs_type,

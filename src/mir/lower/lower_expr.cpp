@@ -6,38 +6,6 @@
 #include "type/type.hpp"
 #include <stdexcept>
 
-namespace {
-
-bool are_places_definitely_disjoint(const mir::Place &a, const mir::Place &b) {
-  if (std::holds_alternative<mir::PointerPlace>(a.base) ||
-      std::holds_alternative<mir::PointerPlace>(b.base)) {
-    return false;
-  }
-
-  if ((std::holds_alternative<mir::LocalPlace>(a.base) &&
-       std::holds_alternative<mir::GlobalPlace>(b.base)) ||
-      (std::holds_alternative<mir::GlobalPlace>(a.base) &&
-       std::holds_alternative<mir::LocalPlace>(b.base))) {
-    return true;
-  }
-
-  if (const auto *lhs_local = std::get_if<mir::LocalPlace>(&a.base)) {
-    if (const auto *rhs_local = std::get_if<mir::LocalPlace>(&b.base)) {
-      return lhs_local->id != rhs_local->id;
-    }
-  }
-
-  if (const auto *lhs_global = std::get_if<mir::GlobalPlace>(&a.base)) {
-    if (const auto *rhs_global = std::get_if<mir::GlobalPlace>(&b.base)) {
-      return lhs_global->global != rhs_global->global;
-    }
-  }
-
-  return false;
-}
-
-} // namespace
-
 namespace mir::detail {
 
 Operand FunctionLowerer::load_place_value(Place place, TypeId type) {
@@ -47,6 +15,18 @@ Operand FunctionLowerer::load_place_value(Place place, TypeId type) {
   stmt.value = std::move(load);
   append_statement(std::move(stmt));
   return make_temp_operand(temp);
+}
+
+std::optional<Operand>
+FunctionLowerer::materialize_result_operand(LowerResult &result,
+                                            const semantic::ExprInfo &info) {
+  if (!is_reachable()) {
+    return std::nullopt;
+  }
+  if (is_unit_type(info.type) || is_never_type(info.type)) {
+    return std::nullopt;
+  }
+  return result.as_operand(*this, info);
 }
 
 Operand FunctionLowerer::lower_operand(const hir::Expr &expr) {
@@ -72,14 +52,7 @@ std::optional<Operand> FunctionLowerer::lower_expr(const hir::Expr &expr) {
                            "expression leaves MIR reachable");
   }
 
-  if (!is_reachable()) {
-    return std::nullopt;
-  }
-  if (is_unit_type(info.type) || is_never_type(info.type)) {
-    return std::nullopt;
-  }
-
-  return result.as_operand(*this, info);
+  return materialize_result_operand(result, info);
 }
 
 Place FunctionLowerer::lower_expr_place(const hir::Expr &expr) {
@@ -894,8 +867,8 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
       (void)lower_node(**value_ptr);
     }
     if (is_reachable()) {
-      throw std::logic_error(std::string(context) + 
-                            ": diverging function must not reach here");
+      throw std::logic_error(std::string(context) +
+                             ": diverging function must not reach here");
     }
     UnreachableTerminator term{};
     terminate_current_block(Terminator{std::move(term)});
@@ -905,14 +878,14 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
   // Case 2: sret return - indirect return via caller-allocated result location
   if (is_indirect_sret(return_desc)) {
     if (!value_ptr || !*value_ptr) {
-      throw std::logic_error(std::string(context) + 
-                            ": sret function requires explicit return value");
+      throw std::logic_error(std::string(context) +
+                             ": sret function requires explicit return value");
     }
 
     // Use the return plan to determine the result destination
     if (!return_plan.is_sret) {
-      throw std::logic_error(std::string(context) + 
-                            ": return descriptor is sret but plan is not");
+      throw std::logic_error(std::string(context) +
+                             ": return descriptor is sret but plan is not");
     }
 
     Place result_place = return_plan.return_place();
@@ -949,8 +922,8 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
     }
 
     if (!value) {
-      throw std::logic_error(std::string(context) + 
-                            ": missing return value for direct return function");
+      throw std::logic_error(std::string(context) +
+                             ": missing return value for direct return function");
     }
 
     emit_return(std::move(value));

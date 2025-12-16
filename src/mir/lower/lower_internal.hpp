@@ -40,7 +40,7 @@ struct CallSite {
 };
 
 struct FunctionLowerer {
-        // LowerResult needs access to lowering helpers to materialize places/operands.
+        // LowerResult needs access to append_statement/load_place_value/create_synthetic_local to materialize results.
         friend class LowerResult;
         enum class FunctionKind { Function, Method };
 
@@ -114,8 +114,8 @@ private:
 	void switch_to_block(BasicBlockId id);
 	void branch_on_bool(const Operand& condition, BasicBlockId true_block, BasicBlockId false_block);
 	TempId materialize_operand(const Operand& operand, TypeId type);
-	Operand make_temp_operand(TempId temp);
-	void emit_return(std::optional<Operand> value);
+        Operand make_temp_operand(TempId temp);
+        void emit_return(std::optional<Operand> value);
         void collect_parameters();
         void append_self_parameter();
         void append_explicit_parameters(const std::vector<std::unique_ptr<hir::Pattern>>& params,
@@ -165,16 +165,17 @@ private:
 	Place make_local_place(const hir::Local* local) const;
 	Place make_local_place(LocalId local_id) const;
 	LocalId create_synthetic_local(TypeId type, bool is_mutable_reference);
-	Operand load_place_value(Place place, TypeId type);
-	Operand lower_operand(const hir::Expr& expr);
-	Operand make_const_operand(std::uint64_t value, TypeId type, bool is_signed = false);
-	std::optional<Operand> lower_expr(const hir::Expr& expr);
-	Place lower_expr_place(const hir::Expr& expr);
-	Place ensure_reference_operand_place(const hir::Expr& operand,
+        Operand load_place_value(Place place, TypeId type);
+        Operand lower_operand(const hir::Expr& expr);
+        Operand make_const_operand(std::uint64_t value, TypeId type, bool is_signed = false);
+        std::optional<Operand> lower_expr(const hir::Expr& expr);
+        Place lower_expr_place(const hir::Expr& expr);
+        std::optional<Operand> materialize_result_operand(LowerResult& result, const semantic::ExprInfo& info);
+        Place ensure_reference_operand_place(const hir::Expr& operand,
 					  const semantic::ExprInfo& operand_info,
 				  bool mutable_reference);
-	Operand expect_operand(std::optional<Operand> value, const char* context);
-	TempId materialize_place_base(const hir::Expr& base_expr,
+        Operand expect_operand(std::optional<Operand> value, const char* context);
+        TempId materialize_place_base(const hir::Expr& base_expr,
 				 const semantic::ExprInfo& base_info);
 	Place make_index_place(const hir::Index& index_expr, bool allow_temporary_base);
 

@@ -10,34 +10,6 @@ namespace mir::detail {
 
 namespace {
 
-bool are_places_definitely_disjoint(const mir::Place &a, const mir::Place &b) {
-  if (std::holds_alternative<mir::PointerPlace>(a.base) ||
-      std::holds_alternative<mir::PointerPlace>(b.base)) {
-    return false;
-  }
-
-  if ((std::holds_alternative<mir::LocalPlace>(a.base) &&
-       std::holds_alternative<mir::GlobalPlace>(b.base)) ||
-      (std::holds_alternative<mir::GlobalPlace>(a.base) &&
-       std::holds_alternative<mir::LocalPlace>(b.base))) {
-    return true;
-  }
-
-  if (const auto *lhs_local = std::get_if<mir::LocalPlace>(&a.base)) {
-    if (const auto *rhs_local = std::get_if<mir::LocalPlace>(&b.base)) {
-      return lhs_local->id != rhs_local->id;
-    }
-  }
-
-  if (const auto *lhs_global = std::get_if<mir::GlobalPlace>(&a.base)) {
-    if (const auto *rhs_global = std::get_if<mir::GlobalPlace>(&b.base)) {
-      return lhs_global->global != rhs_global->global;
-    }
-  }
-
-  return false;
-}
-
 bool is_underscore_local(const hir::Local &local) {
   return local.name.name == "_";
 }
@@ -80,13 +52,11 @@ Place FunctionLowerer::lower_node_place(const hir::Expr &expr) {
 Operand FunctionLowerer::lower_node_operand(const hir::Expr &expr) {
   semantic::ExprInfo info = hir::helper::get_expr_info(expr);
   LowerResult res = lower_node(expr);
-  if (!is_reachable()) {
+  auto materialized = materialize_result_operand(res, info);
+  if (!materialized) {
     return Operand{};
   }
-  if (is_unit_type(info.type) || is_never_type(info.type)) {
-    return Operand{};
-  }
-  return res.as_operand(*this, info);
+  return *materialized;
 }
 
 void FunctionLowerer::lower_stmt_node(const hir::Stmt &stmt) {
