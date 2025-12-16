@@ -4,6 +4,7 @@ endif()
 
 set(MIR_TEST_SOURCES
     test_mir_lower.cpp
+    test_mir_lower_v2.cpp
     test_type_codegen.cpp
     test_mir_emitter.cpp
     test_llvmbuilder.cpp
