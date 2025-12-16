@@ -3,6 +3,7 @@
 #include "mir/mir.hpp"
 #include "mir/lower/lower_common.hpp"
 #include "mir/lower/lower_const.hpp"
+#include "mir/lower/lower_result.hpp"
 
 #include "semantic/hir/hir.hpp"
 #include "semantic/pass/semantic_check/expr_info.hpp"
@@ -39,6 +40,7 @@ struct CallSite {
 };
 
 struct FunctionLowerer {
+        friend class LowerResult;
         enum class FunctionKind { Function, Method };
 
 	FunctionLowerer(const hir::Function& function,
@@ -223,6 +225,39 @@ private:
 	// Central return handling: unifies logic for block returns and explicit return statements
 	// Takes an optional unique_ptr<Expr> (from HIR) and handles all return types
 	void handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, const char *context);
+
+        // === V2 lowering API ===
+        LowerResult lower_node(const hir::Expr& expr, std::optional<Place> dest_hint = std::nullopt);
+        void lower_stmt_node(const hir::Stmt& stmt);
+        Place lower_node_place(const hir::Expr& expr);
+        Operand lower_node_operand(const hir::Expr& expr);
+
+        template <typename T>
+        LowerResult visit_node(const T& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+
+        LowerResult visit_struct_literal(const hir::StructLiteral& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_array_literal(const hir::ArrayLiteral& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_array_repeat(const hir::ArrayRepeat& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_variable(const hir::Variable& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_const_use(const hir::ConstUse& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_struct_const(const hir::StructConst& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_enum_variant(const hir::EnumVariant& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_field_access(const hir::FieldAccess& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_index(const hir::Index& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_cast(const hir::Cast& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_block(const hir::Block& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_if(const hir::If& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_binary(const hir::BinaryOp& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_literal(const hir::Literal& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_call(const hir::Call& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_method_call(const hir::MethodCall& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_assignment(const hir::Assignment& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_loop(const hir::Loop& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_while(const hir::While& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_break(const hir::Break& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_continue(const hir::Continue& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_return(const hir::Return& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_unary(const hir::UnaryOp& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
 	
 	// Process call arguments according to callee's ABI signature
 };

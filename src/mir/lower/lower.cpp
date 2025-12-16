@@ -1096,7 +1096,7 @@ bool FunctionLowerer::lower_block_statements(const hir::Block &block) {
       return false;
     }
     if (stmt) {
-      lower_statement(*stmt);
+      lower_stmt_node(*stmt);
     }
   }
   return is_reachable();
@@ -1151,11 +1151,7 @@ FunctionLowerer::lower_block_expr(const hir::Block &block,
 }
 
 void FunctionLowerer::lower_statement(const hir::Stmt &stmt) {
-  if (!is_reachable()) {
-    return;
-  }
-  std::visit([this](const auto &node) { lower_statement_impl(node); },
-             stmt.value);
+  lower_stmt_node(stmt);
 }
 
 void FunctionLowerer::lower_statement_impl(const hir::LetStmt &let_stmt) {

@@ -55,7 +55,9 @@ Operand FunctionLowerer::lower_operand(const hir::Expr &expr) {
   if (auto const_operand = try_lower_to_const(expr)) {
     return std::move(*const_operand);
   }
-  return expect_operand(lower_expr(expr), "Expression must produce value");
+  semantic::ExprInfo info = hir::helper::get_expr_info(expr);
+  LowerResult res = lower_node(expr);
+  return res.as_operand(*this, info);
 }
 
 std::optional<Operand> FunctionLowerer::lower_expr(const hir::Expr &expr) {
@@ -63,16 +65,21 @@ std::optional<Operand> FunctionLowerer::lower_expr(const hir::Expr &expr) {
 
   bool was_reachable = is_reachable();
 
-  auto result = std::visit(
-      [this, &info](const auto &node) { return lower_expr_impl(node, info); },
-      expr.value);
+  LowerResult result = lower_node(expr);
 
   if (was_reachable && semantic::diverges(info) && is_reachable()) {
     throw std::logic_error("MIR lowering bug: semantically diverging "
                            "expression leaves MIR reachable");
   }
 
-  return result;
+  if (!is_reachable()) {
+    return std::nullopt;
+  }
+  if (is_unit_type(info.type) || is_never_type(info.type)) {
+    return std::nullopt;
+  }
+
+  return result.as_operand(*this, info);
 }
 
 Place FunctionLowerer::lower_expr_place(const hir::Expr &expr) {
@@ -80,9 +87,8 @@ Place FunctionLowerer::lower_expr_place(const hir::Expr &expr) {
   if (!info.is_place) {
     throw std::logic_error("Expression is not a place in MIR lowering");
   }
-  return std::visit(
-      [this, &info](const auto &node) { return lower_place_impl(node, info); },
-      expr.value);
+  LowerResult res = lower_node(expr);
+  return res.as_place(*this, info);
 }
 
 Operand FunctionLowerer::expect_operand(std::optional<Operand> value,
@@ -877,7 +883,7 @@ FunctionLowerer::lower_continue_expr(const hir::Continue &continue_expr) {
 }
 
 void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, 
-                                           const char *context) {
+                                            const char *context) {
   // Central place to handle all return types using the return storage plan
   
   const auto& return_desc = mir_function.sig.return_desc;
@@ -885,7 +891,7 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
   // Case 1: function returns `never` - diverges unconditionally
   if (is_never(return_desc)) {
     if (value_ptr && *value_ptr) {
-      (void)lower_expr(**value_ptr);
+      (void)lower_node(**value_ptr);
     }
     if (is_reachable()) {
       throw std::logic_error(std::string(context) + 
@@ -909,16 +915,11 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
                             ": return descriptor is sret but plan is not");
     }
 
-    const TypeId ret_type = return_plan.ret_type;
     Place result_place = return_plan.return_place();
 
-    // Use the Init machinery to initialize the result local with the return value
-    try {
-      lower_init(**value_ptr, result_place, ret_type);
-    } catch (const std::exception& e) {
-      throw std::logic_error(std::string(context) + 
-                            ": error in sret return value initialization: " + e.what());
-    }
+    semantic::ExprInfo info = hir::helper::get_expr_info(**value_ptr);
+    LowerResult res = lower_node(**value_ptr, result_place);
+    res.write_to_dest(*this, result_place, info);
     
     // For sret, we emit a void return since the result is stored in the result_local
     emit_return(std::nullopt);
@@ -930,7 +931,7 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
     std::cerr<<"WARNING: void semantic but returns a value, lowering for side effects only\n";
     // Void semantic: compute the value (for side effects) but don't return it
     if (value_ptr && *value_ptr) {
-      (void)lower_expr(**value_ptr);
+      (void)lower_node(**value_ptr);
     }
     emit_return(std::nullopt);
     return;
@@ -940,7 +941,7 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
   if (std::holds_alternative<ReturnDesc::RetDirect>(return_desc.kind)) {
     std::optional<Operand> value;
     if (value_ptr && *value_ptr) {
-      value = lower_expr(**value_ptr);
+      value = lower_node_operand(**value_ptr);
     }
     if(!is_reachable()){
       // Function is not reachable here - no return needed
