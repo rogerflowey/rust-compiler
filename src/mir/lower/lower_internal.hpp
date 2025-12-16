@@ -292,7 +292,11 @@ private:
 	LowerResult lower_expr_impl(const hir::ArrayLiteral& array_literal, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	LowerResult lower_expr_impl(const hir::ArrayRepeat& array_repeat, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	
-	// TODO: Assignment will be migrated once Block/If/Loop are implemented
+	// Propagators (control flow) 
+	LowerResult lower_expr_impl(const hir::Block& block_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::If& if_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	
+	// TODO: Assignment, Loop, While will be migrated once Block/If are tested
 	
 	// === Legacy expr implementations (to be migrated) ===
 	std::optional<Operand> lower_expr_impl_legacy(const hir::Literal& literal, const semantic::ExprInfo& info);

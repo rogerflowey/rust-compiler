@@ -1405,6 +1405,188 @@ LowerResult FunctionLowerer::lower_expr_impl(const hir::ArrayRepeat &array_repea
   return maybe_dest.has_value() ? LowerResult::written() : LowerResult::place(std::move(target));
 }
 
+// === Propagators (Control Flow) ===
+// These nodes pass the destination hint through to their children
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::Block &block_expr,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> maybe_dest) {
+  // Block is a propagator: passes dest hint to final expression
+  if (!lower_block_statements(block_expr)) {
+    // Block diverges (unreachable)
+    return LowerResult::written(); // Signal no value produced
+  }
+
+  if (block_expr.final_expr) {
+    const auto &expr_ptr = *block_expr.final_expr;
+    if (expr_ptr) {
+      // Pass destination hint through to final expression
+      return lower_expr(*expr_ptr, maybe_dest);
+    }
+    // No final expression - block produces unit
+    if (is_unit_type(info.type) || is_never_type(info.type)) {
+      return LowerResult::written();
+    }
+    throw std::logic_error("Block expression missing value");
+  }
+
+  // Block has no final expression - produces unit
+  if (is_unit_type(info.type) || is_never_type(info.type)) {
+    return LowerResult::written();
+  }
+
+  throw std::logic_error("Block expression missing value");
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::If &if_expr,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> maybe_dest) {
+  // If is a propagator: passes dest hint to branches
+  Operand condition = lower_operand(*if_expr.condition);
+  if (!current_block) {
+    return LowerResult::written();
+  }
+
+  bool has_else = if_expr.else_expr && *if_expr.else_expr;
+  if (!has_else && !is_unit_type(info.type)) {
+    throw std::logic_error("If expression missing else branch for non-unit type");
+  }
+
+  BasicBlockId then_block = create_block();
+  std::optional<BasicBlockId> else_block =
+      has_else ? std::optional<BasicBlockId>(create_block()) : std::nullopt;
+  BasicBlockId join_block = create_block();
+
+  BasicBlockId false_target = else_block ? *else_block : join_block;
+  branch_on_bool(condition, then_block, false_target);
+
+  bool result_needed = !is_unit_type(info.type) && !is_never_type(info.type);
+  
+  // If dest is provided and result is needed, branches write to dest
+  // Otherwise, use Phi nodes
+  if (maybe_dest.has_value() && result_needed) {
+    // DEST-AWARE PATH: Branches write directly to destination
+    
+    // THEN branch
+    switch_to_block(then_block);
+    std::optional<Operand> then_value = lower_block_expr(*if_expr.then_block, info.type);
+    bool then_reachable = current_block.has_value();
+    
+    if (then_reachable) {
+      // Write then value to destination
+      if (then_value) {
+        AssignStatement assign;
+        assign.dest = *maybe_dest;
+        assign.src = ValueSource{std::move(*then_value)};
+        Statement stmt;
+        stmt.value = std::move(assign);
+        append_statement(std::move(stmt));
+      }
+      add_goto_from_current(join_block);
+    }
+
+    // ELSE branch
+    bool else_reachable = false;
+    if (has_else) {
+      switch_to_block(*else_block);
+      std::optional<Operand> else_value = lower_expr_legacy(**if_expr.else_expr);
+      else_reachable = current_block.has_value();
+      
+      if (else_reachable) {
+        // Write else value to destination
+        if (else_value) {
+          AssignStatement assign;
+          assign.dest = *maybe_dest;
+          assign.src = ValueSource{std::move(*else_value)};
+          Statement stmt;
+          stmt.value = std::move(assign);
+          append_statement(std::move(stmt));
+        }
+        add_goto_from_current(join_block);
+      }
+    }
+
+    // Set up join block
+    bool join_reachable = then_reachable || else_reachable || !has_else;
+    if (join_reachable) {
+      current_block = join_block;
+    } else {
+      current_block.reset();
+    }
+
+    // Return Written since value was written to dest
+    return LowerResult::written();
+    
+  } else {
+    // DEST-IGNORANT PATH: Use Phi nodes
+    std::vector<PhiIncoming> phi_incomings;
+
+    // THEN branch
+    switch_to_block(then_block);
+    std::optional<Operand> then_value = lower_block_expr(*if_expr.then_block, info.type);
+    std::optional<BasicBlockId> then_fallthrough =
+        current_block ? std::optional<BasicBlockId>(*current_block) : std::nullopt;
+    
+    if (then_fallthrough) {
+      if (result_needed) {
+        TempId value_temp = materialize_operand(
+            expect_operand(std::move(then_value), "Then branch must produce value"),
+            info.type);
+        phi_incomings.push_back(PhiIncoming{*then_fallthrough, value_temp});
+      }
+      add_goto_from_current(join_block);
+    }
+
+    // ELSE branch
+    std::optional<BasicBlockId> else_fallthrough;
+    if (has_else) {
+      switch_to_block(*else_block);
+      std::optional<Operand> else_value = lower_expr_legacy(**if_expr.else_expr);
+      else_fallthrough =
+          current_block ? std::optional<BasicBlockId>(*current_block) : std::nullopt;
+      
+      if (else_fallthrough) {
+        if (result_needed) {
+          TempId value_temp = materialize_operand(
+              expect_operand(std::move(else_value), "Else branch must produce value"),
+              info.type);
+          phi_incomings.push_back(PhiIncoming{*else_fallthrough, value_temp});
+        }
+        add_goto_from_current(join_block);
+      }
+    }
+
+    // Set up join block
+    bool then_reachable = then_fallthrough.has_value();
+    bool else_reachable = has_else && else_fallthrough.has_value();
+    bool join_reachable = then_reachable || else_reachable || !has_else;
+
+    if (join_reachable) {
+      current_block = join_block;
+    } else {
+      current_block.reset();
+    }
+
+    if (result_needed) {
+      if (phi_incomings.empty()) {
+        current_block.reset();
+        return LowerResult::written();
+      }
+      
+      TempId dest = allocate_temp(info.type);
+      PhiNode phi;
+      phi.dest = dest;
+      phi.incoming = std::move(phi_incomings);
+      mir_function.basic_blocks[join_block].phis.push_back(std::move(phi));
+      
+      return LowerResult::operand(make_temp_operand(dest));
+    }
+
+    return LowerResult::written();
+  }
+}
+
+// TODO: Loop and While will be implemented similarly
 // TODO: Assignment will be migrated to the new unified API once
 // Block/If/Loop control flow nodes are implemented, as they are
 // used within assignment expressions
