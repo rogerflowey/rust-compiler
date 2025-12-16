@@ -199,9 +199,9 @@ TEST(MirLowerV2Test, IfWithDestinationAvoidsPhi) {
     auto then_block = std::make_unique<hir::Block>();
     then_block->final_expr = make_int_literal_expr(1, int_type);
 
-    auto else_block = std::make_unique<hir::Block>();
-    else_block->final_expr = make_int_literal_expr(2, int_type);
-    auto else_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(*else_block)});
+    hir::Block else_block;
+    else_block.final_expr = make_int_literal_expr(2, int_type);
+    auto else_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(else_block)});
     else_expr->expr_info = make_value_info(int_type, false);
 
     hir::If if_expr;
