@@ -1138,7 +1138,7 @@ FunctionLowerer::lower_block_expr(const hir::Block &block,
   if (block.final_expr) {
     const auto &expr_ptr = *block.final_expr;
     if (expr_ptr) {
-      return lower_expr(*expr_ptr);
+      return lower_expr_legacy(*expr_ptr);
     }
     return std::nullopt;
   }
@@ -1479,7 +1479,7 @@ void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
 
   if (local->name.name == "_") {
     // For underscore bindings, just lower for side effects
-    (void)lower_expr(init_expr);
+    (void)lower_expr_legacy(init_expr);
     return;
   }
 
@@ -1522,7 +1522,7 @@ void FunctionLowerer::lower_statement_impl(const hir::ExprStmt &expr_stmt) {
     semantic::ExprInfo info = hir::helper::get_expr_info(*expr_stmt.expr);
     bool expect_fallthrough = semantic::has_normal_endpoint(info);
 
-    (void)lower_expr(*expr_stmt.expr);
+    (void)lower_expr_legacy(*expr_stmt.expr);
 
     if (!expect_fallthrough && is_reachable()) {
       throw std::logic_error("ExprStmt divergence mismatch: semantically "

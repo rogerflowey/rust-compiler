@@ -40,6 +40,107 @@ bool are_places_definitely_disjoint(const mir::Place &a, const mir::Place &b) {
 
 namespace mir::detail {
 
+// ============================================================================
+// LowerResult Implementation
+// ============================================================================
+
+LowerResult LowerResult::operand(mir::Operand op) {
+    return LowerResult(Kind::Operand, std::move(op));
+}
+
+LowerResult LowerResult::place(mir::Place p) {
+    return LowerResult(Kind::Place, std::move(p));
+}
+
+LowerResult LowerResult::written() {
+    return LowerResult(Kind::Written, std::monostate{});
+}
+
+mir::Operand LowerResult::as_operand(FunctionLowerer& fl, TypeId type) {
+    switch (kind) {
+        case Kind::Operand:
+            return std::get<mir::Operand>(data);
+        
+        case Kind::Place: {
+            mir::Place place = std::get<mir::Place>(data);
+            return fl.load_place_value(std::move(place), type);
+        }
+        
+        case Kind::Written:
+            throw std::logic_error(
+                "LowerResult::as_operand: value was already written to destination");
+    }
+    throw std::logic_error("LowerResult::as_operand: invalid kind");
+}
+
+mir::Place LowerResult::as_place(FunctionLowerer& fl, TypeId type) {
+    switch (kind) {
+        case Kind::Place:
+            return std::get<mir::Place>(data);
+        
+        case Kind::Operand: {
+            // Allocate a temporary and assign the operand to it
+            mir::Operand op = std::get<mir::Operand>(data);
+            LocalId temp_local = fl.create_synthetic_local(type, false);
+            mir::Place temp_place = fl.make_local_place(temp_local);
+            
+            AssignStatement assign;
+            assign.dest = temp_place;
+            assign.src = ValueSource{std::move(op)};
+            Statement stmt;
+            stmt.value = std::move(assign);
+            fl.append_statement(std::move(stmt));
+            
+            return temp_place;
+        }
+        
+        case Kind::Written:
+            throw std::logic_error(
+                "LowerResult::as_place: value was already written to destination");
+    }
+    throw std::logic_error("LowerResult::as_place: invalid kind");
+}
+
+void LowerResult::write_to_dest(FunctionLowerer& fl, mir::Place dest, TypeId type) {
+    switch (kind) {
+        case Kind::Written:
+            // No-op: value already written to destination (optimization worked!)
+            return;
+        
+        case Kind::Operand: {
+            // Emit Assign(dest, operand)
+            mir::Operand op = std::get<mir::Operand>(data);
+            AssignStatement assign;
+            assign.dest = std::move(dest);
+            assign.src = ValueSource{std::move(op)};
+            Statement stmt;
+            stmt.value = std::move(assign);
+            fl.append_statement(std::move(stmt));
+            return;
+        }
+        
+        case Kind::Place: {
+            // Emit Assign(dest, Copy(place))
+            // For now, we load from the place and assign the value
+            mir::Place src_place = std::get<mir::Place>(data);
+            mir::Operand value = fl.load_place_value(std::move(src_place), type);
+            
+            AssignStatement assign;
+            assign.dest = std::move(dest);
+            assign.src = ValueSource{std::move(value)};
+            Statement stmt;
+            stmt.value = std::move(assign);
+            fl.append_statement(std::move(stmt));
+            return;
+        }
+    }
+    throw std::logic_error("LowerResult::write_to_dest: invalid kind");
+}
+
+// ============================================================================
+// FunctionLowerer Implementation
+// ============================================================================
+
 Operand FunctionLowerer::load_place_value(Place place, TypeId type) {
   TempId temp = allocate_temp(type);
   LoadStatement load{.dest = temp, .src = std::move(place)};
@@ -51,20 +152,54 @@ Operand FunctionLowerer::load_place_value(Place place, TypeId type) {
 
 Operand FunctionLowerer::lower_operand(const hir::Expr &expr) {
   // Try to lower as a pure constant operand first (no temp needed).
-  // Fall back to lower_expr if that doesn't work.
+  // Fall back to lower_expr_legacy if that doesn't work.
   if (auto const_operand = try_lower_to_const(expr)) {
     return std::move(*const_operand);
   }
-  return expect_operand(lower_expr(expr), "Expression must produce value");
+  return expect_operand(lower_expr_legacy(expr), "Expression must produce value");
 }
 
-std::optional<Operand> FunctionLowerer::lower_expr(const hir::Expr &expr) {
+// === New Unified API Implementation ===
+
+LowerResult FunctionLowerer::lower_expr(const hir::Expr &expr, std::optional<Place> maybe_dest) {
   semantic::ExprInfo info = hir::helper::get_expr_info(expr);
 
   bool was_reachable = is_reachable();
 
   auto result = std::visit(
-      [this, &info](const auto &node) { return lower_expr_impl(node, info); },
+      [this, &info, &maybe_dest](const auto &node) { 
+        return lower_expr_impl(node, info, maybe_dest); 
+      },
+      expr.value);
+
+  if (was_reachable && semantic::diverges(info) && is_reachable()) {
+    throw std::logic_error("MIR lowering bug: semantically diverging "
+                           "expression leaves MIR reachable");
+  }
+
+  return result;
+}
+
+Place FunctionLowerer::lower_place(const hir::Expr &expr) {
+  semantic::ExprInfo info = hir::helper::get_expr_info(expr);
+  if (!info.is_place) {
+    throw std::logic_error("Expression is not a place in MIR lowering");
+  }
+  if (!info.has_type || info.type == invalid_type_id) {
+    throw std::logic_error("Place expression missing resolved type");
+  }
+  return lower_expr(expr, std::nullopt).as_place(*this, info.type);
+}
+
+// === Legacy API (to be removed) ===
+
+std::optional<Operand> FunctionLowerer::lower_expr_legacy(const hir::Expr &expr) {
+  semantic::ExprInfo info = hir::helper::get_expr_info(expr);
+
+  bool was_reachable = is_reachable();
+
+  auto result = std::visit(
+      [this, &info](const auto &node) { return lower_expr_impl_legacy(node, info); },
       expr.value);
 
   if (was_reachable && semantic::diverges(info) && is_reachable()) {
@@ -159,7 +294,7 @@ Place FunctionLowerer::lower_place_impl(const hir::UnaryOp &unary,
   }
   semantic::ExprInfo operand_info = hir::helper::get_expr_info(*unary.rhs);
   Operand pointer_operand = expect_operand(
-      lower_expr(*unary.rhs), "Dereference operand must produce value");
+      lower_expr_legacy(*unary.rhs), "Dereference operand must produce value");
   TempId pointer_temp = materialize_operand(pointer_operand, operand_info.type);
   Place place;
   place.base = PointerPlace{pointer_temp};
@@ -211,25 +346,25 @@ FunctionLowerer::materialize_place_base(const hir::Expr &base_expr,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Literal &literal,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Literal &literal,
                                  const semantic::ExprInfo &info) {
   return emit_rvalue_to_temp(build_literal_rvalue(literal, info), info.type);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::StructLiteral &struct_literal,
+FunctionLowerer::lower_expr_impl_legacy(const hir::StructLiteral &struct_literal,
                                  const semantic::ExprInfo &info) {
   return emit_rvalue_to_temp(build_struct_aggregate(struct_literal), info.type);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::ArrayLiteral &array_literal,
+FunctionLowerer::lower_expr_impl_legacy(const hir::ArrayLiteral &array_literal,
                                  const semantic::ExprInfo &info) {
   return emit_rvalue_to_temp(build_array_aggregate(array_literal), info.type);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::ArrayRepeat &array_repeat,
+FunctionLowerer::lower_expr_impl_legacy(const hir::ArrayRepeat &array_repeat,
                                  const semantic::ExprInfo &info) {
   // Array repeats are aggregated values: construct using InitArrayRepeat pattern
   // Allocate a temporary local to hold the result
@@ -245,13 +380,13 @@ FunctionLowerer::lower_expr_impl(const hir::ArrayRepeat &array_repeat,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Variable &variable,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Variable &variable,
                                  const semantic::ExprInfo &info) {
   return load_place_value(lower_place_impl(variable, info), info.type);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::ConstUse &const_use,
+FunctionLowerer::lower_expr_impl_legacy(const hir::ConstUse &const_use,
                                  const semantic::ExprInfo &info) {
   if (!const_use.def) {
     throw std::logic_error("Const use missing definition during MIR lowering");
@@ -269,7 +404,7 @@ FunctionLowerer::lower_expr_impl(const hir::ConstUse &const_use,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::StructConst &struct_const,
+FunctionLowerer::lower_expr_impl_legacy(const hir::StructConst &struct_const,
                                  const semantic::ExprInfo &info) {
   if (!struct_const.assoc_const) {
     throw std::logic_error(
@@ -288,7 +423,7 @@ FunctionLowerer::lower_expr_impl(const hir::StructConst &struct_const,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::EnumVariant &enum_variant,
+FunctionLowerer::lower_expr_impl_legacy(const hir::EnumVariant &enum_variant,
                                  const semantic::ExprInfo &info) {
   TypeId type = info.type;
   if (type == invalid_type_id) {
@@ -310,7 +445,7 @@ FunctionLowerer::lower_expr_impl(const hir::EnumVariant &enum_variant,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::FieldAccess &field_access,
+FunctionLowerer::lower_expr_impl_legacy(const hir::FieldAccess &field_access,
                                  const semantic::ExprInfo &info) {
   if (info.is_place) {
     return load_place_value(lower_place_impl(field_access, info), info.type);
@@ -326,7 +461,7 @@ FunctionLowerer::lower_expr_impl(const hir::FieldAccess &field_access,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Index &index_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Index &index_expr,
                                  const semantic::ExprInfo &info) {
   if (info.is_place) {
     return load_place_value(lower_place_impl(index_expr, info), info.type);
@@ -336,7 +471,7 @@ FunctionLowerer::lower_expr_impl(const hir::Index &index_expr,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Cast &cast_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Cast &cast_expr,
                                  const semantic::ExprInfo &info) {
   if (!cast_expr.expr) {
     throw std::logic_error(
@@ -352,7 +487,7 @@ FunctionLowerer::lower_expr_impl(const hir::Cast &cast_expr,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::BinaryOp &binary,
+FunctionLowerer::lower_expr_impl_legacy(const hir::BinaryOp &binary,
                                  const semantic::ExprInfo &info) {
   if (std::get_if<hir::LogicalAnd>(&binary.op)) {
     return lower_short_circuit(binary, info, true);
@@ -380,7 +515,7 @@ FunctionLowerer::lower_expr_impl(const hir::BinaryOp &binary,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Assignment &assignment,
                                  const semantic::ExprInfo &) {
   if (!assignment.lhs || !assignment.rhs) {
     throw std::logic_error("Assignment missing operands during MIR lowering");
@@ -395,14 +530,14 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
         }
         if (compound_rhs) {
           // For underscore assignment, just lower for side effects
-          (void)lower_expr(*compound_rhs);
+          (void)lower_expr_legacy(*compound_rhs);
         } else {
           // For underscore assignment, just lower for side effects
-          (void)lower_expr(*assignment.rhs);
+          (void)lower_expr_legacy(*assignment.rhs);
         }
       } else {
         // For underscore assignment, just lower for side effects
-        (void)lower_expr(*assignment.rhs);
+        (void)lower_expr_legacy(*assignment.rhs);
       }
     }
     return std::nullopt;
@@ -444,7 +579,7 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
   }
 
   Place dest = lower_expr_place(*assignment.lhs);
-  Operand value = expect_operand(lower_expr(*assignment.rhs),
+  Operand value = expect_operand(lower_expr_legacy(*assignment.rhs),
                                  "Assignment rhs must produce value");
   AssignStatement assign{.dest = std::move(dest), .src = ValueSource{std::move(value)}};
   Statement stmt;
@@ -454,49 +589,49 @@ FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Block &block_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Block &block_expr,
                                  const semantic::ExprInfo &info) {
   return lower_block_expr(block_expr, info.type);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::If &if_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::If &if_expr,
                                  const semantic::ExprInfo &info) {
   return lower_if_expr(if_expr, info);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Loop &loop_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Loop &loop_expr,
                                  const semantic::ExprInfo &info) {
   return lower_loop_expr(loop_expr, info);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::While &while_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::While &while_expr,
                                  const semantic::ExprInfo &info) {
   return lower_while_expr(while_expr, info);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Break &break_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Break &break_expr,
                                  const semantic::ExprInfo &) {
   return lower_break_expr(break_expr);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Continue &continue_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Continue &continue_expr,
                                  const semantic::ExprInfo &) {
   return lower_continue_expr(continue_expr);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Return &return_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Return &return_expr,
                                  const semantic::ExprInfo &) {
   return lower_return_expr(return_expr);
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::Call &call_expr,
+FunctionLowerer::lower_expr_impl_legacy(const hir::Call &call_expr,
                                  const semantic::ExprInfo &info) {
   if (!call_expr.callee) {
     throw std::logic_error(
@@ -547,7 +682,7 @@ FunctionLowerer::lower_expr_impl(const hir::Call &call_expr,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::MethodCall &method_call,
+FunctionLowerer::lower_expr_impl_legacy(const hir::MethodCall &method_call,
                                  const semantic::ExprInfo &info) {
   const hir::Method *method_def = hir::helper::get_method_def(method_call);
   if (!method_call.receiver) {
@@ -595,7 +730,7 @@ FunctionLowerer::lower_expr_impl(const hir::MethodCall &method_call,
 }
 
 std::optional<Operand>
-FunctionLowerer::lower_expr_impl(const hir::UnaryOp &unary,
+FunctionLowerer::lower_expr_impl_legacy(const hir::UnaryOp &unary,
                                  const semantic::ExprInfo &info) {
   if (!unary.rhs) {
     throw std::logic_error(
@@ -675,7 +810,7 @@ FunctionLowerer::lower_if_expr(const hir::If &if_expr,
   std::optional<BasicBlockId> else_fallthrough;
   if (has_else) {
     switch_to_block(*else_block);
-    std::optional<Operand> else_value = lower_expr(**if_expr.else_expr);
+    std::optional<Operand> else_value = lower_expr_legacy(**if_expr.else_expr);
     else_fallthrough =
         current_block ? std::optional<BasicBlockId>(*current_block)
                       : std::nullopt;
@@ -850,7 +985,7 @@ FunctionLowerer::lower_break_expr(const hir::Break &break_expr) {
   const void *key = std::visit(
       [](auto *loop_ptr) -> const void * { return loop_ptr; }, target);
   std::optional<Operand> break_value =
-      break_expr.value ? lower_expr(**break_expr.value) : std::nullopt;
+      break_expr.value ? lower_expr_legacy(**break_expr.value) : std::nullopt;
   LoopContext &ctx = lookup_loop_context(key);
   BasicBlockId from_block =
       current_block ? current_block_id() : ctx.break_block;
@@ -885,7 +1020,7 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
   // Case 1: function returns `never` - diverges unconditionally
   if (is_never(return_desc)) {
     if (value_ptr && *value_ptr) {
-      (void)lower_expr(**value_ptr);
+      (void)lower_expr_legacy(**value_ptr);
     }
     if (is_reachable()) {
       throw std::logic_error(std::string(context) + 
@@ -930,7 +1065,7 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
     std::cerr<<"WARNING: void semantic but returns a value, lowering for side effects only\n";
     // Void semantic: compute the value (for side effects) but don't return it
     if (value_ptr && *value_ptr) {
-      (void)lower_expr(**value_ptr);
+      (void)lower_expr_legacy(**value_ptr);
     }
     emit_return(std::nullopt);
     return;
@@ -940,7 +1075,7 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
   if (std::holds_alternative<ReturnDesc::RetDirect>(return_desc.kind)) {
     std::optional<Operand> value;
     if (value_ptr && *value_ptr) {
-      value = lower_expr(**value_ptr);
+      value = lower_expr_legacy(**value_ptr);
     }
     if(!is_reachable()){
       // Function is not reachable here - no return needed
