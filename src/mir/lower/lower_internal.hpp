@@ -167,10 +167,6 @@ private:
 	// Returns: operand result if in expr context and callee returns directly; nullopt otherwise
 	std::optional<Operand> lower_callsite(const CallSite& cs);
 	
-	bool try_lower_init_call(const hir::Call &call_expr, Place dest, TypeId dest_type);
-	bool try_lower_init_method_call(const hir::MethodCall &mcall, Place dest, TypeId dest_type);
-	Operand emit_aggregate(AggregateRValue aggregate, TypeId result_type);
-	Operand emit_array_repeat(Operand value, std::size_t count, TypeId result_type);
 	void emit_init_statement(Place dest, InitPattern pattern);
 	template <typename RValueT>
 	Operand emit_rvalue_to_temp(RValueT rvalue_kind, TypeId result_type);
@@ -184,7 +180,6 @@ private:
 	void add_goto_from_current(BasicBlockId target);
 	void switch_to_block(BasicBlockId id);
 	void branch_on_bool(const Operand& condition, BasicBlockId true_block, BasicBlockId false_block);
-	TempId materialize_operand(const Operand& operand, TypeId type);
 	Operand make_temp_operand(TempId temp);
 	void emit_return(std::optional<Operand> value);
         void collect_parameters();
@@ -210,8 +205,6 @@ private:
         void lower_statement(const hir::Stmt& stmt);
         void lower_statement_impl(const hir::LetStmt& let_stmt);
         void lower_statement_impl(const hir::ExprStmt& expr_stmt);
-        void lower_init(const hir::Expr& expr, Place dest, TypeId dest_type);
-        bool try_lower_init_outside(const hir::Expr& expr, Place dest, TypeId dest_type);
         void lower_struct_init(const hir::StructLiteral& literal, Place dest, TypeId dest_type);
         void lower_array_literal_init(const hir::ArrayLiteral& array_literal, Place dest, TypeId dest_type);
         void lower_array_repeat_init(const hir::ArrayRepeat& array_repeat, Place dest, TypeId dest_type);
@@ -248,20 +241,16 @@ private:
 	// Implementation: return lower_expr(expr, std::nullopt).as_place(*this, type);
 	Place lower_place(const hir::Expr& expr);
 	
-	// === Legacy API (to be removed during refactoring) ===
-	Operand lower_operand(const hir::Expr& expr);  // TODO: Remove - use lower_expr(...).as_operand()
-	std::optional<Operand> lower_expr_legacy(const hir::Expr& expr);  // Renamed from lower_expr
-	Place lower_expr_place(const hir::Expr& expr);  // TODO: Remove - use lower_place
-	
+	// Useful helper functions
+	Operand lower_operand(const hir::Expr& expr); // Tries const folding, then lower_expr().as_operand()
+	Operand expect_operand(std::optional<Operand> value, const char* context);
+	TempId materialize_operand(const Operand& operand, TypeId type);
 	Operand make_const_operand(std::uint64_t value, TypeId type, bool is_signed = false);
 	Place ensure_reference_operand_place(const hir::Expr& operand,
 					  const semantic::ExprInfo& operand_info,
 				  bool mutable_reference);
-	Operand expect_operand(std::optional<Operand> value, const char* context);
-	TempId materialize_place_base(const hir::Expr& base_expr,
-				 const semantic::ExprInfo& base_info);
 	Place make_index_place(const hir::Index& index_expr, bool allow_temporary_base);
-
+	
 	template <typename T>
 	Place lower_place_impl(const T& node, const semantic::ExprInfo& info);
 
@@ -301,33 +290,7 @@ private:
 	// Statement-like expressions
 	LowerResult lower_expr_impl(const hir::Assignment& assignment, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	
-	// === Legacy expr implementations (to be removed) ===
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Literal& literal, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::ArrayLiteral& array_literal, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::ArrayRepeat& array_repeat, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Variable& variable, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::ConstUse& const_use, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::StructConst& struct_const, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::FieldAccess& field_access, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Index& index_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Cast& cast_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::BinaryOp& binary, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Assignment& assignment, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Block& block_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::If& if_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Loop& loop_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::While& while_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Break& break_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Continue& continue_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Return& return_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::Call& call_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::MethodCall& method_call, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl_legacy(const hir::UnaryOp& unary, const semantic::ExprInfo& info);
-
 	template <typename T>
-	std::optional<Operand> lower_expr_impl_legacy(const T& unsupported, const semantic::ExprInfo& info);
 
 	std::optional<Operand> lower_if_expr(const hir::If& if_expr, const semantic::ExprInfo& info);
 	std::optional<Operand> lower_short_circuit(const hir::BinaryOp& binary,
@@ -354,12 +317,6 @@ Place FunctionLowerer::lower_place_impl(const T&, const semantic::ExprInfo&) {
 // New unified API template
 template <typename T>
 LowerResult FunctionLowerer::lower_expr_impl(const T&, const semantic::ExprInfo&, std::optional<Place>) {
-	throw std::logic_error("Expression kind not supported yet in MIR lowering");
-}
-
-// Legacy template (to be removed)
-template <typename T>
-std::optional<Operand> FunctionLowerer::lower_expr_impl_legacy(const T&, const semantic::ExprInfo&) {
 	throw std::logic_error("Expression kind not supported yet in MIR lowering");
 }
 

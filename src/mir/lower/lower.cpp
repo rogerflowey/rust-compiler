@@ -633,7 +633,8 @@ std::optional<Operand> FunctionLowerer::lower_callsite(const CallSite& cs) {
       Place tmp_place = make_local_place(tmp_local);
       
       // Lower expression into temporary
-      lower_init(arg_expr, tmp_place, semantic_param.type);
+      LowerResult result = lower_expr(arg_expr, tmp_place);
+      result.write_to_dest(*this, tmp_place, semantic_param.type);
       
       // Pass the address of the caller-owned copy
       // INVARIANT: AbiParamByValCallerCopy must be passed a Place (address of memory)
@@ -721,153 +722,6 @@ std::optional<Operand> FunctionLowerer::lower_callsite(const CallSite& cs) {
   append_statement(std::move(stmt));
   
   return result;
-}
-
-Operand FunctionLowerer::emit_aggregate(AggregateRValue aggregate,
-                                        TypeId result_type) {
-  return emit_rvalue_to_temp(std::move(aggregate), result_type);
-}
-
-Operand FunctionLowerer::emit_array_repeat(Operand value, std::size_t count,
-                                           TypeId result_type) {
-  // DEPRECATED: This function uses ArrayRepeatRValue which is deprecated.
-  // Prefer using lower_array_repeat_init with InitArrayRepeat instead.
-  ArrayRepeatRValue repeat;
-  repeat.value = std::move(value);
-  repeat.count = count;
-  return emit_rvalue_to_temp(std::move(repeat), result_type);
-}
-
-bool FunctionLowerer::try_lower_init_call(const hir::Call &call_expr,
-                                         Place dest,
-                                         TypeId dest_type) {
-  if (!call_expr.callee) {
-    return false;
-  }
-
-  const auto *func_use =
-      std::get_if<hir::FuncUse>(&call_expr.callee->value);
-  if (!func_use || !func_use->def) {
-    return false;
-  }
-
-  const hir::Function *hir_fn = func_use->def;
-  
-  // Check if return type is an aggregate (sret candidate)
-  if (!hir_fn->sig.return_type) {
-    return false; // void function
-  }
-  
-  TypeId ret_type = canonicalize_type_for_mir(
-      hir::helper::get_resolved_type(*hir_fn->sig.return_type));
-  if (!is_aggregate_type(ret_type)) {
-    return false; // not an aggregate return
-  }
-
-  mir::FunctionRef target = lookup_function(hir_fn);
-  const MirFunctionSig& callee_sig = get_callee_sig(target);
-  
-  // Verify callee has SRET return in its ABI signature
-  if (!std::holds_alternative<mir::ReturnDesc::RetIndirectSRet>(callee_sig.return_desc.kind)) {
-    return false; // Not an SRET function
-  }
-  
-  // Verify destination type matches return type (strict equality after canonicalization)
-  // This catches mismatches early and prevents invalid SRET lowering
-  TypeId canon_ret_type = canonicalize_type_for_mir(ret_type);
-  TypeId canon_dest_type = canonicalize_type_for_mir(dest_type);
-  if (canon_ret_type != canon_dest_type) {
-    // Type mismatch: destination type doesn't match callee return type
-    // This is a contract violation that should never happen if typing is correct
-    return false;
-  }
-  
-  // Build CallSite for init-context lowering
-  CallSite cs;
-  cs.target = target;
-  cs.callee_sig = &callee_sig;
-  cs.result_type = ret_type;
-  cs.ctx = CallSite::Context::Init;
-  cs.sret_dest = std::move(dest);
-  
-  // Add arguments as expressions
-  cs.args_exprs.reserve(call_expr.args.size());
-  for (const auto& arg : call_expr.args) {
-    if (!arg) {
-      throw std::logic_error("Function call argument missing during init lowering");
-    }
-    cs.args_exprs.push_back(arg.get());
-  }
-  
-  // Lower the call with the destination place
-  lower_callsite(cs);
-  return true;
-}
-
-bool FunctionLowerer::try_lower_init_method_call(const hir::MethodCall &mcall,
-                                                Place dest,
-                                                TypeId dest_type) {
-  const hir::Method *method_def = hir::helper::get_method_def(mcall);
-  if (!method_def) {
-    return false;
-  }
-  
-  // Check if return type is an aggregate (sret candidate)
-  if (!method_def->sig.return_type) {
-    return false; // void method
-  }
-  
-  TypeId ret_type = canonicalize_type_for_mir(
-      hir::helper::get_resolved_type(*method_def->sig.return_type));
-  if (!is_aggregate_type(ret_type)) {
-    return false; // not an aggregate return
-  }
-
-  if (!mcall.receiver) {
-    throw std::logic_error("Method call missing receiver during MIR lowering");
-  }
-
-  mir::FunctionRef target = lookup_function(method_def);
-  const MirFunctionSig& callee_sig = get_callee_sig(target);
-  
-  // Verify callee has SRET return in its ABI signature
-  if (!std::holds_alternative<mir::ReturnDesc::RetIndirectSRet>(callee_sig.return_desc.kind)) {
-    return false; // Not an SRET function
-  }
-  
-  // Verify destination type matches return type (strict equality after canonicalization)
-  // This catches mismatches early and prevents invalid SRET lowering
-  TypeId canon_ret_type = canonicalize_type_for_mir(ret_type);
-  TypeId canon_dest_type = canonicalize_type_for_mir(dest_type);
-  if (canon_ret_type != canon_dest_type) {
-    // Type mismatch: destination type doesn't match callee return type
-    // This is a contract violation that should never happen if typing is correct
-    return false;
-  }
-  
-  // Build CallSite for init-context lowering
-  // For method calls: args_exprs = [receiver] + explicit args
-  CallSite cs;
-  cs.target = target;
-  cs.callee_sig = &callee_sig;
-  cs.result_type = ret_type;
-  cs.ctx = CallSite::Context::Init;
-  cs.sret_dest = std::move(dest);
-  
-  // Add receiver as first argument
-  cs.args_exprs.push_back(mcall.receiver.get());
-  
-  // Add explicit arguments
-  for (const auto &arg : mcall.args) {
-    if (!arg) {
-      throw std::logic_error("Method call argument missing during init lowering");
-    }
-    cs.args_exprs.push_back(arg.get());
-  }
-  
-  // Lower the call with the destination place
-  lower_callsite(cs);
-  return true;
 }
 
 BasicBlockId FunctionLowerer::create_block() {
@@ -1138,7 +992,12 @@ FunctionLowerer::lower_block_expr(const hir::Block &block,
   if (block.final_expr) {
     const auto &expr_ptr = *block.final_expr;
     if (expr_ptr) {
-      return lower_expr_legacy(*expr_ptr);
+      semantic::ExprInfo expr_info = hir::helper::get_expr_info(*expr_ptr);
+      LowerResult result = lower_expr(*expr_ptr, std::nullopt);
+      if (result.kind == LowerResult::Kind::Written) {
+        return std::nullopt;
+      }
+      return std::make_optional(result.as_operand(*this, expr_info.type));
     }
     return std::nullopt;
   }
@@ -1174,8 +1033,6 @@ void FunctionLowerer::lower_statement_impl(const hir::LetStmt &let_stmt) {
   lower_let_pattern(*let_stmt.pattern, init_expr);
 }
 
-
-
 void FunctionLowerer::emit_init_statement(Place dest, InitPattern pattern) {
   InitStatement init_stmt;
   init_stmt.dest = std::move(dest);
@@ -1187,271 +1044,8 @@ void FunctionLowerer::emit_init_statement(Place dest, InitPattern pattern) {
 
 // === Central Init API ===================================================
 
-void FunctionLowerer::lower_init(
-    const hir::Expr &expr,
-    Place dest,
-    TypeId dest_type
-) {
-  if (dest_type == invalid_type_id) {
-    throw std::logic_error("Destination type missing in lower_init");
-  }
-
-  // 1) Try specialized init logic (aggregates, etc.)
-  if (try_lower_init_outside(expr, dest, dest_type)) {
-    // fully handled dest
-    return;
-  }
-
-  // 2) Fallback: compute a value and assign to dest
-  Operand value = lower_operand(expr);
-
-  AssignStatement assign;
-  assign.dest = std::move(dest);
-  assign.src  = ValueSource{std::move(value)};
-
-  Statement stmt;
-  stmt.value = std::move(assign);
-  append_statement(std::move(stmt));
-}
-
-bool FunctionLowerer::try_lower_init_outside(
-    const hir::Expr &expr,
-    Place dest,
-    TypeId dest_type
-) {
-  if (dest_type == invalid_type_id) {
-    return false;
-  }
-
-  TypeId normalized = canonicalize_type_for_mir(dest_type);
-  const type::Type &ty = type::get_type_from_id(normalized);
-
-  // Struct literal -> struct destination
-  if (auto *struct_lit = std::get_if<hir::StructLiteral>(&expr.value)) {
-    if (std::holds_alternative<type::StructType>(ty.value)) {
-      lower_struct_init(*struct_lit, std::move(dest), normalized);
-      return true;
-    }
-    return false;
-  }
-
-  // Array literal -> array destination
-  if (auto *array_lit = std::get_if<hir::ArrayLiteral>(&expr.value)) {
-    lower_array_literal_init(*array_lit, std::move(dest), normalized);
-    return true;
-  }
-
-  // Array repeat -> array destination
-  if (auto *array_rep = std::get_if<hir::ArrayRepeat>(&expr.value)) {
-    lower_array_repeat_init(*array_rep, std::move(dest), normalized);
-    return true;
-  }
-
-  // Call -> sret destination
-  if (auto *call = std::get_if<hir::Call>(&expr.value)) {
-    if (try_lower_init_call(*call, std::move(dest), normalized)) {
-      return true;
-    }
-  }
-
-  // Method call -> sret destination
-  if (auto *mcall = std::get_if<hir::MethodCall>(&expr.value)) {
-    if (try_lower_init_method_call(*mcall, std::move(dest), normalized)) {
-      return true;
-    }
-  }
-
-  {
-    semantic::ExprInfo info = hir::helper::get_expr_info(expr);
-    if (info.is_place) {
-      if (!info.has_type || info.type == invalid_type_id) {
-        throw std::logic_error("Init RHS place missing type");
-      }
-      TypeId src_ty = canonicalize_type_for_mir(info.type);
-      if (src_ty == normalized) {
-        Place src_place = lower_expr_place(expr);
-
-        // Only use InitCopy for aggregate types (structs and arrays)
-        // where memcpy is beneficial. For scalar types, fall through to default handling.
-        if (is_aggregate_type(normalized)) {
-          InitCopy copy_pattern{.src = std::move(src_place)};
-          InitPattern pattern;
-          pattern.value = std::move(copy_pattern);
-
-          emit_init_statement(std::move(dest), std::move(pattern));
-          return true;
-        }
-      }
-    }
-  }
-
-  // Everything else: not handled here
-  return false;
-}
-
-
-
-void FunctionLowerer::lower_struct_init(
-    const hir::StructLiteral &literal,
-    Place dest,
-    TypeId dest_type
-) {
-  TypeId normalized = canonicalize_type_for_mir(dest_type);
-  auto *struct_ty =
-      std::get_if<type::StructType>(&type::get_type_from_id(normalized).value);
-  if (!struct_ty) {
-    throw std::logic_error(
-        "Struct literal init without struct destination type");
-  }
-
-  const auto &struct_info =
-      type::TypeContext::get_instance().get_struct(struct_ty->id);
-  const auto &fields = hir::helper::get_canonical_fields(literal);
-
-  if (fields.initializers.size() != struct_info.fields.size()) {
-    throw std::logic_error(
-        "Struct literal field count mismatch during struct init");
-  }
-
-  InitStruct init_struct;
-  init_struct.fields.resize(fields.initializers.size());
-
-  for (std::size_t idx = 0; idx < fields.initializers.size(); ++idx) {
-    if (!fields.initializers[idx]) {
-      throw std::logic_error(
-          "Struct literal field missing initializer during MIR lowering");
-    }
-
-    TypeId field_ty =
-        canonicalize_type_for_mir(struct_info.fields[idx].type);
-    if (field_ty == invalid_type_id) {
-      throw std::logic_error(
-          "Struct field missing resolved type during MIR lowering");
-    }
-
-    const hir::Expr &field_expr = *fields.initializers[idx];
-    auto &leaf = init_struct.fields[idx];
-
-    // Build sub-place dest.field[idx]
-    Place field_place = dest;
-    field_place.projections.push_back(FieldProjection{idx});
-
-    // Try to initialize this field via its own place-directed path:
-    if (try_lower_init_outside(field_expr, std::move(field_place), field_ty)) {
-      // Field is handled by the MIR just emitted.
-      leaf = make_omitted_leaf();
-    } else {
-      // Fall back: compute an Operand and store via InitPattern
-      Operand value = lower_operand(field_expr);
-      leaf = make_value_leaf(std::move(value));
-    }
-  }
-
-  InitPattern pattern;
-  pattern.value = std::move(init_struct);
-  emit_init_statement(std::move(dest), std::move(pattern));
-}
-
-
 
 // === Array Init ========================================================
-
-void FunctionLowerer::lower_array_literal_init(
-    const hir::ArrayLiteral &array_literal,
-    Place dest,
-    TypeId dest_type
-) {
-  InitArrayLiteral init_array;
-  init_array.elements.resize(array_literal.elements.size());
-
-  // Get the element type
-  const type::Type &array_ty = type::get_type_from_id(dest_type);
-  const auto *array_type_info = std::get_if<type::ArrayType>(&array_ty.value);
-  if (!array_type_info) {
-    throw std::logic_error("Array literal init requires array destination type");
-  }
-  TypeId element_type = array_type_info->element_type;
-
-  for (std::size_t idx = 0; idx < array_literal.elements.size(); ++idx) {
-    const auto &elem_expr_ptr = array_literal.elements[idx];
-    if (!elem_expr_ptr) {
-      throw std::logic_error(
-          "Array literal element missing during MIR lowering");
-    }
-
-    const hir::Expr &elem_expr = *elem_expr_ptr;
-    auto &leaf = init_array.elements[idx];
-
-    // Build sub-place dest[idx]
-    Place elem_place = dest;
-    TypeId usize_ty = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
-    Operand idx_operand = make_const_operand(idx, usize_ty, false);
-    elem_place.projections.push_back(IndexProjection{std::move(idx_operand)});
-
-    if (try_lower_init_outside(elem_expr, std::move(elem_place), element_type)) {
-      leaf = make_omitted_leaf();
-    } else {
-      Operand op = lower_operand(elem_expr);
-      leaf = make_value_leaf(std::move(op));
-    }
-  }
-
-  InitPattern pattern;
-  pattern.value = std::move(init_array);
-  emit_init_statement(std::move(dest), std::move(pattern));
-}
-
-void FunctionLowerer::lower_array_repeat_init(
-    const hir::ArrayRepeat &array_repeat,
-    Place dest,
-    TypeId dest_type
-) {
-  InitArrayRepeat init_repeat;
-  
-  // Extract count from variant
-  if (std::holds_alternative<size_t>(array_repeat.count)) {
-    init_repeat.count = std::get<size_t>(array_repeat.count);
-  } else {
-    throw std::logic_error(
-        "Array repeat count must be a compile-time constant during MIR lowering");
-  }
-
-  // Get the element type
-  const type::Type &array_ty = type::get_type_from_id(dest_type);
-  const auto *array_type_info = std::get_if<type::ArrayType>(&array_ty.value);
-  if (!array_type_info) {
-    throw std::logic_error("Array repeat init requires array destination type");
-  }
-  TypeId element_type = array_type_info->element_type;
-
-  // Try to initialize the element via place-directed init
-  Place elem_place = dest;
-  IntConstant zero_const;
-  zero_const.value = 0;
-  zero_const.is_negative = false;
-  zero_const.is_signed = false;
-  Constant c;
-  c.type = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
-  c.value = std::move(zero_const);
-  Operand zero_operand;
-  zero_operand.value = std::move(c);
-  elem_place.projections.push_back(IndexProjection{std::move(zero_operand)});
-
-  if (try_lower_init_outside(*array_repeat.value, std::move(elem_place), element_type)) {
-    // Element is handled by separate MIR statements
-    init_repeat.element = make_omitted_leaf();
-  } else {
-    // Fall back: compute an Operand
-    Operand op = lower_operand(*array_repeat.value);
-    init_repeat.element = make_value_leaf(std::move(op));
-  }
-
-  InitPattern pattern;
-  pattern.value = std::move(init_repeat);
-  emit_init_statement(std::move(dest), std::move(pattern));
-}
-
-
 
 // === Pattern-based initialization =====================================
 
@@ -1529,7 +1123,7 @@ void FunctionLowerer::lower_statement_impl(const hir::ExprStmt &expr_stmt) {
     semantic::ExprInfo info = hir::helper::get_expr_info(*expr_stmt.expr);
     bool expect_fallthrough = semantic::has_normal_endpoint(info);
 
-    (void)lower_expr_legacy(*expr_stmt.expr);
+    (void)lower_expr(*expr_stmt.expr, std::nullopt);
 
     if (!expect_fallthrough && is_reachable()) {
       throw std::logic_error("ExprStmt divergence mismatch: semantically "
@@ -1537,8 +1131,6 @@ void FunctionLowerer::lower_statement_impl(const hir::ExprStmt &expr_stmt) {
     }
   }
 }
-
-
 
 AggregateRValue FunctionLowerer::build_struct_aggregate(
     const hir::StructLiteral &struct_literal) {
