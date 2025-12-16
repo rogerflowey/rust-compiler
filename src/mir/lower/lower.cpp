@@ -1138,7 +1138,9 @@ FunctionLowerer::lower_block_expr(const hir::Block &block,
   if (block.final_expr) {
     const auto &expr_ptr = *block.final_expr;
     if (expr_ptr) {
-      return lower_expr(*expr_ptr);
+      semantic::ExprInfo expr_info = hir::helper::get_expr_info(*expr_ptr);
+      LowerResult result = lower_expr(*expr_ptr, std::nullopt);
+      return result.as_operand(*this, expr_info.type);
     }
     return std::nullopt;
   }

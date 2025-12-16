@@ -20,6 +20,83 @@
 
 namespace mir::detail {
 
+// Forward declaration
+struct FunctionLowerer;
+
+/**
+ * MIR Lowering Strategy: Unified Destination-Passing Style (DPS)
+ *
+ * Goal: Eliminate the legacy dichotomy between `lower_expr` and `lower_init`. 
+ * Unify them into a single pipeline that naturally optimizes for direct memory 
+ * writing (SRET/Aggregates) while simplifying scalar logic.
+ *
+ * The `LowerResult` Abstraction:
+ * The result of lowering ANY expression is encapsulated here. It normalizes 
+ * the outcome into three states:
+ * 1. `Operand`: A simple value (constant, temporary, or register). (e.g., `1 + 2`)
+ * 2. `Place`: An addressable L-value location. (e.g., variable `x`, `x.field`)
+ * 3. `Written`: A marker indicating the value has *already* been stored into 
+ *    the provided `maybe_dest`.
+ *
+ * The `maybe_dest` Hint:
+ * `lower_expr` accepts an `std::optional<Place> maybe_dest`.
+ * - **Interpretation:** This is a **Strong Suggestion**.
+ * - **Dest-Aware Nodes** (Structs, SRET Calls, If-Exprs) **MUST** attempt to 
+ *   write directly to `maybe_dest` to avoid copies. If successful, they return `Written`.
+ * - **Dest-Ignorant Nodes** (BinaryOps, Literals) **SHOULD** ignore the hint 
+ *   and return `Operand` or `Place`.
+ *
+ * Caller Responsibility:
+ * The caller *must* ensure the result ends up where needed using 
+ * `LowerResult::write_to_dest()`. This helper acts as the **Universal Adapter**: 
+ * if the node ignored the hint (returning Operand/Place), this helper generates 
+ * the necessary assignment code to bridge the gap.
+ */
+class LowerResult {
+public:
+    enum class Kind { Operand, Place, Written };
+
+    // Factory methods
+    static LowerResult operand(mir::Operand op);
+    static LowerResult place(mir::Place p);
+    static LowerResult written();
+
+    // --- Centralized Conversion Helpers ---
+
+    /**
+     * "I need a value to use in a computation (e.g., a + b)"
+     * - If Operand: returns it.
+     * - If Place: emits Load(place).
+     * - If Written: Throws logic_error (value was consumed by dest).
+     */
+    mir::Operand as_operand(FunctionLowerer& fl, mir::TypeId type);
+
+    /**
+     * "I need a memory location (e.g., &x, or LHS of assign)"
+     * - If Place: returns it.
+     * - If Operand: allocates temp, emits Assign(temp, op), returns temp place.
+     * - If Written: Throws logic_error.
+     */
+    mir::Place as_place(FunctionLowerer& fl, mir::TypeId type);
+
+    /**
+     * "I need the result to be in THIS specific variable" (The Adapter)
+     * - If Written: No-op (Optimization worked!).
+     * - If Operand: emits Assign(dest, op).
+     * - If Place: emits Assign(dest, Copy(place)).
+     */
+    void write_to_dest(FunctionLowerer& fl, mir::Place dest, mir::TypeId type);
+
+    Kind get_kind() const { return kind; }
+
+private:
+    Kind kind;
+    std::variant<std::monostate, mir::Operand, mir::Place> data;
+
+    LowerResult(Kind k, std::variant<std::monostate, mir::Operand, mir::Place> d)
+        : kind(k), data(std::move(d)) {}
+};
+
 // Mid-layer call representation: unifies function calls and method calls
 // Keeps expressions in "expr form" until ABI shaping (no early operand lowering)
 struct CallSite {
@@ -40,6 +117,9 @@ struct CallSite {
 
 struct FunctionLowerer {
         enum class FunctionKind { Function, Method };
+
+	// Friend declaration for LowerResult to access private members
+	friend class LowerResult;
 
 	FunctionLowerer(const hir::Function& function,
 		   const std::unordered_map<const void*, mir::FunctionRef>& fn_map,
@@ -163,17 +243,25 @@ private:
 	Place make_local_place(LocalId local_id) const;
 	LocalId create_synthetic_local(TypeId type, bool is_mutable_reference);
 	Operand load_place_value(Place place, TypeId type);
-	Operand lower_operand(const hir::Expr& expr);
 	Operand make_const_operand(std::uint64_t value, TypeId type, bool is_signed = false);
-	std::optional<Operand> lower_expr(const hir::Expr& expr);
-	Place lower_expr_place(const hir::Expr& expr);
 	Place ensure_reference_operand_place(const hir::Expr& operand,
 					  const semantic::ExprInfo& operand_info,
 				  bool mutable_reference);
 	Operand expect_operand(std::optional<Operand> value, const char* context);
+	Place make_index_place(const hir::Index& index_expr, bool allow_temporary_base);
+
+	// === NEW UNIFIED API ===
+	// Main entry point for lowering expressions with optional destination hint
+	LowerResult lower_expr(const hir::Expr& expr, std::optional<Place> maybe_dest = std::nullopt);
+	
+	// Helper for L-Value contexts - uses lower_expr().as_place()
+	Place lower_place(const hir::Expr& expr);
+
+	// DEPRECATED: Old API - maintained for compatibility during transition
+	Operand lower_operand(const hir::Expr& expr);  // Use lower_expr().as_operand() instead
+	Place lower_expr_place(const hir::Expr& expr);  // Use lower_place() instead
 	TempId materialize_place_base(const hir::Expr& base_expr,
 				 const semantic::ExprInfo& base_info);
-	Place make_index_place(const hir::Index& index_expr, bool allow_temporary_base);
 
 	template <typename T>
 	Place lower_place_impl(const T& node, const semantic::ExprInfo& info);
@@ -183,32 +271,33 @@ private:
 	Place lower_place_impl(const hir::Index& index_expr, const semantic::ExprInfo& info);
 	Place lower_place_impl(const hir::UnaryOp& unary, const semantic::ExprInfo& info);
 
-	std::optional<Operand> lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::ArrayLiteral& array_literal, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::ArrayRepeat& array_repeat, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Variable& variable, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::ConstUse& const_use, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::StructConst& struct_const, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::FieldAccess& field_access, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Index& index_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Cast& cast_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::BinaryOp& binary, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Assignment& assignment, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Block& block_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::If& if_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Loop& loop_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::While& while_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Break& break_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Continue& continue_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Return& return_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::Call& call_expr, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::MethodCall& method_call, const semantic::ExprInfo& info);
-	std::optional<Operand> lower_expr_impl(const hir::UnaryOp& unary, const semantic::ExprInfo& info);
-
+	// Internal implementation template - now returns LowerResult and accepts maybe_dest
 	template <typename T>
-	std::optional<Operand> lower_expr_impl(const T& unsupported, const semantic::ExprInfo& info);
+	LowerResult lower_expr_impl(const T& node, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+
+	LowerResult lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::ArrayLiteral& array_literal, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::ArrayRepeat& array_repeat, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Variable& variable, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::ConstUse& const_use, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::StructConst& struct_const, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::FieldAccess& field_access, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Index& index_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Cast& cast_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::BinaryOp& binary, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Assignment& assignment, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Block& block_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::If& if_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Loop& loop_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::While& while_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Break& break_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Continue& continue_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Return& return_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Call& call_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::MethodCall& method_call, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::UnaryOp& unary, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 
 	std::optional<Operand> lower_if_expr(const hir::If& if_expr, const semantic::ExprInfo& info);
 	std::optional<Operand> lower_short_circuit(const hir::BinaryOp& binary,
@@ -233,7 +322,7 @@ Place FunctionLowerer::lower_place_impl(const T&, const semantic::ExprInfo&) {
 }
 
 template <typename T>
-std::optional<Operand> FunctionLowerer::lower_expr_impl(const T&, const semantic::ExprInfo&) {
+LowerResult FunctionLowerer::lower_expr_impl(const T&, const semantic::ExprInfo&, std::optional<Place>) {
 	throw std::logic_error("Expression kind not supported yet in MIR lowering");
 }
 
