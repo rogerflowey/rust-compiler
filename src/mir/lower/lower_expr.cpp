@@ -1667,6 +1667,98 @@ LowerResult FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
   return LowerResult::written();
 }
 
-// TODO: Loop and While will be implemented similarly
+LowerResult FunctionLowerer::lower_expr_impl(const hir::Loop &loop_expr,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> maybe_dest) {
+  // Loop is a propagator for break values, but doesn't propagate dest to body
+  // Body always produces unit; break values may write to dest if provided
+  BasicBlockId body_block = create_block();
+  BasicBlockId break_block = create_block();
+
+  if (current_block) {
+    add_goto_from_current(body_block);
+  }
+  current_block = body_block;
+
+  push_loop_context(&loop_expr, body_block, break_block, loop_expr.break_type);
+  (void)lower_block_expr(*loop_expr.body, get_unit_type());
+  if (current_block) {
+    add_goto_from_current(body_block);
+  }
+
+  LoopContext finalized = pop_loop_context(&loop_expr);
+  
+  // If dest is provided and loop has break value, write break values to dest
+  if (maybe_dest.has_value() && finalized.break_result) {
+    // Break values already stored in break_result temp via finalize_loop_context
+    // No additional dest handling needed for loop body
+    finalize_loop_context(finalized);
+    
+    bool break_reachable = !finalized.break_predecessors.empty();
+    if (!break_reachable) {
+      current_block.reset();
+      return LowerResult::written();
+    }
+    current_block = finalized.break_block;
+    return LowerResult::operand(make_temp_operand(*finalized.break_result));
+  }
+  
+  finalize_loop_context(finalized);
+
+  bool break_reachable = !finalized.break_predecessors.empty();
+  if (finalized.break_result) {
+    if (!break_reachable) {
+      current_block.reset();
+      return LowerResult::written();
+    }
+    current_block = finalized.break_block;
+    return LowerResult::operand(make_temp_operand(*finalized.break_result));
+  }
+
+  if (break_reachable) {
+    current_block = finalized.break_block;
+  } else {
+    current_block.reset();
+  }
+  return LowerResult::written();
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::While &while_expr,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> maybe_dest) {
+  // While is similar to Loop
+  BasicBlockId cond_block = create_block();
+  BasicBlockId body_block = create_block();
+  BasicBlockId break_block = create_block();
+
+  if (current_block) {
+    add_goto_from_current(cond_block);
+  }
+  current_block = cond_block;
+
+  auto &ctx = push_loop_context(&while_expr, cond_block, break_block,
+                                while_expr.break_type);
+
+  Operand condition = lower_operand(*while_expr.condition);
+  if (current_block) {
+    branch_on_bool(condition, body_block, break_block);
+    ctx.break_predecessors.push_back(cond_block);
+  }
+
+  switch_to_block(body_block);
+  (void)lower_block_expr(*while_expr.body, get_unit_type());
+  if (current_block) {
+    add_goto_from_current(cond_block);
+  }
+
+  LoopContext finalized = pop_loop_context(&while_expr);
+  finalize_loop_context(finalized);
+
+  current_block = break_block;
+  if (finalized.break_result) {
+    return LowerResult::operand(make_temp_operand(*finalized.break_result));
+  }
+  return LowerResult::written();
+}
 
 } // namespace mir::detail
