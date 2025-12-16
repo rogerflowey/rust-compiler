@@ -38,6 +38,10 @@ bool are_places_definitely_disjoint(const mir::Place &a, const mir::Place &b) {
   return false;
 }
 
+bool is_underscore_local(const hir::Local &local) {
+  return local.name.name == "_";
+}
+
 } // namespace
 
 template <typename T>
@@ -79,6 +83,9 @@ Operand FunctionLowerer::lower_node_operand(const hir::Expr &expr) {
   if (!is_reachable()) {
     return Operand{};
   }
+  if (is_unit_type(info.type) || is_never_type(info.type)) {
+    return Operand{};
+  }
   return res.as_operand(*this, info);
 }
 
@@ -103,7 +110,7 @@ void FunctionLowerer::lower_stmt_node(const hir::Stmt &stmt) {
                         throw std::logic_error("Let binding missing local during "
                                                "MIR lowering");
                       }
-                      if (local->name.name == "_") {
+                      if (is_underscore_local(*local)) {
                         (void)lower_node(init_expr);
                         return;
                       }

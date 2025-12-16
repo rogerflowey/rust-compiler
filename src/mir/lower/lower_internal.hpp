@@ -40,6 +40,7 @@ struct CallSite {
 };
 
 struct FunctionLowerer {
+        // LowerResult needs access to lowering helpers to materialize places/operands.
         friend class LowerResult;
         enum class FunctionKind { Function, Method };
 
