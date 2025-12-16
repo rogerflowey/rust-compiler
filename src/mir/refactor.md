@@ -238,22 +238,205 @@ LowerResult FunctionLowerer::visit_binary(const hir::BinaryOp& node, ...) {
 
 ---
 
-### 4. Implementation Steps (The Aggressive Plan)
+## Implementation Steps (The Aggressive Plan)
+、
+### Phase 1: Classification & Separation
 
-To implement this without "reusing bad code":
+We will split the responsibilities of `FunctionLowerer`.
+*   **Keep:** The state management, CFG building, and helper utilities.
+*   **Refactor/Migrate:** Anything that visits an HIR node and produces MIR instructions.
 
-1.  **Stop Compilation:** For now on, we intentionally break the build.
-2.  **Create New:** Create `mir/lower/lower_node.cpp`. This will be used to replace `lower_expr.cpp`, and totally seperated headers&the main lowerer file(you can mark old one -v1 if you want to keep old code for reference).You can copy the helpers&functions that are not related to hir node lowering(such as function collecting, entry block handling, local helpers...) from old lowerer to new one. This is intended to avoid any incorrect old code been accidentally used.
-3.  **Implement `LowerResult`:** Implement the `as_operand`, `as_place`, and `write_to_dest` logic first. This forces you to handle the "bridging" logic cleanly in one place.
-4.  **Implement Dispatcher:** Write the `lower_node` switch statement.
-5.  **Port Top-Down:**
-    *   Implement `visit_literal` and `visit_binary` (easiest, returns `Operand`).
-    *   Implement `visit_variable` (returns `Place`).
-    *   Implement `lower_let_stmt` (uses `write_to_dest`).
-    *   Implement `visit_struct_literal` using the new logic (create temp or use hint). Do not use the old `lower_init` code. Write it fresh based on the logic: "I have a target slot, I fill it."
+#### A. The "Keep" List (Infrastructure)
+*These functions remain in `lower.cpp` (or `lower_common.cpp`) and do not need fundamental architectural changes, though they might be cleaned up.*
 
-6.  **Verify:** Wire the pipeline to use new system, the compiler should now produce identical or better MIR with significantly less C++ code. Note: test are not needed to work for now, just the main ir pipeline target.
-7. **Fix tests:** Fix the tests to use the new system.
-8. **Delete Old:** Once everything is finished, delete all the legacy files and code.
+1.  **Lifecycle & Setup:**
+    *   `FunctionLowerer` (Constructors)
+    *   `initialize`
+    *   `collect_function_descriptors`, `lower_program`
+    *   `lower_external_function`
+    *   `collect_parameters`, `append_parameter`, etc.
+    *   `resolve_return_type`, `init_locals`, `build_return_plan`
+    *   `lower` (The main entry point)
 
-This V2 plan unifies the pipeline. There is no longer a decision of "Should I call `lower_init`,  `lower_expr`, `lower_expr_place`, `try_...`?". You always call `lower_node`, and the `LowerResult` type handles the handshake.
+2.  **CFG & State Management:**
+    *   `create_block`, `switch_to_block`, `current_block_id`
+    *   `allocate_temp`, `create_synthetic_local`
+    *   `append_statement`, `set_terminator`, `terminate_current_block`
+    *   `push_loop_context`, `pop_loop_context`, `lookup_loop_context`
+    *   `lookup_function`, `get_callee_sig`
+    *   `require_local_id`, `make_local_place`
+
+3.  **Specific Helpers (Might need slight tweaks but logic holds):**
+    *   `handle_return_value` (Will eventually call `lower_node`)
+    *   `emit_return`
+    *   `branch_on_bool`
+
+#### B. The "Refactor" List (The Migration Targets)
+*These functions are logically deprecated. They will be replaced by `lower_node` and `LowerResult` in the new file.*
+
+**Group 1: The Top-Level Dispatchers (To be replaced by `lower_node`)**
+*   `lower_expr`
+*   `lower_operand`
+*   `lower_expr_place`
+*   `lower_block_expr`
+*   `expect_operand`
+*   `try_lower_to_const`
+
+**Group 2: The Initialization Spaghetti (To be absorbed by `visit_aggregate`)**
+*   `lower_init`
+*   `try_lower_init_outside`
+*   `try_lower_init_call`
+*   `try_lower_init_method_call`
+*   `lower_struct_init`
+*   `lower_array_literal_init`
+*   `lower_array_repeat_init`
+*   `emit_init_statement`
+*   `emit_aggregate`
+
+**Group 3: The Visitors (To be rewritten as `visit_X`)**
+*   `lower_statement` & `lower_statement_impl` (all overloads)
+*   `lower_expr_impl` (all overloads)
+*   `lower_place_impl` (all overloads)
+*   `lower_callsite` (Logic changes significantly to support DPS)
+*   `lower_if_expr`, `lower_loop_expr`, `lower_while_expr`
+*   `lower_let_pattern`, `lower_binding_let`
+
+**Group 4: Utilities acting as adapters (Replaced by `LowerResult` methods)**
+*   `materialize_operand`
+*   `materialize_place_base`
+*   `ensure_reference_operand_place`
+*   `emit_rvalue_to_temp`
+*   `load_place_value`
+
+---
+
+### Phase 2: Implementation Strategy
+
+We will not modify `lower.cpp` immediately. We will create the new engine alongside it.
+
+#### Step 1: Create `mir/lower/lower_result.hpp`
+This is the "Adapter" class. It absorbs the logic from **Group 4** above.
+
+```cpp
+#pragma once
+#include "mir/mir.hpp"
+#include <variant>
+#include <optional>
+
+namespace mir::detail {
+
+class FunctionLowerer; // Forward decl
+
+class LowerResult {
+public:
+    enum class Kind { Operand, Place, Written };
+
+    static LowerResult from_operand(Operand op) { return {Kind::Operand, op}; }
+    static LowerResult from_place(Place p) { return {Kind::Place, p}; }
+    static LowerResult written() { return {Kind::Written, std::monostate{}}; }
+
+    // Replaces: lower_operand, expect_operand, load_place_value
+    Operand as_operand(FunctionLowerer& ctx, const semantic::ExprInfo& info);
+
+    // Replaces: lower_expr_place, ensure_reference_operand_place
+    Place as_place(FunctionLowerer& ctx, const semantic::ExprInfo& info);
+
+    // Replaces: lower_init, lower_binding_let logic
+    // If Kind==Operand: emits Assign.
+    // If Kind==Place: emits Assign(Copy).
+    // If Kind==Written: Does nothing (RVO success).
+    void write_to_dest(FunctionLowerer& ctx, Place dest, const semantic::ExprInfo& info);
+
+private:
+    Kind kind;
+    std::variant<std::monostate, Operand, Place> data;
+    LowerResult(Kind k, std::variant<std::monostate, Operand, Place> d) 
+        : kind(k), data(std::move(d)) {}
+};
+
+} // namespace mir::detail
+```
+
+#### Step 2: Create `mir/lower/lower_node.cpp`
+This file will contain the implementation of `FunctionLowerer::lower_node`.
+
+**Add to `FunctionLowerer` class definition (Header):**
+```cpp
+// In mir/lower/lower_internal.hpp
+
+// New API
+LowerResult lower_node(const hir::Expr& expr, std::optional<Place> dest_hint = std::nullopt);
+void lower_stmt_node(const hir::Stmt& stmt); // Entry point for statements
+
+// Internal visitors for the new system
+LowerResult visit_expr_node(const hir::Literal& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+LowerResult visit_expr_node(const hir::BinaryOp& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+// ... add overloads for all Expr types ...
+```
+
+#### Step 3: Migration Workflow (The "rewrite" list)
+
+You will copy logic from the old functions to the new `visit_expr_node` overloads, adapting them to the `LowerResult` paradigm.
+
+**1. The Leaf Nodes (Easy)**
+*   **Old:** `lower_expr_impl(Literal)`, `lower_expr_impl(Variable)`
+*   **New:** `visit_expr_node(Literal)`, `visit_expr_node(Variable)`
+*   **Action:**
+    *   Literals return `LowerResult::from_operand(...)`.
+    *   Variables return `LowerResult::from_place(...)`.
+
+**2. The Scalars (Easy)**
+*   **Old:** `lower_expr_impl(BinaryOp)`, `lower_expr_impl(UnaryOp)`
+*   **New:** `visit_expr_node(BinaryOp)`, `visit_expr_node(UnaryOp)`
+*   **Action:**
+    *   Call `lower_node(lhs).as_operand(...)`.
+    *   Emit calculation to temp.
+    *   Return `LowerResult::from_operand(temp)`.
+    *   *Note:* Ignore `dest_hint` here.
+
+**3. The Root (Statements)**
+*   **Old:** `lower_statement_impl(LetStmt)`, `lower_binding_let`
+*   **New:** `lower_stmt_node(LetStmt)`
+*   **Action:**
+    *   Create Place for local.
+    *   Call `lower_node(initializer, local_place)`.
+    *   Call `result.write_to_dest(..., local_place)`.
+    *   *This effectively deletes `lower_init`.*
+
+**4. The Aggregates (Complex - Replaces `lower_init`)**
+*   **Old:** `lower_expr_impl(StructLiteral)`, `lower_struct_init`
+*   **New:** `visit_expr_node(StructLiteral, ..., dest_hint)`
+*   **Action:**
+    *   Determine target: `dest_hint` OR `allocate_temp_place()`.
+    *   Loop fields: `lower_node(field_expr, target.project_field(i)).write_to_dest(...)`.
+    *   Return `dest_hint ? Written : from_place(target)`.
+
+**5. Control Flow (Propagators)**
+*   **Old:** `lower_if_expr`, `lower_block_expr`
+*   **New:** `visit_expr_node(If, ..., dest_hint)`
+*   **Action:**
+    *   Pass `dest_hint` down to `lower_node(then_block, dest_hint)`.
+    *   If `dest_hint` is used, return `Written`.
+    *   Else, generate Phi and return `Operand`.
+
+**6. Calls (The Adapter)**
+*   **Old:** `lower_callsite`, `try_lower_init_call`
+*   **New:** `visit_expr_node(Call, ..., dest_hint)`
+*   **Action:**
+    *   If `dest_hint` exists AND Callee is SRET: Use `dest_hint` as sret arg. Return `Written`.
+    *   If `dest_hint` missing AND Callee is SRET: Alloc temp, use as sret arg. Return `from_place(temp)`.
+    *   If Callee is Direct: Call, get operand. Return `from_operand(op)`.
+
+---
+
+### Phase 3: Final Integration
+
+1.  **Replace Entry Points:** Update `lower_block` (the main statement loop) to call `lower_stmt_node` instead of `lower_statement`.
+2.  **Verify:** At this point, `lower_expr`, `lower_init`, `lower_place` are no longer called by anything in the active path.
+3.  **Cleanup:** Delete all functions in "Group 1", "Group 2", "Group 3", and "Group 4".
+
+### Summary of Files
+
+1.  `mir/lower/lower.cpp`: **Keep**. Contains infrastructure. Clean up deleted functions at the end.
+2.  `mir/lower/lower_result.hpp`: **New**. Contains the `LowerResult` class.
+3.  `mir/lower/lower_node.cpp`: **New**. Contains `lower_node`, `lower_stmt_node`, and specific `visit_...` implementations. This replaces `lower_expr.cpp`, `lower_init.cpp`, `lower_place.cpp`.
