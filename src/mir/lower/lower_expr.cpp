@@ -1212,4 +1212,8 @@ LowerResult FunctionLowerer::lower_expr_impl(const hir::EnumVariant &enum_varian
   return LowerResult::operand(std::move(*result));
 }
 
+// TODO: Assignment will be migrated to the new unified API once
+// Block/If/Loop control flow nodes are implemented, as they are
+// used within assignment expressions
+
 } // namespace mir::detail

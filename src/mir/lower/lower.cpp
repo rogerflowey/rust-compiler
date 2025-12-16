@@ -1472,6 +1472,7 @@ void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
   // Binding pattern lowering: initialize the local directly from the initializer
   // expression. lower_init will choose the best strategy
   // (struct field-by-field, leaf initialize, or temp+assign).
+  // TODO: Migrate to new unified API once all expression types are implemented
   hir::Local *local = hir::helper::get_local(binding);
   if (!local) {
     throw std::logic_error("Let binding missing local during MIR lowering");

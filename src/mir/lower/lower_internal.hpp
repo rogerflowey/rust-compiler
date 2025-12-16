@@ -284,6 +284,7 @@ private:
 	LowerResult lower_expr_impl(const hir::ConstUse& const_use, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	LowerResult lower_expr_impl(const hir::StructConst& struct_const, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	LowerResult lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	// TODO: Assignment will be migrated once Block/If/Loop are implemented
 	
 	// === Legacy expr implementations (to be migrated) ===
 	std::optional<Operand> lower_expr_impl_legacy(const hir::Literal& literal, const semantic::ExprInfo& info);
