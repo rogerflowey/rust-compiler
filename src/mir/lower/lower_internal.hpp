@@ -81,8 +81,10 @@ public:
     //    - If Place: emits Assign(dest, Copy(place)).
     void write_to_dest(FunctionLowerer& fl, mir::Place dest, TypeId type);
 
-private:
+    // Public access to kind for checking result type
     Kind kind;
+
+private:
     std::variant<std::monostate, mir::Operand, mir::Place> data;
     
     LowerResult(Kind k, std::variant<std::monostate, mir::Operand, mir::Place> d)
@@ -284,6 +286,12 @@ private:
 	LowerResult lower_expr_impl(const hir::ConstUse& const_use, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	LowerResult lower_expr_impl(const hir::StructConst& struct_const, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	LowerResult lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	
+	// Dest-aware nodes (aggregates)
+	LowerResult lower_expr_impl(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::ArrayLiteral& array_literal, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::ArrayRepeat& array_repeat, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	
 	// TODO: Assignment will be migrated once Block/If/Loop are implemented
 	
 	// === Legacy expr implementations (to be migrated) ===

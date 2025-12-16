@@ -1212,6 +1212,199 @@ LowerResult FunctionLowerer::lower_expr_impl(const hir::EnumVariant &enum_varian
   return LowerResult::operand(std::move(*result));
 }
 
+// === Dest-Aware Nodes (Aggregates) ===
+// These nodes consume the destination hint and write directly to it
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::StructLiteral &struct_literal,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> maybe_dest) {
+  // StructLiteral is dest-aware: writes fields directly to destination
+  TypeId normalized = canonicalize_type_for_mir(info.type);
+  
+  // Dest Selection: use provided dest or create temp
+  Place target;
+  if (maybe_dest) {
+    target = std::move(*maybe_dest);
+  } else {
+    LocalId temp_local = create_synthetic_local(normalized, false);
+    target = make_local_place(temp_local);
+  }
+  
+  auto *struct_ty = std::get_if<type::StructType>(&type::get_type_from_id(normalized).value);
+  if (!struct_ty) {
+    throw std::logic_error("Struct literal without struct type");
+  }
+
+  const auto &struct_info = type::TypeContext::get_instance().get_struct(struct_ty->id);
+  const auto &fields = hir::helper::get_canonical_fields(struct_literal);
+
+  if (fields.initializers.size() != struct_info.fields.size()) {
+    throw std::logic_error("Struct literal field count mismatch");
+  }
+
+  InitStruct init_struct;
+  init_struct.fields.resize(fields.initializers.size());
+
+  for (std::size_t idx = 0; idx < fields.initializers.size(); ++idx) {
+    if (!fields.initializers[idx]) {
+      throw std::logic_error("Struct literal field missing initializer");
+    }
+
+    TypeId field_ty = canonicalize_type_for_mir(struct_info.fields[idx].type);
+    if (field_ty == invalid_type_id) {
+      throw std::logic_error("Struct field missing resolved type");
+    }
+
+    const hir::Expr &field_expr = *fields.initializers[idx];
+    auto &leaf = init_struct.fields[idx];
+
+    // Build sub-place target.field[idx]
+    Place field_place = target;
+    field_place.projections.push_back(FieldProjection{idx});
+
+    // Recursively lower field with destination hint
+    LowerResult field_result = lower_expr(field_expr, field_place);
+    
+    // Check if field was written directly
+    if (field_result.kind == LowerResult::Kind::Written) {
+      // Field handled by direct write
+      leaf = make_omitted_leaf();
+    } else {
+      // Field returned a value, store it via InitPattern
+      Operand value = field_result.as_operand(*this, field_ty);
+      leaf = make_value_leaf(std::move(value));
+    }
+  }
+
+  InitPattern pattern;
+  pattern.value = std::move(init_struct);
+  emit_init_statement(target, std::move(pattern));
+  
+  // Return Written if dest was provided, else Place
+  return maybe_dest.has_value() ? LowerResult::written() : LowerResult::place(std::move(target));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::ArrayLiteral &array_literal,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> maybe_dest) {
+  // ArrayLiteral is dest-aware: writes elements directly to destination
+  TypeId normalized = canonicalize_type_for_mir(info.type);
+  
+  // Dest Selection: use provided dest or create temp
+  Place target;
+  if (maybe_dest) {
+    target = std::move(*maybe_dest);
+  } else {
+    LocalId temp_local = create_synthetic_local(normalized, false);
+    target = make_local_place(temp_local);
+  }
+  
+  InitArrayLiteral init_array;
+  init_array.elements.resize(array_literal.elements.size());
+
+  // Get the element type
+  const type::Type &array_ty = type::get_type_from_id(normalized);
+  const auto *array_type_info = std::get_if<type::ArrayType>(&array_ty.value);
+  if (!array_type_info) {
+    throw std::logic_error("Array literal requires array destination type");
+  }
+  TypeId element_type = array_type_info->element_type;
+
+  for (std::size_t idx = 0; idx < array_literal.elements.size(); ++idx) {
+    const auto &elem_expr_ptr = array_literal.elements[idx];
+    if (!elem_expr_ptr) {
+      throw std::logic_error("Array literal element missing");
+    }
+
+    const hir::Expr &elem_expr = *elem_expr_ptr;
+    auto &leaf = init_array.elements[idx];
+
+    // Build sub-place target[idx]
+    Place elem_place = target;
+    TypeId usize_ty = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
+    Operand idx_operand = make_const_operand(idx, usize_ty, false);
+    elem_place.projections.push_back(IndexProjection{std::move(idx_operand)});
+
+    // Recursively lower element with destination hint
+    LowerResult elem_result = lower_expr(elem_expr, elem_place);
+    
+    if (elem_result.kind == LowerResult::Kind::Written) {
+      leaf = make_omitted_leaf();
+    } else {
+      Operand op = elem_result.as_operand(*this, element_type);
+      leaf = make_value_leaf(std::move(op));
+    }
+  }
+
+  InitPattern pattern;
+  pattern.value = std::move(init_array);
+  emit_init_statement(target, std::move(pattern));
+  
+  return maybe_dest.has_value() ? LowerResult::written() : LowerResult::place(std::move(target));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::ArrayRepeat &array_repeat,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> maybe_dest) {
+  // ArrayRepeat is dest-aware: writes repeated value directly to destination
+  TypeId normalized = canonicalize_type_for_mir(info.type);
+  
+  // Dest Selection: use provided dest or create temp
+  Place target;
+  if (maybe_dest) {
+    target = std::move(*maybe_dest);
+  } else {
+    LocalId temp_local = create_synthetic_local(normalized, false);
+    target = make_local_place(temp_local);
+  }
+  
+  InitArrayRepeat init_repeat;
+  
+  // Extract count from variant
+  if (std::holds_alternative<size_t>(array_repeat.count)) {
+    init_repeat.count = std::get<size_t>(array_repeat.count);
+  } else {
+    throw std::logic_error("Array repeat count must be compile-time constant");
+  }
+
+  // Get the element type
+  const type::Type &array_ty = type::get_type_from_id(normalized);
+  const auto *array_type_info = std::get_if<type::ArrayType>(&array_ty.value);
+  if (!array_type_info) {
+    throw std::logic_error("Array repeat requires array destination type");
+  }
+  TypeId element_type = array_type_info->element_type;
+
+  // Build sub-place for element at index 0
+  Place elem_place = target;
+  IntConstant zero_const;
+  zero_const.value = 0;
+  zero_const.is_negative = false;
+  zero_const.is_signed = false;
+  Constant c;
+  c.type = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
+  c.value = std::move(zero_const);
+  Operand zero_operand;
+  zero_operand.value = std::move(c);
+  elem_place.projections.push_back(IndexProjection{std::move(zero_operand)});
+
+  // Recursively lower the repeated value with destination hint
+  LowerResult elem_result = lower_expr(*array_repeat.value, elem_place);
+  
+  if (elem_result.kind == LowerResult::Kind::Written) {
+    init_repeat.element = make_omitted_leaf();
+  } else {
+    Operand op = elem_result.as_operand(*this, element_type);
+    init_repeat.element = make_value_leaf(std::move(op));
+  }
+
+  InitPattern pattern;
+  pattern.value = std::move(init_repeat);
+  emit_init_statement(target, std::move(pattern));
+  
+  return maybe_dest.has_value() ? LowerResult::written() : LowerResult::place(std::move(target));
+}
+
 // TODO: Assignment will be migrated to the new unified API once
 // Block/If/Loop control flow nodes are implemented, as they are
 // used within assignment expressions
