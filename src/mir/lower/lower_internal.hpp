@@ -296,7 +296,10 @@ private:
 	LowerResult lower_expr_impl(const hir::Block& block_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	LowerResult lower_expr_impl(const hir::If& if_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	
-	// TODO: Assignment, Loop, While will be migrated once Block/If are tested
+	// Statement-like expressions
+	LowerResult lower_expr_impl(const hir::Assignment& assignment, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	
+	// TODO: Loop, While will be migrated
 	
 	// === Legacy expr implementations (to be migrated) ===
 	std::optional<Operand> lower_expr_impl_legacy(const hir::Literal& literal, const semantic::ExprInfo& info);

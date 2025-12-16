@@ -1469,10 +1469,10 @@ void FunctionLowerer::lower_let_pattern(const hir::Pattern &pattern,
 
 void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
                                         const hir::Expr &init_expr) {
-  // Binding pattern lowering: initialize the local directly from the initializer
-  // expression. lower_init will choose the best strategy
-  // (struct field-by-field, leaf initialize, or temp+assign).
-  // TODO: Migrate to new unified API once all expression types are implemented
+  // NEW UNIFIED API: Binding pattern lowering using destination-passing
+  // The unified lower_expr will choose the best strategy automatically:
+  // - Dest-aware nodes (structs, arrays, calls) write directly to dest
+  // - Dest-ignorant nodes (scalars) return values that are assigned
   hir::Local *local = hir::helper::get_local(binding);
   if (!local) {
     throw std::logic_error("Let binding missing local during MIR lowering");
@@ -1480,7 +1480,7 @@ void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
 
   if (local->name.name == "_") {
     // For underscore bindings, just lower for side effects
-    (void)lower_expr_legacy(init_expr);
+    (void)lower_expr(init_expr, std::nullopt);
     return;
   }
 
@@ -1491,7 +1491,13 @@ void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
 
   Place dest = make_local_place(local);
   TypeId dest_type = hir::helper::get_resolved_type(*local->type_annotation);
-  lower_init(init_expr, std::move(dest), dest_type);
+  
+  // NEW UNIFIED API: Pass destination hint to lower_expr
+  // - Dest-aware nodes (structs, arrays, calls) will write directly to dest and return Written
+  // - Dest-ignorant nodes (scalars) will return Operand/Place
+  // - write_to_dest handles both cases: no-op for Written, emit assign for Operand/Place
+  LowerResult result = lower_expr(init_expr, dest);
+  result.write_to_dest(*this, std::move(dest), dest_type);
 }
 
 void FunctionLowerer::lower_reference_let(const hir::ReferencePattern &,

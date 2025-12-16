@@ -1586,9 +1586,87 @@ LowerResult FunctionLowerer::lower_expr_impl(const hir::If &if_expr,
   }
 }
 
+LowerResult FunctionLowerer::lower_expr_impl(const hir::Assignment &assignment,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // NEW UNIFIED API: Assignment is a statement that produces unit value
+  // The dest hint is ignored since assignment always produces unit (if anything)
+  
+  if (!assignment.lhs || !assignment.rhs) {
+    throw std::logic_error("Assignment missing operands during MIR lowering");
+  }
+  
+  // Handle underscore assignment (just evaluate RHS for side effects)
+  if (std::get_if<hir::Underscore>(&assignment.lhs->value)) {
+    const hir::Expr *rhs_expr = assignment.rhs.get();
+    if (rhs_expr) {
+      if (const auto *binary = std::get_if<hir::BinaryOp>(&rhs_expr->value)) {
+        const hir::Expr *compound_rhs = nullptr;
+        if (binary->lhs && std::get_if<hir::Underscore>(&binary->lhs->value)) {
+          compound_rhs = binary->rhs.get();
+        }
+        if (compound_rhs) {
+          (void)lower_expr(*compound_rhs, std::nullopt);
+        } else {
+          (void)lower_expr(*assignment.rhs, std::nullopt);
+        }
+      } else {
+        (void)lower_expr(*assignment.rhs, std::nullopt);
+      }
+    }
+    // Assignment produces no meaningful value
+    return LowerResult::written();
+  }
+
+  semantic::ExprInfo lhs_info = hir::helper::get_expr_info(*assignment.lhs);
+  semantic::ExprInfo rhs_info = hir::helper::get_expr_info(*assignment.rhs);
+
+  // Special case: aggregate place-to-place copy optimization
+  if (lhs_info.is_place && rhs_info.is_place && lhs_info.has_type &&
+      rhs_info.has_type && lhs_info.type == rhs_info.type &&
+      is_aggregate_type(lhs_info.type)) {
+
+    Place dest_place = lower_place(*assignment.lhs);
+    Place src_place = lower_place(*assignment.rhs);
+
+    if (are_places_definitely_disjoint(dest_place, src_place)) {
+      InitCopy copy{.src = std::move(src_place)};
+      InitPattern pattern;
+      pattern.value = std::move(copy);
+
+      InitStatement init_stmt;
+      init_stmt.dest = std::move(dest_place);
+      init_stmt.pattern = std::move(pattern);
+
+      Statement stmt;
+      stmt.value = std::move(init_stmt);
+      append_statement(std::move(stmt));
+      
+      return LowerResult::written();
+    }
+    
+    // Optimization doesn't apply; load and assign
+    Operand value = load_place_value(std::move(src_place), rhs_info.type);
+    AssignStatement assign{.dest = std::move(dest_place), .src = ValueSource{std::move(value)}};
+    Statement stmt;
+    stmt.value = std::move(assign);
+    append_statement(std::move(stmt));
+    
+    return LowerResult::written();
+  }
+
+  // General case: NEW UNIFIED API
+  // Lower LHS to place, then lower RHS with destination hint
+  Place dest = lower_place(*assignment.lhs);
+  TypeId dest_type = lhs_info.type;
+  
+  LowerResult result = lower_expr(*assignment.rhs, dest);
+  result.write_to_dest(*this, std::move(dest), dest_type);
+  
+  // Assignment produces no meaningful value
+  return LowerResult::written();
+}
+
 // TODO: Loop and While will be implemented similarly
-// TODO: Assignment will be migrated to the new unified API once
-// Block/If/Loop control flow nodes are implemented, as they are
-// used within assignment expressions
 
 } // namespace mir::detail
