@@ -1102,4 +1102,114 @@ FunctionLowerer::lower_return_expr(const hir::Return &return_expr) {
   return std::nullopt;
 }
 
+// ============================================================================
+// New Unified API Implementations (lower_expr_impl with dest hint)
+// ============================================================================
+
+// === Dest-Ignorant Nodes (Scalars) ===
+// These nodes ignore the destination hint and return Operand or Place
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::Literal &literal,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Literals are scalar values - ignore dest hint and return Operand
+  Operand op = emit_rvalue_to_temp(build_literal_rvalue(literal, info), info.type);
+  return LowerResult::operand(std::move(op));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::Variable &variable,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Variables are places - return Place directly
+  return LowerResult::place(lower_place_impl(variable, info));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::FieldAccess &field_access,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Field accesses are places - return Place directly
+  return LowerResult::place(lower_place_impl(field_access, info));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::Index &index_expr,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Index expressions are places - return Place directly
+  return LowerResult::place(lower_place_impl(index_expr, info));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::Cast &cast_expr,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Casts are scalar operations - ignore dest hint
+  // Delegate to legacy implementation for now
+  std::optional<Operand> result = lower_expr_impl_legacy(cast_expr, info);
+  if (!result) {
+    throw std::logic_error("Cast expression must produce a value");
+  }
+  return LowerResult::operand(std::move(*result));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::BinaryOp &binary,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Binary ops are scalar operations - ignore dest hint
+  // Delegate to legacy implementation for now
+  std::optional<Operand> result = lower_expr_impl_legacy(binary, info);
+  if (!result) {
+    // Could be assignment or diverging expr
+    return LowerResult::operand(Operand{});  // Return dummy for now
+  }
+  return LowerResult::operand(std::move(*result));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::UnaryOp &unary,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Unary ops: deref is a place, others are scalar
+  if (std::get_if<hir::Dereference>(&unary.op)) {
+    // Dereference returns a place
+    return LowerResult::place(lower_place_impl(unary, info));
+  }
+  // Other unary ops are scalar
+  std::optional<Operand> result = lower_expr_impl_legacy(unary, info);
+  if (!result) {
+    throw std::logic_error("Unary operation must produce a value");
+  }
+  return LowerResult::operand(std::move(*result));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::ConstUse &const_use,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Constants are scalar values - ignore dest hint
+  std::optional<Operand> result = lower_expr_impl_legacy(const_use, info);
+  if (!result) {
+    throw std::logic_error("Const use must produce a value");
+  }
+  return LowerResult::operand(std::move(*result));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::StructConst &struct_const,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Struct constants are scalar values - ignore dest hint
+  std::optional<Operand> result = lower_expr_impl_legacy(struct_const, info);
+  if (!result) {
+    throw std::logic_error("Struct const must produce a value");
+  }
+  return LowerResult::operand(std::move(*result));
+}
+
+LowerResult FunctionLowerer::lower_expr_impl(const hir::EnumVariant &enum_variant,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> /* maybe_dest */) {
+  // Enum variants are scalar values - ignore dest hint
+  std::optional<Operand> result = lower_expr_impl_legacy(enum_variant, info);
+  if (!result) {
+    throw std::logic_error("Enum variant must produce a value");
+  }
+  return LowerResult::operand(std::move(*result));
+}
+
 } // namespace mir::detail

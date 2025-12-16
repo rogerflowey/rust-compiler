@@ -272,6 +272,19 @@ private:
 	template <typename T>
 	LowerResult lower_expr_impl(const T& node, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
 	
+	// === New Unified API Specializations ===
+	// Dest-ignorant nodes (scalars and places)
+	LowerResult lower_expr_impl(const hir::Literal& literal, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Variable& variable, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::FieldAccess& field_access, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Index& index_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::Cast& cast_expr, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::BinaryOp& binary, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::UnaryOp& unary, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::ConstUse& const_use, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::StructConst& struct_const, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	LowerResult lower_expr_impl(const hir::EnumVariant& enum_variant, const semantic::ExprInfo& info, std::optional<Place> maybe_dest);
+	
 	// === Legacy expr implementations (to be migrated) ===
 	std::optional<Operand> lower_expr_impl_legacy(const hir::Literal& literal, const semantic::ExprInfo& info);
 	std::optional<Operand> lower_expr_impl_legacy(const hir::StructLiteral& struct_literal, const semantic::ExprInfo& info);
