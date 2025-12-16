@@ -243,6 +243,7 @@ call void @consume(%struct.Point* %point_ptr)  ← pointer to aggregate
 call void @llvm.memcpy(%struct.Point* %temp, ...)
 call void @consume(%struct.Point* %temp)
 ```
+Note: this is currently ignored due to frequent refactors, will be implemented if the compiler becomes stable.
 
 ### Property 4: No Unnecessary Loads/Stores
 

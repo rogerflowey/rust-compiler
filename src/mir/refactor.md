@@ -1,267 +1,191 @@
-Here’s a concrete, incremental refactor plan that gets you from the current “temp-first + init hijacks” code to the 3-value model **without a big-bang rewrite**, and with clear invariants at each step.
+Here is the full, final plan for refactoring the MIR lowering infrastructure.
+
+### 1. Design Documentation
+**Action:** Add this design block to the top of `mir/lower/lower_internal.hpp` or a dedicated design document.
+
+> **MIR Lowering Strategy: Unified Destination-Passing Style (DPS)**
+>
+> **Goal:** Unify expression lowering (`lower_expr`) and initialization (`lower_init`) into a single pipeline that optimizes for direct memory writing (SRET/Aggregates) while supporting scalar temporaries.
+>
+> **The `LowerResult` Abstraction:**
+> The result of lowering an expression is encapsulated in `LowerResult`, which can be one of:
+> 1.  `Operand`: A scalar value, constant, or temporary. (e.g., `1 + 2`)
+> 2.  `Place`: An existing L-value location. (e.g., variable `x`, `x.field`)
+> 3.  `Written`: A marker indicating the value has already been stored into the requested destination.
+>
+> **The `maybe_dest` Hint:**
+> `lower_expr` accepts an `std::optional<Place> maybe_dest`.
+> *   **Interpretation:** This is a **Strong Suggestion**, not a requirement.
+> *   **Dest-Aware Nodes:** (Structs, Arrays, SRET Calls, If-Exprs) should attempt to write directly to `maybe_dest` to avoid copies. If successful, they return `LowerResult::written()`.
+> *   **Dest-Ignorant Nodes:** (BinaryOps, Literals, Variables) ignore the hint, compute their result, and return `Operand` or `Place`.
+>
+> **Caller Responsibility:**
+> The caller *must* ensure the result ends up where needed using `LowerResult::write_to_dest()`. This helper bridges the gap: if the node ignored the hint (returned Operand/Place), `write_to_dest` generates the necessary `Assign` or `Copy`.
 
 ---
 
-## Phase 0 — Lay the plumbing (no behavior change)
+### 2. New Core Abstraction: `LowerResult`
 
-### 0.1 Add an indirection base to `Place`
+**File:** `mir/lower/lower_internal.hpp`
 
-Add a new `PlaceBase` alternative:
-
-```cpp
-struct IndirectPlace { std::uint32_t slot = 0; };
-using PlaceBase = std::variant<LocalPlace, GlobalPlace, PointerPlace, IndirectPlace>;
-```
-
-### 0.2 Add an indirection table to `MirFunction` (or lowerer)
-
-Put it somewhere that survives until emission / finalization:
+Add the `LowerResult` class to handle the three states and centralize conversion logic.
 
 ```cpp
-struct IndirectBinding {
-  std::optional<Place> bound; // once known
+class LowerResult {
+public:
+    enum class Kind { Operand, Place, Written };
+
+    // Constructors
+    static LowerResult operand(Operand op);
+    static LowerResult place(Place p);
+    static LowerResult written(); 
+
+    // --- Centralized Conversion Helpers ---
+
+    // 1. Materialize as Operand
+    //    - If Operand: returns it.
+    //    - If Place: emits Load(place).
+    //    - If Written: Throws logic_error (value consumed by dest).
+    Operand as_operand(FunctionLowerer& fl, TypeId type);
+
+    // 2. Materialize as Place
+    //    - If Place: returns it.
+    //    - If Operand: allocates temp, emits Assign(temp, op), returns temp place.
+    //    - If Written: Throws logic_error.
+    Place as_place(FunctionLowerer& fl, TypeId type);
+
+    // 3. Finalize into Destination
+    //    - If Written: No-op (Hint taken).
+    //    - If Operand: emits Assign(dest, op).
+    //    - If Place: emits Assign(dest, Copy(place)).
+    void write_to_dest(FunctionLowerer& fl, Place dest, TypeId type);
+
+private:
+    Kind kind;
+    std::variant<std::monostate, Operand, Place> data;
 };
-std::vector<IndirectBinding> indirections;
 ```
-
-### 0.3 Implement `resolve_place(place)` utility
-
-A single canonical helper used everywhere (emitter + analyses):
-
-* Chase `IndirectPlace(slot)` until you reach a non-indirect base.
-* Append projections correctly (bind target projections + original projections).
-* If unresolved, either:
-
-  * **debug assert** in contexts that must be resolved (emission), or
-  * conservatively treat as “may alias everything” (optimizations).
-
-This is the key to making “late destination binding” safe.
-
-### 0.4 Update any place utilities to be indirection-aware
-
-At minimum:
-
-* `are_places_definitely_disjoint(a,b)` should first resolve if possible, else return conservative `false`.
-* Any emitter path that reads/writes places must resolve.
-
-✅ After Phase 0: code still lowers the same MIR, but the infrastructure exists.
 
 ---
 
-## Phase 1 — Introduce the new result type + adapters
+### 3. Interface Changes: `FunctionLowerer`
 
-### 1.1 Define `LoweredValue`
+**File:** `mir/lower/lower_internal.hpp`
 
+Refactor the class to remove the split API and use the unified entry point.
+
+**Remove:**
+*   `void lower_init(...)`
+*   `Place lower_expr_place(...)`
+*   `Operand lower_operand(...)`
+*   `Operand emit_aggregate(...)`
+*   `Operand emit_array_repeat(...)`
+*   `template <typename RValueT> Operand emit_rvalue_to_temp(...)`
+
+**Add/Update:**
 ```cpp
-struct MovablePlace {
-  TypeId type;
-  Place placeholder;     // base=IndirectPlace(slot)
-  bool bound = false;    // debug-only or derived
-};
+// Main Entry Point
+// maybe_dest: Optimization hint.
+LowerResult lower_expr(const hir::Expr& expr, std::optional<Place> maybe_dest = std::nullopt);
 
-using LoweredValue = std::variant<std::monostate, Operand, Place, MovablePlace>;
+// Helper for L-Value contexts (e.g. &x, assignment LHS)
+// Wraps lower_expr(...) then calls res.as_place()
+Place lower_place(const hir::Expr& expr);
+
+// Internal Implementation Template
+template <typename T>
+LowerResult lower_expr_impl(const T& node, const semantic::ExprInfo& info, std::optional<Place> dest);
 ```
 
-### 1.2 Add conversion helpers (the “caller chooses” API)
+---
 
-Put these on the lowerer:
+### 4. Implementation Logic (By Category)
 
-```cpp
-Operand to_operand(LoweredValue v, TypeId ty);
-Place   to_place  (LoweredValue v, TypeId ty);         // ensures addressable storage
-void    materialize_into(LoweredValue v, Place dest, TypeId dest_ty);
-void    discard(LoweredValue v);                       // evaluate for side effects only
-```
+#### A. "Dest-Ignorant" Nodes (Scalars/Leaves)
+*   **Nodes:** `Literal`, `BinaryOp`, `UnaryOp` (non-deref), `Cast`, `ConstUse`.
+*   **Impl:**
+    1.  Ignore `maybe_dest`.
+    2.  Compute `Operand` (using internal helpers like `emit_rvalue` if needed, but returning `LowerResult`).
+    3.  Return `LowerResult::operand(op)`.
 
-Rules:
+#### B. "Place" Nodes (L-Values)
+*   **Nodes:** `Variable`, `FieldAccess`, `Index`, `Dereference`.
+*   **Impl:**
+    1.  Ignore `maybe_dest`.
+    2.  Resolve the `Place`.
+    3.  Return `LowerResult::place(p)`.
 
-* `Operand` → already value.
-* `Place` → load if needed for operand; or use directly for dest-init/copy.
-* `MovablePlace` → **bind placeholder to `dest`** (no new MIR statement required), then done.
+#### C. "Dest-Aware" Nodes (Aggregates)
+*   **Nodes:** `StructLiteral`, `ArrayLiteral`, `ArrayRepeat`.
+*   **Impl:**
+    1.  Determine Target: `Place target = maybe_dest.value_or( create_temp_place(type) )`.
+    2.  Iterate fields/elements:
+        *   Derive `sub_place` from `target`.
+        *   `res = lower_expr(field_expr, sub_place)`.
+        *   `res.write_to_dest(sub_place)`.
+    3.  If `maybe_dest` was present: Return `LowerResult::written()`.
+    4.  Else: Return `LowerResult::place(target)`.
 
-### 1.3 Keep old API working
+#### D. ABI & Calls
+*   **Nodes:** `Call`, `MethodCall`.
+*   **Impl:**
+    1.  Check Callee Signature.
+    2.  **If SRET:**
+        *   `Place target = maybe_dest.value_or( create_temp_place(type) )`.
+        *   Pass `target` as SRET argument.
+        *   If `maybe_dest`: Return `Written`. Else: Return `Place(target)`.
+    3.  **If Direct:**
+        *   Emit call to new temp operand.
+        *   Return `Operand`.
 
-Implement:
+#### E. Propagators (Control Flow)
+*   **Nodes:** `If`, `Block`.
+*   **Impl (`If`):**
+    1.  Pass `maybe_dest` recursively to Then/Else blocks.
+    2.  If `maybe_dest` is present:
+        *   Ensure branches return `Written`.
+        *   **Do NOT generate Phi nodes**.
+        *   Return `Written`.
+    3.  If `maybe_dest` is missing:
+        *   Materialize branches to Operands.
+        *   Generate Phi.
+        *   Return `Operand(phi_dest)`.
 
-* `lower_expr()` (old) as: `return to_optional_operand(lower_value(expr))`
-* `lower_operand()` as: `to_operand(lower_value(expr))`
-
-✅ After Phase 1: you can start migrating callsites one-by-one.
+#### F. Roots (Statements)
+*   **Nodes:** `LetStmt`, `Assignment`.
+*   **Impl:**
+    1.  Derive the target `Place` (local variable or LHS).
+    2.  `res = lower_expr(rhs_expr, target)`.
+    3.  `res.write_to_dest(target)`.
 
 ---
 
-## Phase 2 — Replace “Init mode” with `materialize_into` (surgical)
+### 5. Cleanup (Deletions)
 
-### 2.1 Change `lower_init(expr, dest, dest_type)`
+**File:** `mir/lower/lower_init.cpp` (Likely delete entire file or empty it)
+**File:** `mir/lower/lower_expr.cpp` (Heavy modification)
 
-Make it trivial:
-
-```cpp
-void lower_init(const hir::Expr& expr, Place dest, TypeId ty) {
-  materialize_into(lower_value(expr), std::move(dest), ty);
-}
-```
-
-Then **stop calling** `try_lower_init_outside`, `InitStatement`, `InitPattern`, etc. (keep them compiling for now).
-
-### 2.2 Convert the obvious callsites first
-
-* `lower_binding_let`: `materialize_into(lower_value(init_expr), local_place, local_ty)`
-* assignment lowering: same.
-* sret returns in `handle_return_value`: same.
-
-✅ After Phase 2: “init hijacks” no longer drive control flow; destination-init becomes the universal mechanism.
+**Delete these functions explicitly:**
+1.  `lower_init`
+2.  `try_lower_init_outside`
+3.  `try_lower_init_call`
+4.  `try_lower_init_method_call`
+5.  `lower_struct_init`
+6.  `lower_array_literal_init`
+7.  `lower_array_repeat_init`
+8.  `lower_binding_let` (Logic moves to LetStmt visitor)
+9.  `emit_aggregate`
+10. `emit_array_repeat`
 
 ---
 
-## Phase 3 — Make expressions actually return 3 kinds
+### 6. Migration Steps
 
-Add a new entry point:
-
-```cpp
-LoweredValue lower_value(const hir::Expr& expr);
-Place        lower_place(const hir::Expr& expr); // only for forced-lvalue contexts
-```
-
-Then migrate expression-by-expression:
-
-### 3.1 Places stay places
-
-* `Variable`, `FieldAccess` when `info.is_place`, `Index` when `info.is_place`, deref-place → return `Place`.
-
-### 3.2 Scalars / pure values return `Operand`
-
-* literals, arithmetic, comparisons, casts → `Operand` (temps/constants).
-
-### 3.3 Aggregates return `MovablePlace`
-
-#### Struct literal
-
-* Allocate an indirect slot: `slot = new_indirect_slot()`
-* Create `Place placeholder{ .base = IndirectPlace{slot} }`
-* For each field:
-
-  * `auto sub = lower_value(field_expr)`
-  * `materialize_into(sub, placeholder.field(i), field_ty)`
-* Return `MovablePlace{type, placeholder}`
-
-#### Array literal
-
-Same, using `placeholder.index(i)`.
-
-#### SRET call
-
-* Allocate indirect placeholder as sret destination
-* Lower call statement with `sret_dest = placeholder`
-* Return `MovablePlace{ret_type, placeholder}`
-
-This eliminates the entire “try_lower_init_call / init-context call” split.
-
-✅ After Phase 3: nested aggregates + sret become naturally recursive through `materialize_into`.
-
----
-
-## Phase 4 — ABI passing becomes “request the shape you need”
-
-Rewrite call lowering to be driven by ABI param kinds:
-
-* `AbiParamDirect` → `to_operand(arg_lv)`
-* `AbiParamByValCallerCopy` → `to_place(arg_lv)` (or `capture_to_temp_place` then pass)
-
-Concrete helper:
-
-```cpp
-Place capture_to_temp_place(LoweredValue v, TypeId ty) {
-  LocalId tmp = create_synthetic_local(ty, false);
-  Place p = make_local_place(tmp);
-  materialize_into(std::move(v), p, ty);
-  return p;
-}
-```
-
-Then:
-
-* for `ByValCallerCopy`: `Place p = capture_to_temp_place(arg_lv, param_ty); args[i]=ValueSource{p};`
-
-✅ After Phase 4: call lowering no longer needs the “init call special casing” at all.
-
----
-
-## Phase 5 — Fix array repeat semantics (avoid double-eval)
-
-Array repeat is the classic trap because `[f(); N]` must evaluate `f()` once.
-
-Implementation:
-
-1. `LoweredValue elem = lower_value(*array_repeat.value);`
-2. If `elem` is `MovablePlace` or any value with potential side effects, **capture once**:
-
-   * `Place captured = capture_to_temp_place(std::move(elem), element_type);`
-   * Then repeat copies from `captured`(this is handled by emitter)
-
----
-
-## Phase 6 — Remove the old Init IR (after migration is complete)
-
-Once nothing emits:
-
-* `InitStatement`, `InitPattern*`, `AggregateRValue`, `ArrayRepeatRValue` (or keep aggregates only for scalar-ish rvalues)
-
-Then:
-
-* delete `try_lower_init_outside`, `lower_struct_init`, `lower_array_literal_init`, etc.
-* the aggregate logic lives entirely inside `lower_value(StructLiteral/ArrayLiteral)` + recursion.
-
-✅ After Phase 6: the refactor is “real” and the old system is gone.
-
----
-
-## Phase 7 — Optional: “concretize” pass (recommended)
-
-Before handing MIR to later passes / codegen, run:
-
-* Resolve every `Place` in statements/terminators by chasing `IndirectPlace`.
-* Replace `IndirectPlace(slot)` with the bound concrete base.
-* Assert all slots are bound.
-* Clear `indirections`.
-
-This gives you canonical MIR without dynamic resolution everywhere.
-
----
-
-## Invariants to enforce (so it doesn’t regress)
-
-1. **MovablePlace placeholders must never be loaded before binding.**
-
-   * Assert in `to_operand(MovablePlace)` unless it was captured/bound.
-
-2. **Emitter must not see unresolved IndirectPlace.**
-
-   * Either concretize or assert in emission.
-
-3. **ABI param kind ↔ ValueSource form**
-
-   * `Direct` must get `Operand`
-   * `ByValCallerCopy` must get `Place`
-   * SRET must always have `sret_dest`
-
-4. **ArrayRepeat evaluates element exactly once**
-
-   * Always capture when repeating.
-
----
-
-## Practical “diff order” that minimizes breakage
-
-1. Add `IndirectPlace` + `resolve_place()` + emitter support
-2. Add `LoweredValue` + conversions; keep old API wrappers
-3. Convert `lower_init`, let/assign/return to `materialize_into`
-4. Convert struct/array literal expression lowering to `MovablePlace`
-5. Convert call lowering to ABI-driven “shape requests”
-6. Fix array repeat via capture
-7. Delete old Init IR + paths
-8. Add concretize pass + remove indirection table from runtime path
-
----
-
-If you want, paste (or point me at) your MIR emitter / backend interface for `Place` handling, and I’ll sketch exactly what `resolve_place()` should do with projections (especially how you want `Indirect(slot)` + projections to compose) and where the best place to run the concretize pass is.
+1.  **Define `LowerResult`:** Implement the class and its 3 helper methods in `lower_internal.hpp`.
+2.  **Refactor `lower_expr`:** Change signature to accept `optional<Place>`. Implement dispatch logic.
+3.  **Refactor `Let/Assign`:** Update them to use the new `lower_expr` + `write_to_dest` pattern.
+4.  **Refactor Aggregates:** Move logic from `lower_init` directly into `lower_expr_impl` for structs/arrays.
+5.  **Refactor Calls:** Update `lower_callsite` to handle the `maybe_dest` logic for SRET.
+6.  **Refactor Control Flow:** Update `If` and `Block` to propagate the dest hint.
+7.  **Delete Old Code:** Remove all functions listed in the Cleanup section.
+8.  **Verify:** Ensure `lower_place` calls `lower_expr(...).as_place()`.
