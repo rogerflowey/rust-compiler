@@ -3,6 +3,7 @@
 #include "mir/mir.hpp"
 #include "mir/lower/lower_common.hpp"
 #include "mir/lower/lower_const.hpp"
+#include "mir/lower/lower_result.hpp"
 
 #include "semantic/hir/hir.hpp"
 #include "semantic/pass/semantic_check/expr_info.hpp"
@@ -39,6 +40,8 @@ struct CallSite {
 };
 
 struct FunctionLowerer {
+        // LowerResult needs access to append_statement/load_place_value/create_synthetic_local to materialize results.
+        friend class LowerResult;
         enum class FunctionKind { Function, Method };
 
 	FunctionLowerer(const hir::Function& function,
@@ -111,8 +114,8 @@ private:
 	void switch_to_block(BasicBlockId id);
 	void branch_on_bool(const Operand& condition, BasicBlockId true_block, BasicBlockId false_block);
 	TempId materialize_operand(const Operand& operand, TypeId type);
-	Operand make_temp_operand(TempId temp);
-	void emit_return(std::optional<Operand> value);
+        Operand make_temp_operand(TempId temp);
+        void emit_return(std::optional<Operand> value);
         void collect_parameters();
         void append_self_parameter();
         void append_explicit_parameters(const std::vector<std::unique_ptr<hir::Pattern>>& params,
@@ -162,16 +165,17 @@ private:
 	Place make_local_place(const hir::Local* local) const;
 	Place make_local_place(LocalId local_id) const;
 	LocalId create_synthetic_local(TypeId type, bool is_mutable_reference);
-	Operand load_place_value(Place place, TypeId type);
-	Operand lower_operand(const hir::Expr& expr);
-	Operand make_const_operand(std::uint64_t value, TypeId type, bool is_signed = false);
-	std::optional<Operand> lower_expr(const hir::Expr& expr);
-	Place lower_expr_place(const hir::Expr& expr);
-	Place ensure_reference_operand_place(const hir::Expr& operand,
+        Operand load_place_value(Place place, TypeId type);
+        Operand lower_operand(const hir::Expr& expr);
+        Operand make_const_operand(std::uint64_t value, TypeId type, bool is_signed = false);
+        std::optional<Operand> lower_expr(const hir::Expr& expr);
+        Place lower_expr_place(const hir::Expr& expr);
+        std::optional<Operand> materialize_result_operand(LowerResult& result, const semantic::ExprInfo& info);
+        Place ensure_reference_operand_place(const hir::Expr& operand,
 					  const semantic::ExprInfo& operand_info,
 				  bool mutable_reference);
-	Operand expect_operand(std::optional<Operand> value, const char* context);
-	TempId materialize_place_base(const hir::Expr& base_expr,
+        Operand expect_operand(std::optional<Operand> value, const char* context);
+        TempId materialize_place_base(const hir::Expr& base_expr,
 				 const semantic::ExprInfo& base_info);
 	Place make_index_place(const hir::Index& index_expr, bool allow_temporary_base);
 
@@ -223,6 +227,39 @@ private:
 	// Central return handling: unifies logic for block returns and explicit return statements
 	// Takes an optional unique_ptr<Expr> (from HIR) and handles all return types
 	void handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, const char *context);
+
+        // === V2 lowering API ===
+        LowerResult lower_node(const hir::Expr& expr, std::optional<Place> dest_hint = std::nullopt);
+        void lower_stmt_node(const hir::Stmt& stmt);
+        Place lower_node_place(const hir::Expr& expr);
+        Operand lower_node_operand(const hir::Expr& expr);
+
+        template <typename T>
+        LowerResult visit_node(const T& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+
+        LowerResult visit_struct_literal(const hir::StructLiteral& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_array_literal(const hir::ArrayLiteral& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_array_repeat(const hir::ArrayRepeat& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_variable(const hir::Variable& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_const_use(const hir::ConstUse& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_struct_const(const hir::StructConst& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_enum_variant(const hir::EnumVariant& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_field_access(const hir::FieldAccess& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_index(const hir::Index& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_cast(const hir::Cast& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_block(const hir::Block& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_if(const hir::If& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_binary(const hir::BinaryOp& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_literal(const hir::Literal& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_call(const hir::Call& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_method_call(const hir::MethodCall& node, const semantic::ExprInfo& info, std::optional<Place> dest);
+        LowerResult visit_assignment(const hir::Assignment& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_loop(const hir::Loop& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_while(const hir::While& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_break(const hir::Break& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_continue(const hir::Continue& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_return(const hir::Return& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult visit_unary(const hir::UnaryOp& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
 	
 	// Process call arguments according to callee's ABI signature
 };
