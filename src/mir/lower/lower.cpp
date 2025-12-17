@@ -1640,6 +1640,11 @@ LocalId FunctionLowerer::create_synthetic_local(TypeId type,
   info.type = normalized;
   info.debug_name = is_mutable_reference ? "_ref_mut_tmp" : "_ref_tmp";
   info.debug_name += std::to_string(synthetic_local_counter++);
+  if (std::getenv("DEBUG_MIR_LOCALS")) {
+    std::cerr << "[MIR DEBUG] create_synthetic_local(" << info.debug_name
+              << ", type=" << normalized << ", mut=" << is_mutable_reference
+              << ")\n";
+  }
   mir_function.locals.push_back(std::move(info));
   return id;
 }

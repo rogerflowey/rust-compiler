@@ -5,6 +5,7 @@ Not yet. You’ve *introduced* the V2 “engine” (`LowerResult`, `lower_node`,
 ### ✅ V2-shaped and mostly correct
 
 * `lower_node()` as the single expression dispatcher (with divergence invariant check).
+* `lower_node` now routes variants to the `visit_*` overload set (fallback only for unsupported nodes).
 * `LowerResult` as the carrier type (Operand / Place / Written).
 * `lower_stmt_node()` as the new statement entry point and `lower_block_statements()` using it.
 * `visit_call` / `visit_method_call` now accept `dest_hint` and treat SRET as “place result” (good direction).

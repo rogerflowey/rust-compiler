@@ -28,9 +28,67 @@ LowerResult FunctionLowerer::lower_node(const hir::Expr &expr,
   semantic::ExprInfo info = hir::helper::get_expr_info(expr);
   bool was_reachable = is_reachable();
 
-  LowerResult result =
-      std::visit([&](const auto &node) { return visit_node(node, info, dest_hint); },
-                 expr.value);
+  LowerResult result = std::visit(
+      Overloaded{
+          [&](const hir::Literal &node) {
+            return visit_literal(node, info, dest_hint);
+          },
+          [&](const hir::Variable &node) {
+            return visit_variable(node, info, dest_hint);
+          },
+          [&](const hir::ConstUse &node) {
+            return visit_const_use(node, info, dest_hint);
+          },
+          [&](const hir::StructConst &node) {
+            return visit_struct_const(node, info, dest_hint);
+          },
+          [&](const hir::EnumVariant &node) {
+            return visit_enum_variant(node, info, dest_hint);
+          },
+          [&](const hir::FieldAccess &node) {
+            return visit_field_access(node, info, dest_hint);
+          },
+          [&](const hir::Index &node) {
+            return visit_index(node, info, dest_hint);
+          },
+          [&](const hir::Cast &node) {
+            return visit_cast(node, info, dest_hint);
+          },
+          [&](const hir::UnaryOp &node) {
+            return visit_unary(node, info, dest_hint);
+          },
+          [&](const hir::StructLiteral &node) {
+            return visit_struct_literal(node, info, dest_hint);
+          },
+          [&](const hir::ArrayLiteral &node) {
+            return visit_array_literal(node, info, dest_hint);
+          },
+          [&](const hir::ArrayRepeat &node) {
+            return visit_array_repeat(node, info, dest_hint);
+          },
+          [&](const hir::BinaryOp &node) {
+            return visit_binary(node, info, dest_hint);
+          },
+          [&](const hir::Assignment &node) {
+            return visit_assignment(node, info, dest_hint);
+          },
+          [&](const hir::Block &node) { return visit_block(node, info, dest_hint); },
+          [&](const hir::If &node) { return visit_if(node, info, dest_hint); },
+          [&](const hir::Loop &node) { return visit_loop(node, info, dest_hint); },
+          [&](const hir::While &node) { return visit_while(node, info, dest_hint); },
+          [&](const hir::Break &node) { return visit_break(node, info, dest_hint); },
+          [&](const hir::Continue &node) {
+            return visit_continue(node, info, dest_hint);
+          },
+          [&](const hir::Return &node) {
+            return visit_return(node, info, dest_hint);
+          },
+          [&](const hir::Call &node) { return visit_call(node, info, dest_hint); },
+          [&](const hir::MethodCall &node) {
+            return visit_method_call(node, info, dest_hint);
+          },
+          [&](const auto &node) { return visit_node(node, info, dest_hint); }},
+      expr.value);
 
   if (was_reachable && semantic::diverges(info) && is_reachable()) {
     throw std::logic_error("MIR lowering bug: semantically diverging expression "
@@ -120,8 +178,11 @@ void FunctionLowerer::lower_stmt_node(const hir::Stmt &stmt) {
 LowerResult FunctionLowerer::visit_literal(const hir::Literal &literal,
                                            const semantic::ExprInfo &info,
                                            std::optional<Place>) {
-  return LowerResult::from_operand(
-      emit_rvalue_to_temp(build_literal_rvalue(literal, info), info.type));
+  if (!info.has_type || info.type == invalid_type_id) {
+    throw std::logic_error("Literal missing resolved type during MIR lowering");
+  }
+  Constant constant = lower_literal(literal, info.type);
+  return LowerResult::from_operand(make_constant_operand(std::move(constant)));
 }
 
 LowerResult FunctionLowerer::visit_variable(const hir::Variable &variable,
