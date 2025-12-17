@@ -42,6 +42,10 @@ Place LowerResult::as_place(FunctionLowerer &ctx,
     if (!info.has_type || info.type == invalid_type_id) {
       throw std::logic_error("as_place requires resolved type");
     }
+    if (std::getenv("DEBUG_MIR_LOCALS")) {
+      std::cerr << "[MIR DEBUG] as_place materializing operand to synthetic "
+                   "local\n";
+    }
     LocalId tmp_local = ctx.create_synthetic_local(info.type, false);
     Place tmp_place = ctx.make_local_place(tmp_local);
 

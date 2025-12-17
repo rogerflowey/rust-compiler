@@ -4,6 +4,7 @@
 #include "semantic/hir/helper.hpp"
 #include "semantic/utils.hpp"
 #include "type/type.hpp"
+#include <cstdlib>
 #include <stdexcept>
 
 namespace mir::detail {
@@ -152,7 +153,15 @@ Place FunctionLowerer::ensure_reference_operand_place(
     throw std::logic_error(
         "Reference operand missing resolved type during MIR lowering");
   }
-  if (operand_info.is_place) {
+  auto is_place_shape = [](const hir::Expr &expr) {
+    return std::holds_alternative<hir::Variable>(expr.value) ||
+           std::holds_alternative<hir::FieldAccess>(expr.value) ||
+           std::holds_alternative<hir::Index>(expr.value) ||
+           (std::holds_alternative<hir::UnaryOp>(expr.value) &&
+            std::holds_alternative<hir::Dereference>(
+                std::get<hir::UnaryOp>(expr.value).op));
+  };
+  if (operand_info.is_place || is_place_shape(operand)) {
     if (mutable_reference && !operand_info.is_mut) {
       throw std::logic_error("Mutable reference to immutable place encountered "
                              "during MIR lowering");
@@ -163,6 +172,11 @@ Place FunctionLowerer::ensure_reference_operand_place(
   Operand value = lower_operand(operand);
   LocalId temp_local =
       create_synthetic_local(operand_info.type, mutable_reference);
+  if (std::getenv("DEBUG_MIR_LOCALS")) {
+    std::cerr << "[MIR DEBUG] ensure_reference_operand_place synth "
+              << "is_place=" << operand_info.is_place
+              << " mut=" << mutable_reference << "\n";
+  }
   AssignStatement assign;
   assign.dest = make_local_place(temp_local);
   assign.src = ValueSource{value};
@@ -861,6 +875,16 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
   
   const auto& return_desc = mir_function.sig.return_desc;
   
+  const char *debug_locals = std::getenv("DEBUG_MIR_LOCALS");
+  if (debug_locals) {
+    std::cerr << "[MIR DEBUG] locals=" << mir_function.locals.size()
+              << " name=" << mir_function.name << "\n";
+    for (std::size_t idx = 0; idx < mir_function.locals.size(); ++idx) {
+      std::cerr << "  [" << idx << "] " << mir_function.locals[idx].debug_name
+                << "\n";
+    }
+  }
+
   // Case 1: function returns `never` - diverges unconditionally
   if (is_never(return_desc)) {
     if (value_ptr && *value_ptr) {
@@ -926,7 +950,25 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
                              ": missing return value for direct return function");
     }
 
-    emit_return(std::move(value));
+    TypeId ret_type = return_plan.ret_type;
+
+    const bool is_const_like =
+        value_ptr &&
+        std::visit(
+            Overloaded{
+                [](const hir::ConstUse &) { return true; },
+                [](const hir::StructConst &) { return true; },
+                [](const hir::EnumVariant &) { return true; },
+                [](const auto &) { return false; }},
+            (**value_ptr).value);
+
+    if (is_const_like) {
+      emit_return(std::move(value));
+      return;
+    }
+
+    TempId ret_temp = materialize_operand(*value, ret_type);
+    emit_return(make_temp_operand(ret_temp));
     return;
   }
 
