@@ -1,182 +1,145 @@
-Not yet. You’ve *introduced* the V2 “engine” (`LowerResult`, `lower_node`, `visit_*`, `dest_hint` threading), but the lowering pipeline still depends on substantial V1 behavior and entry points. So V1 cannot be “completely removed” today without breaking functionality (and likely compilation).
+You’re **not fully migrated** yet — what you have right now is a **V2 façade + a V1/V1.5 core still peeking through**, especially around aggregate initialization and “init-vs-expr” distinctions.
 
-## What’s actually V2-complete vs still V1-dependent
+## Is V2 totally implemented/migrated?
 
-### ✅ V2-shaped and mostly correct
+### What’s genuinely V2 already
 
-* `lower_node()` as the single expression dispatcher (with divergence invariant check).
-* `lower_node` now routes variants to the `visit_*` overload set (fallback only for unsupported nodes).
-* `LowerResult` as the carrier type (Operand / Place / Written).
-* `lower_stmt_node()` as the new statement entry point and `lower_block_statements()` using it.
-* `visit_call` / `visit_method_call` now accept `dest_hint` and treat SRET as “place result” (good direction).
-* `visit_if` forwards `dest_hint` (conditional-RVO shape is there).
+* **`lower_node(expr, dest_hint)` + `LowerResult`** is real and driving a lot of the dispatch.
+* Most visitors follow the V2 contract reasonably:
 
-### ❌ Still V1 (blocking full removal)
+  * `visit_if` forwards `dest_hint` into branches and only falls back to phi when needed.
+  * `visit_call` / `visit_method_call` use `dest_hint` for SRET and “write_to_dest” for direct returns.
+  * `visit_variable`, `visit_literal`, `visit_binary`, etc. are in the expected “result-kind aware” style.
 
-These are the big blockers:
+### What is still depending on V1 components / concepts
 
-1. **Loops / control-flow still routed through V1 helpers**
+These are the main “still V1” anchors:
 
-   * `visit_loop()` calls `lower_loop_expr()` (old), which calls `lower_block_expr()`, which calls `lower_expr()`.
-   * `visit_while()` calls `lower_while_expr()` (old), which uses `lower_operand()` etc.
-   * `lower_break_expr`, `lower_continue_expr`, `lower_short_circuit` use V1 APIs (`lower_operand`, `lower_expr`, `materialize_operand`).
+1. **Aggregate init still uses V1-ish “try init” plumbing**
 
-2. **Init (“lower_init / try_lower_init_outside”) still exists and is still used**
+   * `visit_struct_literal`, `visit_array_literal`, `visit_array_repeat` still call:
 
-   * `lower_callsite()` uses `lower_init()` for `AbiParamByValCallerCopy`.
-   * Struct/array init helpers (`lower_struct_init`, `lower_array_literal_init`, `lower_array_repeat_init`) still call `try_lower_init_outside()` and `lower_operand()`.
-   * This violates the “no separate init pipeline” V2 goal, and prevents deletion of a huge chunk of old code.
+     * `try_lower_init_outside(...)`
+     * `lower_operand(...)`
+   * That is *exactly* the old split creeping back in: “try to init into place, else compute operand”.
+   * In true DPS, you should *always* do:
 
-3. **Old “top-level lowering APIs” still exist and are still called**
+     * `LowerResult r = lower_node(child, field_place);`
+     * `r.write_to_dest(field_place);`
+     * …and never need a “try_” probe.
 
-   * `lower_expr`, `lower_operand`, `lower_expr_place`, `lower_block_expr` still appear in the call graph (via loops / short-circuit / pattern lowering).
-   * So you can’t delete `lower_expr.cpp`-era logic unless you’ve fully rehomed everything it provided.
+2. **Old entrypoints/helpers still present and still shaping behavior**
 
-4. **A few correctness/robustness hazards in the new path**
+   * `materialize_result_operand(...)` is V1 logic (unit/never/reachable filtering) and `lower_node_operand` depends on it.
+   * `lower_operand(...)` still exists and is used inside V2 visitors (aggregates).
+   * You still have a large V1 API surface declared in the header (`lower_expr_impl(...)`, `lower_expr`, `lower_expr_place`, etc.). Even if not called on the main path, it’s technical debt and makes backsliding easy.
 
-   * `lower_node_operand()` returns `Operand{}` when the expression is unit/never/unreachable (`materialize_result_operand` returns nullopt). That’s a footgun: callers expecting a real operand will silently get garbage. In V2 you usually want either:
+3. **Loop/break/continue lowering is still V1-shaped**
 
-     * `std::optional<Operand>` return type, **or**
-     * throw/assert if called in a context that semantically must produce a value.
-   * ABI mapping: `validate_and_map_abi_to_semantic()` says semantic params may be elided, but `lower_callsite()` later blindly dereferences `param_to_abi[i]`. That’s an invariant mismatch waiting to explode once you add ZST-elision or similar.
+   * `visit_loop/while/break/continue/return` mostly delegate to `lower_loop_expr`, `lower_while_expr`, `lower_break_expr`, etc. which return `std::optional<Operand>`.
+   * That means loop expressions can’t participate cleanly in DPS (e.g. “loop expression writes directly into `dest_hint`”) without awkward wrappers.
 
-## Can V1 be completely removed?
+4. **You still emit `InitStatement` patterns for aggregates**
 
-**Not yet.** You *can* remove *some* V1 files once their functionality is fully covered by V2 (e.g., if nothing includes/links `lower_expr.cpp` anymore), but based on the code you pasted, **V1 APIs are still actively used through loops, short-circuiting, and byval caller-copy arguments.** Removing V1 now will either fail to link/compile or regress semantics.
+   * That’s not necessarily “wrong” (depends on your MIR design), but **combined with `try_lower_init_outside` it becomes a hybrid**:
 
-## Next steps to fully eliminate V1 and “finish” V2
+     * sometimes children write directly to a subplace,
+     * sometimes the pattern supplies a value,
+     * plus you rely on `Omitted` having correct semantics (“don’t touch this field”).
+   * This is workable, but it’s **not the simple DPS model your doc describes** (your doc’s example initializes fields directly, no pattern build step).
 
-Here’s the fastest path that matches your DPS goal and minimizes churn.
+## Are you “letting the callee decide”, or still forcing conversions?
 
-### Step 1: Make V2 the only entry points (kill the call graph edges)
+### Mostly good
 
-Do a hard audit and remove **all** uses of:
+* In `visit_if`, `visit_block`, and direct-return calls, you’re doing the **right pattern**:
 
-* `lower_expr`
-* `lower_operand`
-* `lower_expr_place`
-* `lower_block_expr`
-* `lower_init`
-* `try_lower_init_*`
+  * pass `dest_hint` down
+  * then call `write_to_dest` anyway as a correctness backstop (no-op if already written)
 
-Practical way:
+### Still forcing unnecessarily (the big one)
 
-* `git grep "lower_expr\("`
-* `git grep "lower_operand\("`
-* `git grep "lower_block_expr\("`
-* `git grep "lower_init\("`
-  and treat every hit as a migration task, not “leave it for later”.
+* In aggregates, you’re still forcing a *caller-side decision*:
 
-### Step 2: Rewrite loops/while/break/continue in V2 terms
+  * `if (try_lower_init_outside(...)) omitted else lower_operand(...)`
+* That violates your own stated goal: “callee decides whether to use the destination”.
+* The caller shouldn’t need to guess. Passing the place is the whole point.
 
-You already have `visit_loop/visit_while/visit_break/visit_continue`, but they delegate to old lowering.
+## Concrete next-step migration plan
 
-Do the same thing you did for `if`:
+### Step 1 — Kill `try_lower_init_outside` usage in V2 visitors
 
-* Implement `visit_loop` and `visit_while` directly in `lower_node.cpp` (or a V2 control-flow file).
-* Inside them, lower condition/body using `lower_node` / `visit_block` and **never call `lower_block_expr`**.
-* Make `break` value handling go through `LowerResult`:
+Rewrite struct/array literals to the canonical DPS loop:
 
-  * If loop is value-producing and `break` has a value, do:
+* compute `target = dest_hint.value_or(temp_place)`
+* for each field/element:
 
-    * `LowerResult br = lower_node(value_expr);`
-    * materialize to temp for phi incoming via `br.as_operand(...)`.
-* Replace `lower_short_circuit()` with a V2 version that uses `lower_node_operand()` (or `lower_node(...).as_operand(...)`) everywhere.
+  * construct subplace
+  * `LowerResult r = lower_node(expr, subplace);`
+  * `r.write_to_dest(*this, subplace, child_info);`
 
-Once this is done, the largest remaining reason `lower_expr` exists disappears.
+This removes **both**:
 
-### Step 3: Convert call argument lowering to DPS (`lower_callsite` must stop calling `lower_init`)
+* the probe (`try_lower_init_outside`)
+* the operand fallback decision (`lower_operand`)
 
-Today:
+If you still want the single `InitStatement` form for MIR quality, do it *after* you’re fully DPS:
 
-* `AbiParamDirect` → uses `lower_operand()` (V1)
-* `AbiParamByValCallerCopy` → uses `lower_init()` (V1)
+* either switch MIR to “field assigns” for aggregates,
+* or keep `InitStatement` but derive leaves from `LowerResult` without probing (e.g., call `lower_node(child, subplace)` and then:
 
-In V2:
+  * if it returned `Written`, set leaf `Omitted`
+  * else set leaf from `as_operand(...)`
+  * **do not** separately call `try_lower_init_outside`)
 
-* `AbiParamDirect`:
+### Step 2 — Make loops/control-flow DPS-capable
 
-  * `Operand op = lower_node(arg_expr).as_operand(*this, arg_info);`
-* `AbiParamByValCallerCopy`:
+Change:
 
-  * allocate temp place `tmp_place`
-  * `LowerResult lr = lower_node(arg_expr, tmp_place);`
-  * `lr.write_to_dest(*this, tmp_place, arg_info);`
-  * pass `ValueSource{tmp_place}`
+* `lower_loop_expr / lower_while_expr / lower_break_expr ...`
+  from returning `optional<Operand>` to returning `LowerResult` (or returning a richer structure that can support “written to dest”).
 
-That single change lets you delete `lower_init` *and* `try_lower_init_outside` once aggregates are migrated (next step).
+Key upgrade:
 
-### Step 4: Move aggregate init fully into `visit_struct_literal/visit_array_literal/visit_array_repeat`
+* When `dest_hint` exists and loop has a break value, breaks should **write into the shared destination** instead of building a phi temp (same trick as `visit_if`).
 
-Right now those V2 visitors still call V1 init helpers.
+### Step 3 — Collapse V1 entrypoints so they can’t diverge
 
-You have two viable end states (pick one and commit):
+To prevent “half-migrated forever”:
 
-**Option A (pure DPS, no InitPattern for aggregates):**
+* Make old APIs (`lower_expr`, `lower_operand`, `lower_expr_place`, `lower_expr_impl(...)`) either:
 
-* For struct literal: for each field
+  1. **call through to V2** (thin wrappers), or
+  2. be deleted / `#if 0` gated once tests pass.
 
-  * compute `field_place = target + FieldProjection`
-  * `LowerResult fr = lower_node(field_expr, field_place);`
-  * `fr.write_to_dest(...)`
-* Return `Written` if `dest_hint` else `from_place(target)`
-* Same for arrays (index place projections)
+A good intermediate hardening move:
 
-This makes aggregate lowering uniform and deletes a lot of the “InitPattern leaf” complexity.
+* implement `lower_operand(expr)` as:
 
-**Option B (keep InitPattern, but make it V2-driven):**
+  * try const
+  * else `return lower_node(expr).as_operand(...)`
+    …and stop it from doing anything independently.
 
-* Keep emitting `InitStatement` for whole-aggregate, but build leaves by calling `lower_node`:
+### Step 4 — Remove V1-only adapters (or move their logic into `LowerResult`)
 
-  * If child returns `Written`, leaf = omitted
-  * If child returns `Operand`, leaf = value leaf
-  * If child returns `Place`, either:
+* The remaining “V1 adapter” functions (`materialize_result_operand`, parts of `load_place_value`, etc.) should either:
 
-    * emit `InitCopy` leaf if your MIR supports per-leaf copy, or
-    * load to operand via `as_operand` and store as value leaf
-* This still eliminates `try_lower_init_outside` because the decision is now inside visitors, not a separate init pipeline.
+  * become private helpers used only by `LowerResult::{as_operand, write_to_dest, as_place}`, or
+  * be deleted once no longer referenced.
 
-Either option lets you delete:
+### Step 5 — Add a “no V1 path” build/test tripwire
 
-* `lower_init`
-* `try_lower_init_outside`
-* `try_lower_init_call/method_call`
-* `lower_struct_init`, `lower_array_literal_init`, `lower_array_repeat_init`
+* A compile flag or CI step that fails if:
 
-### Step 5: Fix the two V2 sharp edges (otherwise refactor will regress silently)
-
-* Change `lower_node_operand()` to **not** return a default-constructed `Operand{}` on “no value”.
-
-  * Best: `std::optional<Operand> lower_node_operand(...)`
-  * Or: `require_value`-style helper that throws if unit/never/unreachable in a value context.
-* Fix ABI mapping invariant mismatch:
-
-  * either enforce “every semantic param must have exactly one ABI param” (then validate it),
-  * or handle elided params safely (don’t deref `param_to_abi[i]` blindly).
-
-### Step 6: Delete V1 files and dead methods in one sweep
-
-Once the grep is clean (no callers), you can remove:
-
-* `lower_expr.cpp` (already replaced)
-* any `lower_init.cpp` equivalent
-* `lower_place.cpp` if it exists separately (or migrate place lowering into `LowerResult::as_place` + small helpers)
-* the old `lower_*_impl` overload sets
-
-And remove the declarations from headers to prevent backsliding.
-
-### Step 7: Add “guardrails” so V1 can’t creep back in
-
-* Put the old APIs behind `#if 0` or a build flag for one commit, then delete next commit.
-* Add a CI check that fails if forbidden symbols appear (simple grep-based lint).
+  * any `lower_expr_impl(` symbol is referenced
+  * or any `try_lower_init_*` function is called
+    This prevents regressions.
 
 ---
 
-If you want a concrete “definition of done” for “V2 complete”, it’s this:
+### Bottom line
 
-1. No code path calls `lower_expr`, `lower_operand`, `lower_expr_place`, `lower_block_expr`, `lower_init`, or `try_lower_init_*`.
-2. All expression lowering goes through `lower_node` + `LowerResult`.
-3. All statement lowering goes through `lower_stmt_node`.
-4. Call lowering and aggregate lowering are destination-aware and don’t need a separate init pipeline.
+* **No, it’s not totally migrated.** The biggest remaining V1 dependency is **aggregate lowering** via `try_lower_init_outside + lower_operand`, plus **loop lowering still being Operand-based**.
+* **Most of the code is using the new style**, but the aggregate path is still doing caller-side classification instead of letting the callee decide purely via destination passing.
 
-Right now you’re partway through (good progress), but loops + init + call-args are the three pillars still holding V1 in place.
+If you want, paste just the implementations of `try_lower_init_outside`, `emit_init_statement`, and the `LowerResult` methods — those three determine whether the remaining hybrid behavior is safe or whether you’re at risk of “double-init / uninit field” edge cases with `Omitted`.
