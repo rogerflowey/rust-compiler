@@ -278,9 +278,70 @@ FunctionLowerer::visit_struct_literal(const hir::StructLiteral &struct_literal,
   if (!info.has_type || info.type == invalid_type_id) {
     throw std::logic_error("Struct literal missing type during MIR lowering");
   }
+  
+  TypeId normalized = canonicalize_type_for_mir(info.type);
+  auto *struct_ty =
+      std::get_if<type::StructType>(&type::get_type_from_id(normalized).value);
+  if (!struct_ty) {
+    throw std::logic_error(
+        "Struct literal init without struct destination type");
+  }
+
+  const auto &struct_info =
+      type::TypeContext::get_instance().get_struct(struct_ty->id);
+  const auto &fields = hir::helper::get_canonical_fields(struct_literal);
+
+  if (fields.initializers.size() != struct_info.fields.size()) {
+    throw std::logic_error(
+        "Struct literal field count mismatch during struct init");
+  }
+
+  // Determine target place (RVO: use hint if available, else allocate temp)
   Place target = dest_hint.value_or(
-      make_local_place(create_synthetic_local(info.type, false)));
-  lower_struct_init(struct_literal, target, info.type);
+      make_local_place(create_synthetic_local(normalized, false)));
+
+  // Build InitStruct pattern with fields
+  InitStruct init_struct;
+  init_struct.fields.resize(fields.initializers.size());
+
+  for (std::size_t idx = 0; idx < fields.initializers.size(); ++idx) {
+    if (!fields.initializers[idx]) {
+      throw std::logic_error(
+          "Struct literal field missing initializer during MIR lowering");
+    }
+
+    TypeId field_ty =
+        canonicalize_type_for_mir(struct_info.fields[idx].type);
+    if (field_ty == invalid_type_id) {
+      throw std::logic_error(
+          "Struct field missing resolved type during MIR lowering");
+    }
+
+    const hir::Expr &field_expr = *fields.initializers[idx];
+    auto &leaf = init_struct.fields[idx];
+
+    // Build sub-place target.field[idx]
+    Place field_place = target;
+    field_place.projections.push_back(FieldProjection{idx});
+
+    // Try place-directed initialization for nested aggregates/calls (V2 path)
+    // Fallback to operand if that doesn't work
+    if (try_lower_init_outside(field_expr, std::move(field_place), field_ty)) {
+      // Field was written directly to the place
+      leaf = make_omitted_leaf();
+    } else {
+      // Fallback: compute an Operand and store in pattern
+      Operand field_op = lower_operand(field_expr);
+      leaf = make_value_leaf(std::move(field_op));
+    }
+  }
+
+  // Emit init statement with the struct pattern
+  InitPattern pattern;
+  pattern.value = std::move(init_struct);
+  emit_init_statement(std::move(target), std::move(pattern));
+
+  // Return appropriate result based on whether we used the hint
   if (dest_hint) {
     return LowerResult::written();
   }
@@ -294,9 +355,57 @@ FunctionLowerer::visit_array_literal(const hir::ArrayLiteral &array_literal,
   if (!info.has_type || info.type == invalid_type_id) {
     throw std::logic_error("Array literal missing type during MIR lowering");
   }
+  
+  TypeId normalized = canonicalize_type_for_mir(info.type);
+  
+  // Determine target place (RVO: use hint if available, else allocate temp)
   Place target = dest_hint.value_or(
-      make_local_place(create_synthetic_local(info.type, false)));
-  lower_array_literal_init(array_literal, target, info.type);
+      make_local_place(create_synthetic_local(normalized, false)));
+
+  // Build InitArrayLiteral pattern with elements
+  InitArrayLiteral init_array;
+  init_array.elements.resize(array_literal.elements.size());
+
+  // Get the element type from the array type
+  const type::Type &array_ty = type::get_type_from_id(normalized);
+  const auto *array_type_info = std::get_if<type::ArrayType>(&array_ty.value);
+  if (!array_type_info) {
+    throw std::logic_error("Array literal init requires array destination type");
+  }
+
+  for (std::size_t idx = 0; idx < array_literal.elements.size(); ++idx) {
+    const auto &elem_expr_ptr = array_literal.elements[idx];
+    if (!elem_expr_ptr) {
+      throw std::logic_error(
+          "Array literal element missing during MIR lowering");
+    }
+
+    const hir::Expr &elem_expr = *elem_expr_ptr;
+    auto &leaf = init_array.elements[idx];
+
+    // Build sub-place target[idx]
+    Place elem_place = target;
+    TypeId usize_ty = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
+    Operand idx_operand = make_const_operand(idx, usize_ty, false);
+    elem_place.projections.push_back(IndexProjection{std::move(idx_operand)});
+
+    // Try place-directed initialization for nested aggregates/calls (V2 path)
+    // Fallback to operand if that doesn't work
+    if (try_lower_init_outside(elem_expr, std::move(elem_place), array_type_info->element_type)) {
+      leaf = make_omitted_leaf();
+    } else {
+      // Fallback: compute an Operand and store in pattern
+      Operand elem_op = lower_operand(elem_expr);
+      leaf = make_value_leaf(std::move(elem_op));
+    }
+  }
+
+  // Emit init statement with the array pattern
+  InitPattern pattern;
+  pattern.value = std::move(init_array);
+  emit_init_statement(std::move(target), std::move(pattern));
+
+  // Return appropriate result based on whether we used the hint
   if (dest_hint) {
     return LowerResult::written();
   }
@@ -310,9 +419,60 @@ FunctionLowerer::visit_array_repeat(const hir::ArrayRepeat &array_repeat,
   if (!info.has_type || info.type == invalid_type_id) {
     throw std::logic_error("Array repeat missing type during MIR lowering");
   }
+  
+  TypeId normalized = canonicalize_type_for_mir(info.type);
+  
+  // Determine target place (RVO: use hint if available, else allocate temp)
   Place target = dest_hint.value_or(
-      make_local_place(create_synthetic_local(info.type, false)));
-  lower_array_repeat_init(array_repeat, target, info.type);
+      make_local_place(create_synthetic_local(normalized, false)));
+
+  // Build InitArrayRepeat pattern
+  InitArrayRepeat init_repeat;
+  
+  // Extract count from variant
+  if (std::holds_alternative<size_t>(array_repeat.count)) {
+    init_repeat.count = std::get<size_t>(array_repeat.count);
+  } else {
+    throw std::logic_error(
+        "Array repeat count must be a compile-time constant during MIR lowering");
+  }
+
+  // Get the element type from the array type
+  const type::Type &array_ty = type::get_type_from_id(normalized);
+  const auto *array_type_info = std::get_if<type::ArrayType>(&array_ty.value);
+  if (!array_type_info) {
+    throw std::logic_error("Array repeat init requires array destination type");
+  }
+
+  // Try to initialize the element via place-directed init
+  Place elem_place = target;
+  IntConstant zero_const;
+  zero_const.value = 0;
+  zero_const.is_negative = false;
+  zero_const.is_signed = false;
+  Constant c;
+  c.type = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
+  c.value = std::move(zero_const);
+  Operand zero_operand;
+  zero_operand.value = std::move(c);
+  elem_place.projections.push_back(IndexProjection{std::move(zero_operand)});
+
+  // Try place-directed initialization for nested aggregates/calls (V2 path)
+  // Fallback to operand if that doesn't work
+  if (try_lower_init_outside(*array_repeat.value, std::move(elem_place), array_type_info->element_type)) {
+    init_repeat.element = make_omitted_leaf();
+  } else {
+    // Fallback: compute an Operand and store in pattern
+    Operand elem_op = lower_operand(*array_repeat.value);
+    init_repeat.element = make_value_leaf(std::move(elem_op));
+  }
+
+  // Emit init statement with the array repeat pattern
+  InitPattern pattern;
+  pattern.value = std::move(init_repeat);
+  emit_init_statement(std::move(target), std::move(pattern));
+
+  // Return appropriate result based on whether we used the hint
   if (dest_hint) {
     return LowerResult::written();
   }

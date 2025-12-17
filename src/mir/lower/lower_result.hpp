@@ -23,6 +23,8 @@ public:
   void write_to_dest(FunctionLowerer &ctx, Place dest,
                      const semantic::ExprInfo &info);
 
+  bool is_written() const { return kind == Kind::Written; }
+
 private:
   Kind kind;
   std::variant<std::monostate, Operand, Place> data;
