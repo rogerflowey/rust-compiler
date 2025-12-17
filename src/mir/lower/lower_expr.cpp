@@ -4,7 +4,6 @@
 #include "semantic/hir/helper.hpp"
 #include "semantic/utils.hpp"
 #include "type/type.hpp"
-#include <cstdlib>
 #include <stdexcept>
 
 namespace mir::detail {
@@ -172,11 +171,6 @@ Place FunctionLowerer::ensure_reference_operand_place(
   Operand value = lower_operand(operand);
   LocalId temp_local =
       create_synthetic_local(operand_info.type, mutable_reference);
-  if (std::getenv("DEBUG_MIR_LOCALS")) {
-    std::cerr << "[MIR DEBUG] ensure_reference_operand_place synth "
-              << "is_place=" << operand_info.is_place
-              << " mut=" << mutable_reference << "\n";
-  }
   AssignStatement assign;
   assign.dest = make_local_place(temp_local);
   assign.src = ValueSource{value};
@@ -765,108 +759,38 @@ std::optional<Operand> FunctionLowerer::lower_short_circuit(
 std::optional<Operand> FunctionLowerer::lower_loop_expr(
     const hir::Loop &loop_expr,
     [[maybe_unused]] const semantic::ExprInfo &info) {
-  BasicBlockId body_block = create_block();
-  BasicBlockId break_block = create_block();
-
-  if (current_block) {
-    add_goto_from_current(body_block);
-  }
-  current_block = body_block;
-
-  push_loop_context(&loop_expr, body_block, break_block, loop_expr.break_type);
-  (void)lower_block_expr(*loop_expr.body, get_unit_type());
-  if (current_block) {
-    add_goto_from_current(body_block);
-  }
-
-  LoopContext finalized = pop_loop_context(&loop_expr);
-  finalize_loop_context(finalized);
-
-  bool break_reachable = !finalized.break_predecessors.empty();
-  if (finalized.break_result) {
-    if (!break_reachable) {
-      current_block.reset();
-      return std::nullopt;
-    }
-    current_block = finalized.break_block;
-    return make_temp_operand(*finalized.break_result);
-  }
-
-  if (break_reachable) {
-    current_block = finalized.break_block;
-  } else {
-    current_block.reset();
-  }
-  return std::nullopt;
+  LowerResult res = lower_loop_node(loop_expr, info, std::nullopt);
+  return materialize_result_operand(res, info);
 }
 
 std::optional<Operand> FunctionLowerer::lower_while_expr(
     const hir::While &while_expr,
     [[maybe_unused]] const semantic::ExprInfo &info) {
-  BasicBlockId cond_block = create_block();
-  BasicBlockId body_block = create_block();
-  BasicBlockId break_block = create_block();
-
-  if (current_block) {
-    add_goto_from_current(cond_block);
-  }
-  current_block = cond_block;
-
-  auto &ctx = push_loop_context(&while_expr, cond_block, break_block,
-                                while_expr.break_type);
-
-  Operand condition = lower_operand(*while_expr.condition);
-  if (current_block) {
-    branch_on_bool(condition, body_block, break_block);
-    ctx.break_predecessors.push_back(cond_block);
-  }
-
-  switch_to_block(body_block);
-  (void)lower_block_expr(*while_expr.body, get_unit_type());
-  if (current_block) {
-    add_goto_from_current(cond_block);
-  }
-
-  LoopContext finalized = pop_loop_context(&while_expr);
-  finalize_loop_context(finalized);
-
-  current_block = break_block;
-  if (finalized.break_result) {
-    return make_temp_operand(*finalized.break_result);
-  }
-  return std::nullopt;
+  LowerResult res = lower_while_node(while_expr, info, std::nullopt);
+  return materialize_result_operand(res, info);
 }
 
 std::optional<Operand>
 FunctionLowerer::lower_break_expr(const hir::Break &break_expr) {
-  auto target = hir::helper::get_break_target(break_expr);
-  const void *key = std::visit(
-      [](auto *loop_ptr) -> const void * { return loop_ptr; }, target);
-  std::optional<Operand> break_value =
-      break_expr.value ? lower_expr(**break_expr.value) : std::nullopt;
-  LoopContext &ctx = lookup_loop_context(key);
-  BasicBlockId from_block =
-      current_block ? current_block_id() : ctx.break_block;
-  if (ctx.break_result) {
-    TypeId ty = ctx.break_type.value();
-    TempId temp = materialize_operand(
-        expect_operand(std::move(break_value), "Break value required"), ty);
-    ctx.break_incomings.push_back(PhiIncoming{from_block, temp});
+  semantic::ExprInfo info = {};
+  if (break_expr.value) {
+    info = hir::helper::get_expr_info(**break_expr.value);
   }
-  ctx.break_predecessors.push_back(from_block);
-
-  add_goto_from_current(ctx.break_block);
-  return std::nullopt;
+  LowerResult res = lower_break_node(break_expr, info, std::nullopt);
+  if (res.is_written()) {
+    return std::nullopt;
+  }
+  return materialize_result_operand(res, info);
 }
 
 std::optional<Operand>
 FunctionLowerer::lower_continue_expr(const hir::Continue &continue_expr) {
-  auto target = hir::helper::get_continue_target(continue_expr);
-  const void *key = std::visit(
-      [](auto *loop_ptr) -> const void * { return loop_ptr; }, target);
-  LoopContext &ctx = lookup_loop_context(key);
-  add_goto_from_current(ctx.continue_block);
-  return std::nullopt;
+  LowerResult res =
+      lower_continue_node(continue_expr, semantic::ExprInfo{}, std::nullopt);
+  if (res.is_written()) {
+    return std::nullopt;
+  }
+  return materialize_result_operand(res, semantic::ExprInfo{});
 }
 
 void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hir::Expr>>& value_ptr, 
@@ -874,16 +798,6 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
   // Central place to handle all return types using the return storage plan
   
   const auto& return_desc = mir_function.sig.return_desc;
-  
-  const char *debug_locals = std::getenv("DEBUG_MIR_LOCALS");
-  if (debug_locals) {
-    std::cerr << "[MIR DEBUG] locals=" << mir_function.locals.size()
-              << " name=" << mir_function.name << "\n";
-    for (std::size_t idx = 0; idx < mir_function.locals.size(); ++idx) {
-      std::cerr << "  [" << idx << "] " << mir_function.locals[idx].debug_name
-                << "\n";
-    }
-  }
 
   // Case 1: function returns `never` - diverges unconditionally
   if (is_never(return_desc)) {
@@ -925,7 +839,6 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
 
   // Case 3: void semantic return
   if (is_void_semantic(return_desc)) {
-    std::cerr<<"WARNING: void semantic but returns a value, lowering for side effects only\n";
     // Void semantic: compute the value (for side effects) but don't return it
     if (value_ptr && *value_ptr) {
       (void)lower_node(**value_ptr);

@@ -371,30 +371,20 @@ FunctionLowerer::visit_struct_literal(const hir::StructLiteral &struct_literal,
           "Struct literal field missing initializer during MIR lowering");
     }
 
-    TypeId field_ty =
-        canonicalize_type_for_mir(struct_info.fields[idx].type);
-    if (field_ty == invalid_type_id) {
-      throw std::logic_error(
-          "Struct field missing resolved type during MIR lowering");
-    }
-
     const hir::Expr &field_expr = *fields.initializers[idx];
+    semantic::ExprInfo field_info = hir::helper::get_expr_info(field_expr);
     auto &leaf = init_struct.fields[idx];
 
     // Build sub-place target.field[idx]
     Place field_place = target;
     field_place.projections.push_back(FieldProjection{idx});
 
-    // Try place-directed initialization for nested aggregates/calls (V2 path)
-    // Fallback to operand if that doesn't work
-    if (try_lower_init_outside(field_expr, std::move(field_place), field_ty)) {
-      // Field was written directly to the place
+    LowerResult field_res = lower_node(field_expr, field_place);
+    if (field_res.is_written()) {
       leaf = make_omitted_leaf();
-    } else {
-      // Fallback: compute an Operand and store in pattern
-      Operand field_op = lower_operand(field_expr);
-      leaf = make_value_leaf(std::move(field_op));
+      continue;
     }
+    leaf = make_value_leaf(field_res.as_operand(*this, field_info));
   }
 
   // Emit init statement with the struct pattern
@@ -442,6 +432,7 @@ FunctionLowerer::visit_array_literal(const hir::ArrayLiteral &array_literal,
     }
 
     const hir::Expr &elem_expr = *elem_expr_ptr;
+    semantic::ExprInfo elem_info = hir::helper::get_expr_info(elem_expr);
     auto &leaf = init_array.elements[idx];
 
     // Build sub-place target[idx]
@@ -450,15 +441,12 @@ FunctionLowerer::visit_array_literal(const hir::ArrayLiteral &array_literal,
     Operand idx_operand = make_const_operand(idx, usize_ty, false);
     elem_place.projections.push_back(IndexProjection{std::move(idx_operand)});
 
-    // Try place-directed initialization for nested aggregates/calls (V2 path)
-    // Fallback to operand if that doesn't work
-    if (try_lower_init_outside(elem_expr, std::move(elem_place), array_type_info->element_type)) {
+    LowerResult elem_res = lower_node(elem_expr, elem_place);
+    if (elem_res.is_written()) {
       leaf = make_omitted_leaf();
-    } else {
-      // Fallback: compute an Operand and store in pattern
-      Operand elem_op = lower_operand(elem_expr);
-      leaf = make_value_leaf(std::move(elem_op));
+      continue;
     }
+    leaf = make_value_leaf(elem_res.as_operand(*this, elem_info));
   }
 
   // Emit init statement with the array pattern
@@ -505,7 +493,7 @@ FunctionLowerer::visit_array_repeat(const hir::ArrayRepeat &array_repeat,
     throw std::logic_error("Array repeat init requires array destination type");
   }
 
-  // Try to initialize the element via place-directed init
+  // Initialize the repeated element (index 0) using DPS
   Place elem_place = target;
   IntConstant zero_const;
   zero_const.value = 0;
@@ -518,14 +506,13 @@ FunctionLowerer::visit_array_repeat(const hir::ArrayRepeat &array_repeat,
   zero_operand.value = std::move(c);
   elem_place.projections.push_back(IndexProjection{std::move(zero_operand)});
 
-  // Try place-directed initialization for nested aggregates/calls (V2 path)
-  // Fallback to operand if that doesn't work
-  if (try_lower_init_outside(*array_repeat.value, std::move(elem_place), array_type_info->element_type)) {
+  semantic::ExprInfo elem_info =
+      hir::helper::get_expr_info(*array_repeat.value);
+  LowerResult elem_res = lower_node(*array_repeat.value, elem_place);
+  if (elem_res.is_written()) {
     init_repeat.element = make_omitted_leaf();
   } else {
-    // Fallback: compute an Operand and store in pattern
-    Operand elem_op = lower_operand(*array_repeat.value);
-    init_repeat.element = make_value_leaf(std::move(elem_op));
+    init_repeat.element = make_value_leaf(elem_res.as_operand(*this, elem_info));
   }
 
   // Emit init statement with the array repeat pattern
@@ -757,43 +744,198 @@ LowerResult FunctionLowerer::visit_if(const hir::If &if_expr,
 LowerResult FunctionLowerer::visit_loop(const hir::Loop &loop_expr,
                                         const semantic::ExprInfo &info,
                                         std::optional<Place> dest_hint) {
-  (void)dest_hint;
-  auto res = lower_loop_expr(loop_expr, info);
-  if (res) {
-    return LowerResult::from_operand(*res);
-  }
-  return LowerResult::written();
+  return lower_loop_node(loop_expr, info, dest_hint);
 }
 
 LowerResult FunctionLowerer::visit_while(const hir::While &while_expr,
                                          const semantic::ExprInfo &info,
                                          std::optional<Place> dest_hint) {
-  (void)dest_hint;
-  auto res = lower_while_expr(while_expr, info);
-  if (res) {
-    return LowerResult::from_operand(*res);
-  }
-  return LowerResult::written();
+  return lower_while_node(while_expr, info, dest_hint);
 }
 
 LowerResult FunctionLowerer::visit_break(const hir::Break &break_expr,
                                          const semantic::ExprInfo &info,
                                          std::optional<Place> dest_hint) {
-  (void)dest_hint;
-  (void)info;
-  auto res = lower_break_expr(break_expr);
-  if (res) {
-    return LowerResult::from_operand(*res);
-  }
-  return LowerResult::written();
+  return lower_break_node(break_expr, info, dest_hint);
 }
 
 LowerResult FunctionLowerer::visit_continue(const hir::Continue &continue_expr,
                                             const semantic::ExprInfo &info,
                                             std::optional<Place> dest_hint) {
+  (void)dest_hint;
+  (void)info;
+  return lower_continue_node(continue_expr, info, std::nullopt);
+}
+
+LowerResult FunctionLowerer::lower_loop_node(const hir::Loop &loop_expr,
+                                             const semantic::ExprInfo &info,
+                                             std::optional<Place> dest_hint) {
+  (void)info;
+  BasicBlockId body_block = create_block();
+  BasicBlockId break_block = create_block();
+
+  if (current_block) {
+    add_goto_from_current(body_block);
+  }
+  current_block = body_block;
+
+  std::optional<Place> break_dest =
+      dest_hint && loop_expr.break_type
+          ? std::optional<Place>(*dest_hint)
+          : std::nullopt;
+
+  push_loop_context(&loop_expr, body_block, break_block, loop_expr.break_type,
+                    std::move(break_dest));
+  (void)lower_block_expr(*loop_expr.body, get_unit_type());
+  if (current_block) {
+    add_goto_from_current(body_block);
+  }
+
+  LoopContext finalized = pop_loop_context(&loop_expr);
+  finalize_loop_context(finalized);
+
+  bool break_reachable =
+      finalized.break_result.has_value() || !finalized.break_predecessors.empty();
+  if (dest_hint) {
+    if (!break_reachable) {
+      current_block.reset();
+      return LowerResult::written();
+    }
+    current_block = finalized.break_block;
+    return LowerResult::written();
+  }
+
+  if (finalized.break_result) {
+    if (!break_reachable) {
+      current_block.reset();
+      return LowerResult::written();
+    }
+    current_block = finalized.break_block;
+    return LowerResult::from_operand(make_temp_operand(*finalized.break_result));
+  }
+
+  if (break_reachable) {
+    current_block = finalized.break_block;
+  } else {
+    current_block.reset();
+  }
+  return LowerResult::written();
+}
+
+LowerResult FunctionLowerer::lower_while_node(const hir::While &while_expr,
+                                              const semantic::ExprInfo &info,
+                                              std::optional<Place> dest_hint) {
+  (void)info;
+  BasicBlockId cond_block = create_block();
+  BasicBlockId body_block = create_block();
+  BasicBlockId break_block = create_block();
+
+  if (current_block) {
+    add_goto_from_current(cond_block);
+  }
+  current_block = cond_block;
+
+  std::optional<Place> break_dest =
+      dest_hint && while_expr.break_type
+          ? std::optional<Place>(*dest_hint)
+          : std::nullopt;
+
+  auto &ctx = push_loop_context(&while_expr, cond_block, break_block,
+                                while_expr.break_type, std::move(break_dest));
+
+  Operand condition = lower_node_operand(*while_expr.condition);
+  if (current_block) {
+    branch_on_bool(condition, body_block, break_block);
+    ctx.break_predecessors.push_back(cond_block);
+  }
+
+  switch_to_block(body_block);
+  (void)lower_block_expr(*while_expr.body, get_unit_type());
+  if (current_block) {
+    add_goto_from_current(cond_block);
+  }
+
+  LoopContext finalized = pop_loop_context(&while_expr);
+  finalize_loop_context(finalized);
+
+  bool break_reachable = !finalized.break_predecessors.empty();
+  if (dest_hint) {
+    if (!break_reachable) {
+      current_block.reset();
+      return LowerResult::written();
+    }
+    current_block = finalized.break_block;
+    return LowerResult::written();
+  }
+
+  if (finalized.break_result) {
+    if (!break_reachable) {
+      current_block.reset();
+      return LowerResult::written();
+    }
+    current_block = finalized.break_block;
+    return LowerResult::from_operand(make_temp_operand(*finalized.break_result));
+  }
+
+  if (break_reachable) {
+    current_block = finalized.break_block;
+  } else {
+    current_block.reset();
+  }
+  return LowerResult::written();
+}
+
+LowerResult FunctionLowerer::lower_break_node(const hir::Break &break_expr,
+                                              const semantic::ExprInfo &info,
+                                              std::optional<Place> dest_hint) {
   (void)info;
   (void)dest_hint;
-  (void)lower_continue_expr(continue_expr);
+  auto target = hir::helper::get_break_target(break_expr);
+  const void *key =
+      std::visit([](auto *loop_ptr) -> const void * { return loop_ptr; }, target);
+  LoopContext &ctx = lookup_loop_context(key);
+
+  std::optional<semantic::ExprInfo> value_info;
+  std::optional<LowerResult> value_res;
+  if (break_expr.value) {
+    value_info = hir::helper::get_expr_info(**break_expr.value);
+    value_res = lower_node(**break_expr.value, ctx.break_dest);
+  }
+
+  BasicBlockId from_block =
+      current_block ? current_block_id() : ctx.break_block;
+
+  if (ctx.break_dest) {
+    if (value_res) {
+      value_res->write_to_dest(*this, *ctx.break_dest, *value_info);
+    } else if (ctx.break_type && !is_unit_type(*ctx.break_type) &&
+               !is_never_type(*ctx.break_type)) {
+      throw std::logic_error("Break value required for loop expression");
+    }
+  } else if (ctx.break_result) {
+    if (!value_res) {
+      throw std::logic_error("Break value required for loop expression");
+    }
+    Operand op = value_res->as_operand(*this, *value_info);
+    TempId temp = materialize_operand(op, *ctx.break_type);
+    ctx.break_incomings.push_back(PhiIncoming{from_block, temp});
+  }
+
+  ctx.break_predecessors.push_back(from_block);
+  add_goto_from_current(ctx.break_block);
+  return LowerResult::written();
+}
+
+LowerResult FunctionLowerer::lower_continue_node(
+    const hir::Continue &continue_expr, const semantic::ExprInfo &info,
+    std::optional<Place> dest_hint) {
+  (void)info;
+  (void)dest_hint;
+  auto target = hir::helper::get_continue_target(continue_expr);
+  const void *key =
+      std::visit([](auto *loop_ptr) -> const void * { return loop_ptr; }, target);
+  LoopContext &ctx = lookup_loop_context(key);
+  add_goto_from_current(ctx.continue_block);
   return LowerResult::written();
 }
 

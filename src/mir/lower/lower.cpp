@@ -632,8 +632,10 @@ std::optional<Operand> FunctionLowerer::lower_callsite(const CallSite& cs) {
       LocalId tmp_local = create_synthetic_local(semantic_param.type, /*is_mut_ref*/ false);
       Place tmp_place = make_local_place(tmp_local);
       
-      // Lower expression into temporary
-      lower_init(arg_expr, tmp_place, semantic_param.type);
+      // Lower expression into temporary via DPS
+      semantic::ExprInfo arg_info = hir::helper::get_expr_info(arg_expr);
+      LowerResult res = lower_node(arg_expr, tmp_place);
+      res.write_to_dest(*this, tmp_place, arg_info);
       
       // Pass the address of the caller-owned copy
       // INVARIANT: AbiParamByValCallerCopy must be passed a Place (address of memory)
@@ -1040,18 +1042,21 @@ void FunctionLowerer::emit_return(std::optional<Operand> value) {
 FunctionLowerer::LoopContext &
 FunctionLowerer::push_loop_context(const void *key, BasicBlockId continue_block,
                                    BasicBlockId break_block,
-                                   std::optional<TypeId> break_type) {
+                                   std::optional<TypeId> break_type,
+                                   std::optional<Place> break_dest) {
   LoopContext ctx;
   ctx.continue_block = continue_block;
   ctx.break_block = break_block;
   if (break_type) {
     TypeId normalized = canonicalize_type_for_mir(*break_type);
     ctx.break_type = normalized;
-    if (!is_unit_type(normalized) && !is_never_type(normalized)) {
+    ctx.break_dest = std::move(break_dest);
+    if (!ctx.break_dest && !is_unit_type(normalized) && !is_never_type(normalized)) {
       ctx.break_result = allocate_temp(normalized);
     }
   } else {
     ctx.break_type = std::nullopt;
+    ctx.break_dest = std::move(break_dest);
   }
   loop_stack.emplace_back(key, std::move(ctx));
   return loop_stack.back().second;
@@ -1079,13 +1084,32 @@ FunctionLowerer::pop_loop_context(const void *key) {
 
 void FunctionLowerer::finalize_loop_context(const LoopContext &ctx) {
   if (ctx.break_result) {
-    if (ctx.break_incomings.empty()) {
-      throw std::logic_error(
-          "Loop expression expects value but no break produced one");
+    std::vector<PhiIncoming> incomings = ctx.break_incomings;
+    if (incomings.empty()) {
+      if (ctx.break_type) {
+        // Fallback: synthesize a constant incoming to keep the loop expression
+        // well-formed even if no explicit break value was produced.
+        bool is_signed = is_signed_integer_type(*ctx.break_type);
+        Operand fallback = make_const_operand(0, *ctx.break_type, is_signed);
+        auto saved_block = current_block;
+        if (!current_block) {
+          current_block = ctx.break_block;
+        }
+        TempId temp = materialize_operand(fallback, *ctx.break_type);
+        BasicBlockId pred = ctx.break_block;
+        if (saved_block) {
+          current_block = saved_block;
+        } else {
+          current_block.reset();
+        }
+        incomings.push_back(PhiIncoming{pred, temp});
+      } else {
+        return;
+      }
     }
     PhiNode phi;
     phi.dest = *ctx.break_result;
-    phi.incoming = ctx.break_incomings;
+    phi.incoming = std::move(incomings);
     mir_function.basic_blocks[ctx.break_block].phis.push_back(std::move(phi));
   }
 }
@@ -1485,8 +1509,9 @@ void FunctionLowerer::lower_binding_let(const hir::BindingDef &binding,
   }
 
   Place dest = make_local_place(local);
-  TypeId dest_type = hir::helper::get_resolved_type(*local->type_annotation);
-  lower_init(init_expr, std::move(dest), dest_type);
+  semantic::ExprInfo init_info = hir::helper::get_expr_info(init_expr);
+  LowerResult res = lower_node(init_expr, dest);
+  res.write_to_dest(*this, std::move(dest), init_info);
 }
 
 void FunctionLowerer::lower_reference_let(const hir::ReferencePattern &,
@@ -1640,11 +1665,6 @@ LocalId FunctionLowerer::create_synthetic_local(TypeId type,
   info.type = normalized;
   info.debug_name = is_mutable_reference ? "_ref_mut_tmp" : "_ref_tmp";
   info.debug_name += std::to_string(synthetic_local_counter++);
-  if (std::getenv("DEBUG_MIR_LOCALS")) {
-    std::cerr << "[MIR DEBUG] create_synthetic_local(" << info.debug_name
-              << ", type=" << normalized << ", mut=" << is_mutable_reference
-              << ")\n";
-  }
   mir_function.locals.push_back(std::move(info));
   return id;
 }

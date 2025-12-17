@@ -57,11 +57,12 @@ struct FunctionLowerer {
 	MirFunction lower();
 
 private:
-	struct LoopContext {
+		struct LoopContext {
 		BasicBlockId continue_block = 0;
 		BasicBlockId break_block = 0;
 		std::optional<TypeId> break_type;
 		std::optional<TempId> break_result;
+		std::optional<Place> break_dest;
 		std::vector<PhiIncoming> break_incomings;
 		std::vector<BasicBlockId> break_predecessors;
 	};
@@ -128,7 +129,8 @@ private:
 	LoopContext& push_loop_context(const void* key,
 				   BasicBlockId continue_block,
 				   BasicBlockId break_block,
-				   std::optional<TypeId> break_type);
+				   std::optional<TypeId> break_type,
+				   std::optional<Place> break_dest);
 	LoopContext& lookup_loop_context(const void* key);
 	LoopContext pop_loop_context(const void* key);
 	void finalize_loop_context(const LoopContext& ctx);
@@ -260,6 +262,11 @@ private:
         LowerResult visit_continue(const hir::Continue& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
         LowerResult visit_return(const hir::Return& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
         LowerResult visit_unary(const hir::UnaryOp& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+
+        LowerResult lower_loop_node(const hir::Loop& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult lower_while_node(const hir::While& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult lower_break_node(const hir::Break& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
+        LowerResult lower_continue_node(const hir::Continue& node, const semantic::ExprInfo& info, std::optional<Place> dest_hint);
 	
 	// Process call arguments according to callee's ABI signature
 };
