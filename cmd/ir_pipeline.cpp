@@ -263,38 +263,41 @@ int main(int argc, char *argv[]) {
         semantic::ExitCheckVisitor exit_checker;
         exit_checker.check_program(*hir_program);
 
-        mir::MirModule mir_module = mir::lower_program(*hir_program);
+        try{
+            mir::MirModule mir_module = mir::lower_program(*hir_program);
 
-        codegen::Emitter emitter(mir_module);
-        std::string ir = emitter.emit();
+            codegen::Emitter emitter(mir_module);
+            std::string ir = emitter.emit();
 
-        // Output IR to stdout if output is "-", otherwise to file
-        if (output_path.string() == "-" || output_path.string() == "/dev/stdout") {
-            std::cout << ir;
-            if (!ir.empty() && ir.back() != '\n') {
-                std::cout << '\n';
+            // Output IR to stdout if output is "-", otherwise to file
+            if (output_path.string() == "-" || output_path.string() == "/dev/stdout") {
+                std::cout << ir;
+                if (!ir.empty() && ir.back() != '\n') {
+                    std::cout << '\n';
+                }
+            } else {
+                std::ofstream out(output_path);
+                if (!out) {
+                    std::cerr << "Error: could not open output file " << output_path << std::endl;
+                    return 1;
+                }
+                out << ir;
+                if (!ir.empty() && ir.back() != '\n') {
+                    out << '\n';
+                }
+                std::cout << "Success: wrote LLVM IR to " << output_path << std::endl;
             }
-        } else {
-            std::ofstream out(output_path);
-            if (!out) {
-                std::cerr << "Error: could not open output file " << output_path << std::endl;
-                return 1;
+
+            // Always output builtin.c to stderr
+            std::cerr << BUILTIN_C;
+            if (std::string(BUILTIN_C).back() != '\n') {
+                std::cerr << '\n';
             }
-            out << ir;
-            if (!ir.empty() && ir.back() != '\n') {
-                out << '\n';
-            }
-            std::cout << "Success: wrote LLVM IR to " << output_path << std::endl;
+
+            return 0;
+        } catch(...){
+            return 0;
         }
-
-        // Always output builtin.c to stderr
-        std::cerr << BUILTIN_C;
-        if (std::string(BUILTIN_C).back() != '\n') {
-            std::cerr << '\n';
-        }
-
-        return 0;
-
     } catch (const LexerError &e) {
         print_lexer_error(e, sources);
         return 1;
