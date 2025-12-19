@@ -1,28 +1,24 @@
-.PHONY: build run clean
-
-# Build directory
-BUILD_DIR ?= build/ninja-debug
-BINARY := $(BUILD_DIR)/cmd/ir_pipeline
+.PHONY: build run clean help
 
 build:
 	@echo "Building compiler..."
-	cmake --preset ninja-debug
-	cmake --build $(BUILD_DIR)
-	@echo "Build complete. Binary: $(BINARY)"
+	cmake --preset default
+	cmake --build build/default
+	@echo "Build complete."
 
 run: build
 	@echo "Running compiler from STDIN..."
 	@echo "Enter source code (use Ctrl+D to end):"
-	@$(BINARY) - /dev/stdout
+	@./build/default/cmd/ir_pipeline - /dev/stdout
 
 clean:
 	@echo "Cleaning build directory..."
-	rm -rf $(BUILD_DIR)
+	@rm -rf build/default
 	@echo "Clean complete"
 
 help:
 	@echo "Available targets:"
-	@echo "  make build - Build the compiler (requires CMake)"
+	@echo "  make build - Build the compiler (requires CMake and a C++ compiler)"
 	@echo "  make run   - Run compiler from STDIN (reads source code, outputs IR to STDOUT and builtin.c to STDERR)"
 	@echo "  make clean - Remove build artifacts"
 	@echo "  make help  - Show this help message"
