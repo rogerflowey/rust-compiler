@@ -927,7 +927,7 @@ void FunctionLowerer::handle_return_value(const std::optional<std::unique_ptr<hi
 
   // Case 3: void semantic return
   if (is_void_semantic(return_desc)) {
-    std::cerr<<"WARNING: void semantic but returns a value, lowering for side effects only\n";
+    //std::cerr<<"WARNING: void semantic but returns a value, lowering for side effects only\n";
     // Void semantic: compute the value (for side effects) but don't return it
     if (value_ptr && *value_ptr) {
       (void)lower_expr(**value_ptr);

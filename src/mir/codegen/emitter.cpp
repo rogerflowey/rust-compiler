@@ -700,7 +700,7 @@ void Emitter::emit_terminator(const mir::Terminator &terminator) {
 
               if (is_void_semantic(ret_desc) || is_indirect_sret(ret_desc)) {
                   if (ret.value) {
-                    std::cerr << "WARNING: void/sret function has ReturnTerminator with value; ignoring\n";
+                    //std::cerr << "WARNING: void/sret function has ReturnTerminator with value; ignoring\n";
                   }
                   current_block_builder_->emit_ret_void();
                   return;

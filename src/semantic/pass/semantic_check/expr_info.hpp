@@ -218,7 +218,7 @@ inline EndpointSet sequence_endpoints(const std::vector<ExprInfo>& infos) {
     EndpointSet current_endpoints = {NormalEndpoint{}};
     for (const auto& info : infos) {
         if (!current_endpoints.contains(NormalEndpoint{})) {
-            std::cerr<<"[WARNING] dead code detected"<<std::endl;
+            //std::cerr<<"[WARNING] dead code detected"<<std::endl;
             break;
         }
         current_endpoints.erase(NormalEndpoint{});
