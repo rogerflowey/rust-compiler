@@ -6,10 +6,8 @@ build:
 	cmake --build build/default
 	@echo "Build complete."
 
-run: build
-	@echo "Running compiler from STDIN..."
-	@echo "Enter source code (use Ctrl+D to end):"
-	@./build/default/cmd/ir_pipeline - /dev/stdout
+run:
+	@./build/default/cmd/ir_pipeline - -
 
 clean:
 	@echo "Cleaning build directory..."
