@@ -2,6 +2,8 @@
 
 The **Middle Intermediate Representation (MIR)** module transforms the semantic HIR (High-level Intermediate Representation) into a lower-level form suitable for LLVM IR code generation. MIR serves as the bridge between high-level semantic analysis and low-level code generation.
 
+> **📖 For a comprehensive guide to MIR design and lowering, see [MIR_DESIGN_AND_LOWERING.md](MIR_DESIGN_AND_LOWERING.md)**
+
 ## Architecture
 
 The MIR module is organized into three main subsystems:
