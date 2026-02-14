@@ -52,6 +52,7 @@ add_subdirectory(src/parser)
 add_subdirectory(src/type)
 add_subdirectory(src/semantic)
 add_subdirectory(src/mir)
+add_subdirectory(src/opt/mir)
 add_subdirectory(cmd)
 
 

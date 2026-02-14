@@ -1,0 +1,23 @@
+#pragma once
+
+#include "type/type.hpp"
+
+#include <string>
+
+namespace opt::mir {
+
+/// Mutability of a storage location.
+enum class Mutability { Immutable, Mutable };
+
+/// Slot — represents a distinct storage location (stack variable, heap object,
+/// global). Distinct SlotIds are guaranteed not to alias ("Semantic Slicing").
+struct Slot {
+  enum class Kind { StackLocal, HeapObject, Global, Temp };
+
+  Kind kind = Kind::StackLocal;
+  type::TypeId type = type::invalid_type_id;
+  std::string debug_name;
+  Mutability mutability = Mutability::Immutable;
+};
+
+} // namespace opt::mir
