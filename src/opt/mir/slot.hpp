@@ -12,7 +12,12 @@ enum class Mutability { Immutable, Mutable };
 /// Slot — represents a distinct storage location (stack variable, heap object,
 /// global). Distinct SlotIds are guaranteed not to alias ("Semantic Slicing").
 struct Slot {
-  enum class Kind { StackLocal, HeapObject, Global, Temp };
+  enum class Kind {
+    StackLocal,
+    HeapObject,
+    Global,
+    // Temp slots are now just StackLocal
+  };
 
   Kind kind = Kind::StackLocal;
   type::TypeId type = type::invalid_type_id;

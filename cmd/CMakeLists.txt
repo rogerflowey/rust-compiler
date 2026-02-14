@@ -20,6 +20,7 @@ target_link_libraries(ir_pipeline PRIVATE
     parser
     semantic
     mir
+    opt_mir
 )
 
 # Set C++ standard

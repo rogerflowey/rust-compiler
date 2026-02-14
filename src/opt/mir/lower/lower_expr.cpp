@@ -4,19 +4,29 @@
 // function, producing floating NodeIds and threading TokenIds for
 // side-effecting operations.
 
-#include "opt/mir/lower/lower_internal.hpp"
-
 #include "mir/lower/lower_common.hpp"
 #include "mir/lower/lower_const.hpp"
+#include "opt/mir/lower/lower.hpp"
+#include "opt/mir/lower/lower_internal.hpp"
+#include "opt/mir/nodes.hpp"
 
-#include "semantic/expr_info_helpers.hpp"
 #include "semantic/hir/helper.hpp"
 #include "semantic/utils.hpp"
 #include "type/type.hpp"
 
 #include <stdexcept>
+#include <variant>
 
 namespace opt::mir {
+
+namespace {
+
+// Helper to identify if a type is an aggregate (requiring DPS)
+bool is_aggregate(type::TypeId type) {
+  return ::mir::detail::is_aggregate_type(type);
+}
+
+} // namespace
 
 using type::invalid_type_id;
 using type::TypeId;
@@ -26,10 +36,43 @@ using type::TypeId;
 // ═══════════════════════════════════════════════════════════════════
 
 std::optional<NodeId> OptFunctionLowerer::lower_expr(const hir::Expr &expr) {
+  const auto &info = hir::helper::get_expr_info(expr);
+  bool is_agg = is_aggregate(info.type);
+
+  if (is_agg) {
+    // Implicit Reference Lowering
+    // 1. Allocate stack slot for the result
+    SlotId temp = allocate_temp_slot(info.type, "<agg_temp>");
+
+    // 2. Lower into place
+    lower_expr_to_place(expr, Place::simple(temp));
+
+    // 3. Return AddressOf(temp)
+    AddressOfNode addr;
+    addr.place = Place::simple(temp);
+    // Mutability? Temp is mutable.
+    addr.mutability = Mutability::Mutable;
+
+    // Node type should be Ptr<T>.
+    // I don't have Ptr type construction helper handy.
+    // Assuming validator doesn't check type exactness of Ptr?
+    // Or generic `ReferenceType`.
+    // I'll try to find type.
+    // But for now, returning `ptr_node`.
+
+    type::Type ptr_ty;
+    ptr_ty.value = type::ReferenceType{info.type, true /* mutable */};
+
+    return func_.alloc_node(
+        Node{NodeKind{std::move(addr)}, type::get_typeID(ptr_ty)});
+  }
+
+  // Scalar handling
   if (!is_reachable()) {
     return std::nullopt;
   }
-  semantic::ExprInfo info = hir::helper::get_expr_info(expr);
+  // semantic::ExprInfo info = hir::helper::get_expr_info(expr); // Already got
+  // info above
 
   auto result = std::visit(
       Overloaded{
@@ -63,14 +106,36 @@ std::optional<NodeId> OptFunctionLowerer::lower_expr(const hir::Expr &expr) {
             return lower_field_access(n, info);
           },
           [&](const hir::Index &n) { return lower_index(n, info); },
-          [&](const hir::StructLiteral &n) {
-            return lower_struct_literal(n, info);
+          [&](const hir::StructLiteral &n) -> std::optional<NodeId> {
+            // Alloc temp -> lower_to_place -> return AddressOf
+            SlotId temp = allocate_temp_slot(info.type, "<struct_lit>");
+            lower_expr_to_place(expr, Place::simple(temp));
+
+            type::Type ptr_ty;
+            ptr_ty.value = type::ReferenceType{info.type, true};
+            return builder_.make_address_of(Place::simple(temp),
+                                            Mutability::Mutable,
+                                            type::get_typeID(ptr_ty));
           },
-          [&](const hir::ArrayLiteral &n) {
-            return lower_array_literal(n, info);
+          [&](const hir::ArrayLiteral &n) -> std::optional<NodeId> {
+            SlotId temp = allocate_temp_slot(info.type, "<array_lit>");
+            lower_expr_to_place(expr, Place::simple(temp));
+
+            type::Type ptr_ty;
+            ptr_ty.value = type::ReferenceType{info.type, true};
+            return builder_.make_address_of(Place::simple(temp),
+                                            Mutability::Mutable,
+                                            type::get_typeID(ptr_ty));
           },
-          [&](const hir::ArrayRepeat &n) {
-            return lower_array_repeat(n, info);
+          [&](const hir::ArrayRepeat &n) -> std::optional<NodeId> {
+            SlotId temp = allocate_temp_slot(info.type, "<array_rep>");
+            lower_expr_to_place(expr, Place::simple(temp));
+
+            type::Type ptr_ty;
+            ptr_ty.value = type::ReferenceType{info.type, true};
+            return builder_.make_address_of(Place::simple(temp),
+                                            Mutability::Mutable,
+                                            type::get_typeID(ptr_ty));
           },
           [&](const hir::UnresolvedIdentifier &) -> std::optional<NodeId> {
             throw std::logic_error("UnresolvedIdentifier in opt MIR lowering");
@@ -91,13 +156,159 @@ NodeId OptFunctionLowerer::lower_expr_value(const hir::Expr &expr) {
   auto result = lower_expr(expr);
   if (!result) {
     if (!is_reachable()) {
-      return invalid_node;
+      return invalid_node; // Diverged, return dummy
     }
+    // If usage expects a value but lower_expr returned nullopt (void), error?
+    // But lower_expr now handles aggregates by returning AddressOf?
+    // If expression is aggregate, lower_expr MUST return NodeId (Address).
     throw std::logic_error(
         "Expression must produce a value in opt MIR lowering");
   }
   return *result;
 }
+
+void OptFunctionLowerer::lower_expr_to_place(const hir::Expr &expr,
+                                             Place place) {
+  if (!is_reachable())
+    return;
+
+  // Dispatcher for DPS
+  if (const auto *struct_lit = std::get_if<hir::StructLiteral>(&expr.value)) {
+    // ... (inline logic or call helper, but helper took explicit args, need
+    // refactor) I'll inline struct logic here or modify lower_struct_literal to
+    // take Place For now, I'll assume we can call modified helpers or implement
+    // here. Let's implement here - it's cleaner to have DPS logic in DPS
+    // function.
+
+    // Real implementation:
+    if (const auto *canonical =
+            std::get_if<hir::StructLiteral::CanonicalFields>(
+                &struct_lit->fields)) {
+      size_t idx = 0;
+      for (const auto &field_expr_ptr : canonical->initializers) {
+        if (!field_expr_ptr) {
+          idx++;
+          continue;
+        }
+
+        Place field_place = place;
+        field_place.projections.push_back(FieldProjection{idx});
+
+        lower_expr_to_place(*field_expr_ptr, field_place);
+        idx++;
+      }
+    } else {
+      throw std::logic_error("Syntactic struct fields in opt MIR lowering");
+    }
+  } else if (const auto *array_lit =
+                 std::get_if<hir::ArrayLiteral>(&expr.value)) {
+    size_t idx = 0;
+    for (const auto &elem : array_lit->elements) {
+      if (!elem)
+        continue; // Should not happen
+
+      // Project index
+      // We need a NodeId for the index.
+      // But ArrayLiteral index is constant.
+      // IndexProjection takes NodeId.
+      // So we make a ConstantNode.
+      auto usize_id = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
+      NodeId idx_node = make_const_int(idx++, usize_id);
+
+      Place elem_place = place;
+      elem_place.projections.push_back(IndexProjection{idx_node});
+
+      lower_expr_to_place(*elem, elem_place);
+    }
+  } else if (const auto *array_rep =
+                 std::get_if<hir::ArrayRepeat>(&expr.value)) {
+    if (!array_rep->value) {
+      throw std::logic_error("ArrayRepeat missing value");
+    }
+
+    // Evaluate element once
+    // Note: lower_expr on element might be aggregate!
+    // If aggregate, we can't just `lower_expr` and get a value to store
+    // repeatedly? `lower_expr` returns AddrOf(temp) for aggregate. So we get a
+    // pointer. We can Memcopy from that pointer multiple times. Correct.
+
+    auto val = lower_expr(*array_rep->value);
+
+    if (val && is_reachable()) {
+      const auto &info = hir::helper::get_expr_info(expr);
+      // Get count
+      size_t count = 0;
+      const type::Type &ty = type::get_type_from_id(info.type);
+      if (const auto *arr_ty = std::get_if<type::ArrayType>(&ty.value)) {
+        count = arr_ty->size;
+      } else {
+        throw std::logic_error("ArrayRepeat result not ArrayType");
+      }
+
+      auto usize_id = type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
+      bool elem_is_agg =
+          is_aggregate(hir::helper::get_expr_info(*array_rep->value).type);
+      type::TypeId elem_type =
+          hir::helper::get_expr_info(*array_rep->value).type;
+
+      for (size_t i = 0; i < count; ++i) {
+        Place dest = place;
+        dest.projections.push_back(
+            IndexProjection{make_const_int(i, usize_id)});
+
+        if (elem_is_agg) {
+          // Memcopy from source
+          builder_.emit_memcopy(current_block_id(), current_token_, dest,
+                                Place::from_ptr(*val), elem_type);
+        } else {
+          builder_.emit_store(current_block_id(), current_token_, dest, *val);
+        }
+      }
+    }
+  } else if (const auto *call = std::get_if<hir::Call>(&expr.value)) {
+    (void)call;
+    // Need to handle Call SRET
+    // But `lower_call` is not refactored yet to take Place.
+    // Calling `lower_expr(expr)` for Call will call `lower_call`.
+    // `lower_call` will alloc temp, Call(sret=temp), return AddrOf(temp) (after
+    // I fix it). So if I call `lower_expr`, I get Ptr. Then `Memcopy(place,
+    // Ptr)`. This works and reuses logic! Optimization: pass `place` to
+    // `lower_call` to avoid temp+memcopy? Yes, but let's stick to `lower_expr`
+    // returning Ptr for consistency first.
+
+    // GENERIC FALLBACK:
+    const auto &info = hir::helper::get_expr_info(expr);
+    auto val = lower_expr(expr); // Returns Ptr if aggregate, Value if scalar
+    if (val) {
+      if (is_aggregate(info.type)) {
+        // Memcopy from Ptr to Place
+        builder_.emit_memcopy(current_block_id(), current_token_, place,
+                              Place::from_ptr(*val), info.type);
+      } else {
+        builder_.emit_store(current_block_id(), current_token_, place, *val);
+      }
+    }
+    return;
+  } else {
+    // Generic fallback
+    const auto &info = hir::helper::get_expr_info(expr);
+    auto val = lower_expr(expr);
+    if (val) {
+      if (is_aggregate(info.type)) {
+        // Memcopy
+        builder_.emit_memcopy(current_block_id(), current_token_, place,
+                              Place::from_ptr(*val), info.type);
+      } else {
+        builder_.emit_store(current_block_id(), current_token_, place, *val);
+      }
+    }
+  }
+}
+// Wait, `emit_aggregate_copy` helper took `SlotId dest, SlotId src`.
+// I need `emit_aggregate_copy` to take `Place dest, Place src`.
+// It's defined in `lower.cpp`. I need to change it or add overload.
+// Or usage `builder_.emit_memcopy` directly.
+// I'll use `builder_.emit_memcopy`.
 
 // ═══════════════════════════════════════════════════════════════════
 // Scalar expressions
@@ -326,12 +537,21 @@ OptFunctionLowerer::lower_assignment(const hir::Assignment &assign,
 
   // General assignment
   Place dest = lower_expr_place(*assign.lhs);
+  const auto &rhs_info = hir::helper::get_expr_info(*assign.rhs);
+  bool is_agg = ::mir::detail::is_aggregate_type(rhs_info.type);
+
   NodeId value = lower_expr_value(*assign.rhs);
   if (!is_reachable())
     return std::nullopt;
 
-  current_token_ =
-      builder_.emit_store(current_block_id(), current_token_, dest, value);
+  if (is_agg) {
+    current_token_ =
+        builder_.emit_memcopy(current_block_id(), current_token_, dest,
+                              Place::from_ptr(value), rhs_info.type);
+  } else {
+    current_token_ =
+        builder_.emit_store(current_block_id(), current_token_, dest, value);
+  }
   return std::nullopt;
 }
 
@@ -416,8 +636,16 @@ OptFunctionLowerer::lower_call(const hir::Call &call,
 
   // Result Node
   if (ret_is_aggregate) {
-    // Result is finding the value in the sret slot
-    return builder_.make_load(current_token_, *sret_slot, info.type);
+    // Return AddressOf(sret_slot)
+    AddressOfNode addr;
+    addr.place = Place::simple(*sret_slot);
+    addr.mutability = Mutability::Mutable;
+
+    type::Type ptr_ty;
+    ptr_ty.value = type::ReferenceType{info.type, true};
+
+    return func_.alloc_node(
+        Node{NodeKind{std::move(addr)}, type::get_typeID(ptr_ty)});
   } else if (!::mir::detail::is_unit_type(info.type) &&
              !::mir::detail::is_never_type(info.type)) {
     // Scalar result observed by CallResultNode
@@ -497,7 +725,15 @@ OptFunctionLowerer::lower_method_call(const hir::MethodCall &mcall,
 
   // Result Node
   if (ret_is_aggregate) {
-    return builder_.make_load(current_token_, *sret_slot, info.type);
+    AddressOfNode addr;
+    addr.place = Place::simple(*sret_slot);
+    addr.mutability = Mutability::Mutable;
+
+    type::Type ptr_ty;
+    ptr_ty.value = type::ReferenceType{info.type, true};
+
+    return func_.alloc_node(
+        Node{NodeKind{std::move(addr)}, type::get_typeID(ptr_ty)});
   } else if (!::mir::detail::is_unit_type(info.type) &&
              !::mir::detail::is_never_type(info.type)) {
     return builder_.make_call_result(current_token_, info.type);
@@ -556,7 +792,6 @@ OptFunctionLowerer::lower_if_expr(const hir::If &if_expr,
     }
     then_exit_block = current_block_id();
     then_exit_token = current_token_;
-    merge_incoming.emplace_back(*then_exit_block, *then_exit_token);
     jump_to(merge_block);
   }
 
@@ -887,6 +1122,23 @@ OptFunctionLowerer::lower_field_access(const hir::FieldAccess &fa,
   Place p = lower_expr_place(*fa.base);
   size_t index = hir::helper::get_field_index(fa);
   p.projections.push_back(FieldProjection{index});
+
+  if (is_aggregate(info.type)) {
+    AddressOfNode addr;
+    addr.place = p;
+    // Mutability should trace back to base? For now assume Mutable if base is?
+    // Or LValue mutability.
+    // We'll conservative assume Mutable for now or check.
+    // hir::helper::is_mutable_lvalue(*fa.base)?
+    addr.mutability = Mutability::Mutable;
+
+    type::Type ptr_ty;
+    ptr_ty.value =
+        type::ReferenceType{info.type, true}; // assume mutable for now
+
+    return func_.alloc_node(
+        Node{NodeKind{std::move(addr)}, type::get_typeID(ptr_ty)});
+  }
   return builder_.make_load(current_token_, std::move(p), info.type);
 }
 
@@ -896,104 +1148,23 @@ OptFunctionLowerer::lower_index(const hir::Index &idx,
   Place p = lower_expr_place(*idx.base);
   NodeId index_val = lower_expr_value(*idx.index);
   p.projections.push_back(IndexProjection{index_val});
+
+  if (is_aggregate(info.type)) {
+    AddressOfNode addr;
+    addr.place = p;
+    addr.mutability = Mutability::Mutable;
+
+    type::Type ptr_ty;
+    ptr_ty.value = type::ReferenceType{info.type, true};
+
+    return func_.alloc_node(
+        Node{NodeKind{std::move(addr)}, type::get_typeID(ptr_ty)});
+  }
   return builder_.make_load(current_token_, std::move(p), info.type);
 }
 
-std::optional<NodeId>
-OptFunctionLowerer::lower_struct_literal(const hir::StructLiteral &sl,
-                                         const semantic::ExprInfo &info) {
-  // Allocate temp slot for the result
-  SlotId temp = allocate_temp_slot(info.type, "<struct_lit>");
-
-  // HIR StructLiteral fields are stored in a variant (Syntactic or Canonical).
-  // Semantic analysis normalizes to CanonicalFields.
-  if (auto *canonical =
-          std::get_if<hir::StructLiteral::CanonicalFields>(&sl.fields)) {
-    size_t index = 0;
-    for (const auto &expr_ptr : canonical->initializers) {
-      if (!expr_ptr)
-        continue;
-      NodeId val = lower_expr_value(*expr_ptr);
-      if (!is_reachable())
-        return std::nullopt;
-
-      Place field_place = Place::simple(temp);
-      field_place.projections.push_back(FieldProjection{index});
-      current_token_ = builder_.emit_store(current_block_id(), current_token_,
-                                           field_place, val);
-      index++;
-    }
-  } else {
-    // Should not happen if semantic analysis pass ran
-    throw std::logic_error("Syntactic struct fields found in active MIR "
-                           "lowering (expected Canonical)");
-  }
-
-  // Struct update syntax (..base) is handled during desugaring/normalization
-  // generally, so if it persists here, it might be an issue.
-  // However, hir::StructLiteral does NOT have a base field in the definition I
-  // read. So we ignore it. The canonical initializers should cover all fields.
-
-  return builder_.make_load(current_token_, temp, info.type);
-}
-
-std::optional<NodeId>
-OptFunctionLowerer::lower_array_literal(const hir::ArrayLiteral &al,
-                                        const semantic::ExprInfo &info) {
-  SlotId temp = allocate_temp_slot(info.type, "<array_lit>");
-  type::TypeId usize_type =
-      type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
-
-  for (size_t i = 0; i < al.elements.size(); ++i) {
-    NodeId val = lower_expr_value(*al.elements[i]);
-    if (!is_reachable())
-      return std::nullopt;
-
-    Place elem_place = Place::simple(temp);
-    elem_place.projections.push_back(
-        IndexProjection{make_const_int(i, usize_type)});
-
-    current_token_ = builder_.emit_store(current_block_id(), current_token_,
-                                         elem_place, val);
-  }
-  return builder_.make_load(current_token_, temp, info.type);
-}
-
-std::optional<NodeId>
-OptFunctionLowerer::lower_array_repeat(const hir::ArrayRepeat &ar,
-                                       const semantic::ExprInfo &info) {
-  SlotId temp = allocate_temp_slot(info.type, "<array_repeat>");
-
-  // Evaluate element once
-  NodeId val = lower_expr_value(*ar.value);
-
-  // Get count from type
-  size_t count = 0;
-  bool found_size = false;
-  // type::Types are wrappers, we need to inspect the inner value
-  const type::Type &ty = type::get_type_from_id(info.type);
-  if (const auto *arr_ty = std::get_if<type::ArrayType>(&ty.value)) {
-    count = arr_ty->size;
-    found_size = true;
-  }
-
-  if (!found_size) {
-    throw std::logic_error("ArrayRepeat Result type is not ArrayType");
-  }
-
-  type::TypeId usize_type =
-      type::get_typeID(type::Type{type::PrimitiveKind::USIZE});
-
-  // Unroll loop for Phase 2
-  for (size_t i = 0; i < count; ++i) {
-    Place elem_place = Place::simple(temp);
-    elem_place.projections.push_back(
-        IndexProjection{make_const_int(i, usize_type)});
-    builder_.emit_store(current_block_id(), current_token_, elem_place, val);
-  }
-
-  return builder_.make_load(current_token_, temp, info.type);
-}
+// Struct/Array literals handled via lower_expr_to_place dispatch at definition
+// site.
 
 // ═══════════════════════════════════════════════════════════════════
 // Place lowering

@@ -303,11 +303,12 @@ void OptFunctionLowerer::lower_let_stmt(const hir::LetStmt &let_stmt) {
   if (let_stmt.pattern) {
     if (const auto *binding =
             std::get_if<hir::BindingDef>(&let_stmt.pattern->value)) {
-      if (auto *local_ptr = std::get_if<hir::Local *>(&binding->local)) {
+      if (const auto *local_ptr = std::get_if<hir::Local *>(&binding->local)) {
         local = *local_ptr;
       }
     }
   }
+
   if (!local) {
     // Underscore or unsupported pattern — lower init for side effects only
     if (let_stmt.initializer) {
@@ -319,10 +320,23 @@ void OptFunctionLowerer::lower_let_stmt(const hir::LetStmt &let_stmt) {
   SlotId slot = require_slot(local);
 
   if (let_stmt.initializer) {
-    auto init_value = lower_expr(*let_stmt.initializer);
-    if (init_value && is_reachable()) {
-      current_token_ = builder_.emit_store(current_block_id(), current_token_,
-                                           slot, *init_value);
+    if (!is_reachable())
+      return;
+
+    const auto &init = *let_stmt.initializer;
+    const auto &info = hir::helper::get_expr_info(init);
+    bool is_agg = ::mir::detail::is_aggregate_type(info.type);
+
+    NodeId val = lower_expr_value(init);
+    if (is_reachable()) {
+      if (is_agg) {
+        current_token_ = builder_.emit_memcopy(
+            current_block_id(), current_token_, Place::simple(slot),
+            Place::from_ptr(val), info.type);
+      } else {
+        current_token_ = builder_.emit_store(current_block_id(), current_token_,
+                                             Place::simple(slot), val);
+      }
     }
   }
 }
@@ -448,7 +462,7 @@ NodeId OptFunctionLowerer::make_const_bool(bool value) {
 
 SlotId OptFunctionLowerer::allocate_temp_slot(type::TypeId type,
                                               std::string name) {
-  return builder_.new_slot(Slot::Kind::Temp, type, std::move(name),
+  return builder_.new_slot(Slot::Kind::StackLocal, type, std::move(name),
                            Mutability::Mutable);
 }
 

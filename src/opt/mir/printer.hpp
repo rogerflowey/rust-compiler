@@ -67,9 +67,6 @@ private:
       case Slot::Kind::Global:
         os_ << "global";
         break;
-      case Slot::Kind::Temp:
-        os_ << "temp";
-        break;
       }
       os_ << " type:" << raw_type(s.type);
       if (s.mutability == Mutability::Mutable) {
