@@ -16,7 +16,7 @@ target_link_libraries(opt_mir
         type
     PRIVATE
         semantic
-        mir
+        mir_common
 )
 
 if(BUILD_TESTING)

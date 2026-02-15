@@ -35,23 +35,13 @@ def main():
         
         # ir_pipeline <input> [output]
         # We want output to be same name but .ir extension
+        # The ir_pipeline tool writes Opt MIR to the output file (argv[2]).
+        
         output_file = os.path.splitext(r_file)[0] + ".ir"
         
         try:
-            # Check if we can capture output or if it prints to stdout/stderr
-            # usage: ir_pipeline <input_file> [output.ll]
-            # But wait, looking at main.cpp:
-            # if argc == 3, output is argv[2]
-            # It also writes Opt MIR to .ir if successful
-            
-            # The ir_pipeline tool writes LLVM IR to the output file (argv[2]), 
-            # AND it writes Opt MIR to a file with .ir extension replacing the output extension.
-            # So if we pass output as foo.ll, it writes foo.ir for the Opt MIR.
-            
-            llvm_output = os.path.splitext(r_file)[0] + ".ll"
-            
             result = subprocess.run(
-                [compiler_bin, r_file, llvm_output],
+                [compiler_bin, r_file, output_file],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

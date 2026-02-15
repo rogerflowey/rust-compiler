@@ -7,8 +7,7 @@
 
 #include "src/ast/ast.hpp"
 #include "src/lexer/lexer.hpp"
-#include "src/mir/codegen/emitter.hpp"
-#include "src/mir/lower/lower.hpp"
+
 #include "src/opt/mir/lower/lower.hpp"
 #include "src/opt/mir/printer.hpp"
 #include "src/opt/mir/validator.hpp"
@@ -118,7 +117,7 @@ void print_semantic_error(const SemanticError &error,
 
 int main(int argc, char *argv[]) {
   if (argc < 2 || argc > 3) {
-    std::cerr << "Usage: " << argv[0] << " <input_file> [output.ll]"
+    std::cerr << "Usage: " << argv[0] << " <input_file> [output.ir]"
               << std::endl;
     return 1;
   }
@@ -126,7 +125,7 @@ int main(int argc, char *argv[]) {
   const std::filesystem::path input_path = argv[1];
   std::filesystem::path output_path =
       (argc == 3) ? std::filesystem::path(argv[2])
-                  : std::filesystem::path(argv[1]).replace_extension(".ll");
+                  : std::filesystem::path(argv[1]).replace_extension(".ir");
 
   span::SourceManager sources;
 
@@ -191,8 +190,6 @@ int main(int argc, char *argv[]) {
     semantic::ExitCheckVisitor exit_checker;
     exit_checker.check_program(*hir_program);
 
-    mir::MirModule mir_module = mir::lower_program(*hir_program);
-
     // Lower to Opt MIR and print
     try {
       opt::mir::OptModule opt_mod = opt::mir::lower_program(*hir_program);
@@ -205,17 +202,14 @@ int main(int argc, char *argv[]) {
       }
 
       // Output .ir file
-      std::filesystem::path opt_output_path = output_path;
-      opt_output_path.replace_extension(".ir");
-
-      std::ofstream opt_out(opt_output_path);
+      std::ofstream opt_out(output_path);
       if (opt_out) {
         opt::mir::Printer p(opt_out);
         p.print(opt_mod);
-        std::cout << "Success: wrote Opt MIR to " << opt_output_path
-                  << std::endl;
+        std::cout << "Success: wrote Opt MIR to " << output_path << std::endl;
       } else {
-        std::cerr << "Error: could not open " << opt_output_path << "\n";
+        std::cerr << "Error: could not open " << output_path << "\n";
+        return 1;
       }
 
     } catch (const std::exception &e) {
@@ -223,21 +217,6 @@ int main(int argc, char *argv[]) {
       return 1;
     }
 
-    codegen::Emitter emitter(mir_module);
-    std::string ir = emitter.emit();
-
-    std::ofstream out(output_path);
-    if (!out) {
-      std::cerr << "Error: could not open output file " << output_path
-                << std::endl;
-      return 1;
-    }
-    out << ir;
-    if (!ir.empty() && ir.back() != '\n') {
-      out << '\n';
-    }
-
-    std::cout << "Success: wrote LLVM IR to " << output_path << std::endl;
     return 0;
 
   } catch (const LexerError &e) {

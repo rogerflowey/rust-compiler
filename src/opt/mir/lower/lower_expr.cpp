@@ -4,8 +4,8 @@
 // function, producing floating NodeIds and threading TokenIds for
 // side-effecting operations.
 
-#include "mir/lower/lower_common.hpp"
-#include "mir/lower/lower_const.hpp"
+#include "common/mir/lower_const.hpp"
+#include "common/mir/utils.hpp"
 #include "opt/mir/lower/lower.hpp"
 #include "opt/mir/lower/lower_internal.hpp"
 #include "opt/mir/nodes.hpp"
@@ -985,11 +985,81 @@ LowerResult OptFunctionLowerer::lower_short_circuit(
 BinaryOpNode::Kind OptFunctionLowerer::classify_binary_op(
     const hir::BinaryOp &binary, type::TypeId lhs_type, type::TypeId rhs_type,
     type::TypeId result_type) {
-  // Delegate to old MIR classifier and convert the result.
-  // Both enums have identical value sequences.
-  ::mir::BinaryOpRValue::Kind old_kind = ::mir::detail::classify_binary_kind(
-      binary, lhs_type, rhs_type, result_type);
-  return static_cast<BinaryOpNode::Kind>(static_cast<int>(old_kind));
+  return std::visit(
+      Overloaded{
+          [&](const hir::Add &) {
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::UAdd
+                       : BinaryOpNode::Kind::IAdd;
+          },
+          [&](const hir::Subtract &) {
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::USub
+                       : BinaryOpNode::Kind::ISub;
+          },
+          [&](const hir::Multiply &) {
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::UMul
+                       : BinaryOpNode::Kind::IMul;
+          },
+          [&](const hir::Divide &) {
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::UDiv
+                       : BinaryOpNode::Kind::IDiv;
+          },
+          [&](const hir::Remainder &) {
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::URem
+                       : BinaryOpNode::Kind::IRem;
+          },
+          [&](const hir::BitAnd &) { return BinaryOpNode::Kind::BitAnd; },
+          [&](const hir::BitOr &) { return BinaryOpNode::Kind::BitOr; },
+          [&](const hir::BitXor &) { return BinaryOpNode::Kind::BitXor; },
+          [&](const hir::ShiftLeft &) { return BinaryOpNode::Kind::Shl; },
+          [&](const hir::ShiftRight &) {
+            // Logical shift for unsigned, arithmetic for signed
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::ShrLogical
+                       : BinaryOpNode::Kind::ShrArithmetic;
+          },
+          [&](const hir::Equal &) {
+            if (::mir::detail::is_bool_type(lhs_type))
+              return BinaryOpNode::Kind::BoolEq;
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::UCmpEq
+                       : BinaryOpNode::Kind::ICmpEq;
+          },
+          [&](const hir::NotEqual &) {
+            if (::mir::detail::is_bool_type(lhs_type))
+              return BinaryOpNode::Kind::BoolNe;
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::UCmpNe
+                       : BinaryOpNode::Kind::ICmpNe;
+          },
+          [&](const hir::LessThan &) {
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::UCmpLt
+                       : BinaryOpNode::Kind::ICmpLt;
+          },
+          [&](const hir::LessEqual &) {
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::UCmpLe
+                       : BinaryOpNode::Kind::ICmpLe;
+          },
+          [&](const hir::GreaterThan &) {
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::UCmpGt
+                       : BinaryOpNode::Kind::ICmpGt;
+          },
+          [&](const hir::GreaterEqual &) {
+            return ::mir::detail::is_unsigned_integer_type(lhs_type)
+                       ? BinaryOpNode::Kind::UCmpGe
+                       : BinaryOpNode::Kind::ICmpGe;
+          },
+          [&](const hir::LogicalAnd &) { return BinaryOpNode::Kind::BoolAnd; },
+          [&](const hir::LogicalOr &) { return BinaryOpNode::Kind::BoolOr; },
+      },
+      binary.op);
 }
 
 LowerResult

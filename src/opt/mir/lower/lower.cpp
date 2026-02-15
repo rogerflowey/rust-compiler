@@ -7,7 +7,7 @@
 #include "opt/mir/lower/lower_internal.hpp"
 #include "opt/mir/nodes.hpp"
 
-#include "mir/lower/lower_common.hpp" // shared type helpers
+#include "common/mir/utils.hpp" // shared type helpers
 
 #include "semantic/hir/helper.hpp"
 #include "semantic/hir/visitor/visitor_base.hpp"

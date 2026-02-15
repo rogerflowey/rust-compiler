@@ -51,7 +51,7 @@ add_subdirectory(src/lexer)
 add_subdirectory(src/parser)
 add_subdirectory(src/type)
 add_subdirectory(src/semantic)
-add_subdirectory(src/mir)
+add_subdirectory(src/common/mir)
 add_subdirectory(src/opt/mir)
 add_subdirectory(cmd)
 
@@ -63,7 +63,7 @@ target_include_directories(compiler PRIVATE src)
 # Link the main executable against our new parser library.
 # Because 'parser' has a PUBLIC dependency on 'parsecpp', we no longer
 # need to link parsecpp directly here.
-target_link_libraries(compiler PRIVATE parser semantic mir)
+target_link_libraries(compiler PRIVATE parser semantic opt_mir)
 
 # --- User-friendly Output ---
 message(STATUS "Compiler executable will be built as:  ${CMAKE_BINARY_DIR}/compiler")
