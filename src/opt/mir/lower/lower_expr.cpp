@@ -137,8 +137,8 @@ OptFunctionLowerer::lower_struct_literal(const hir::StructLiteral &struct_lit,
     size_t idx = 0;
     for (const auto &field_expr_ptr : canonical->initializers) {
       if (!field_expr_ptr) {
-        idx++;
-        continue;
+        throw std::logic_error(
+            "Null field initializer in struct literal lowering");
       }
 
       Place field_place = Place::simple(temp);
@@ -170,7 +170,7 @@ OptFunctionLowerer::lower_array_literal(const hir::ArrayLiteral &array_lit,
 
   for (const auto &elem : array_lit.elements) {
     if (!elem)
-      continue;
+      throw std::logic_error("Null element in array literal lowering");
 
     Place elem_place = Place::simple(temp);
     NodeId idx_node = make_const_int(idx++, usize_id);
@@ -392,6 +392,10 @@ OptFunctionLowerer::lower_binary_op(const hir::BinaryOp &binary,
 
   auto kind =
       classify_binary_op(binary, lhs_info.type, rhs_info.type, info.type);
+
+  if (!is_reachable())
+    return std::monostate{};
+
   return builder_.make_binary(kind, lhs, rhs, info.type);
 }
 
@@ -403,24 +407,32 @@ LowerResult OptFunctionLowerer::lower_unary_op(const hir::UnaryOp &unary,
   return std::visit(Overloaded{
                         [&](const hir::UnaryNot &) -> LowerResult {
                           NodeId operand = lower_expr_value(*unary.rhs);
+                          if (!is_reachable())
+                            return std::monostate{};
                           return builder_.make_unary(UnaryOpNode::Kind::Not,
                                                      operand, info.type);
                         },
                         [&](const hir::UnaryNegate &) -> LowerResult {
                           NodeId operand = lower_expr_value(*unary.rhs);
+                          if (!is_reachable())
+                            return std::monostate{};
                           return builder_.make_unary(UnaryOpNode::Kind::Neg,
                                                      operand, info.type);
                         },
                         [&](const hir::Reference &ref) -> LowerResult {
-                          Place p = lower_expr_place(*unary.rhs);
+                          auto p = lower_expr_place(*unary.rhs);
+                          if (!p)
+                            return std::monostate{};
                           return builder_.make_address_of(
-                              std::move(p),
+                              std::move(*p),
                               ref.is_mutable ? Mutability::Mutable
                                              : Mutability::Immutable,
                               info.type);
                         },
                         [&](const hir::Dereference &) -> LowerResult {
                           NodeId ptr = lower_expr_value(*unary.rhs);
+                          if (!is_reachable())
+                            return std::monostate{};
                           return Place::from_ptr(ptr);
                         },
                     },
@@ -433,6 +445,8 @@ LowerResult OptFunctionLowerer::lower_cast(const hir::Cast &cast,
     throw std::logic_error("Cast missing operand in opt MIR lowering");
   }
   NodeId operand = lower_expr_value(*cast.expr);
+  if (!is_reachable())
+    return std::monostate{};
   return builder_.make_cast(operand, info.type);
 }
 
@@ -453,7 +467,9 @@ LowerResult OptFunctionLowerer::lower_assignment(const hir::Assignment &assign,
   }
 
   // General assignment
-  Place dest = lower_expr_place(*assign.lhs);
+  auto dest = lower_expr_place(*assign.lhs);
+  if (!dest)
+    return std::monostate{};
 
   // lower_expr RHS
   auto val = lower_expr(*assign.rhs);
@@ -461,7 +477,7 @@ LowerResult OptFunctionLowerer::lower_assignment(const hir::Assignment &assign,
     return std::monostate{};
 
   const auto &rhs_info = hir::helper::get_expr_info(*assign.rhs);
-  emit_write(dest, val, rhs_info.type);
+  emit_write(*dest, val, rhs_info.type);
 
   return std::monostate{};
 }
@@ -499,14 +515,21 @@ LowerResult OptFunctionLowerer::lower_call(const hir::Call &call,
 
     if (is_aggregate) {
 
-      Place p = lower_expr_place(*arg);
+      auto p = lower_expr_place(*arg);
+      if (!p)
+        return std::monostate{};
 
-      // Must copy to a contiguous temp
-      SlotId temp = allocate_temp_slot(arg_info.type, "<arg_copy>");
-      current_token_ =
-          builder_.emit_memcopy(current_block_id(), current_token_,
-                                Place::simple(temp), p, arg_info.type);
-      args.push_back(temp);
+      // Optimization: if the argument is already a simple slot, pass it
+      // directly (move semantic). Otherwise, copy to a temp.
+      if (std::holds_alternative<SlotId>(p->base) && p->projections.empty()) {
+        args.push_back(std::get<SlotId>(p->base));
+      } else {
+        SlotId temp = allocate_temp_slot(arg_info.type, "<arg_copy>");
+        current_token_ =
+            builder_.emit_memcopy(current_block_id(), current_token_,
+                                  Place::simple(temp), *p, arg_info.type);
+        args.push_back(temp);
+      }
     } else {
       // Scalar passed by value
       args.push_back(lower_expr_value(*arg));
@@ -566,7 +589,7 @@ OptFunctionLowerer::lower_method_call(const hir::MethodCall &mcall,
 
     if (is_aggregate) {
       // Aggregate passed by value (ByVal)
-      Place p = lower_expr_place(arg_expr);
+      Place p = *lower_expr_place(arg_expr);
       if (std::holds_alternative<SlotId>(p.base) && p.projections.empty()) {
         args.push_back(std::get<SlotId>(p.base));
       } else {
@@ -647,8 +670,8 @@ LowerResult OptFunctionLowerer::lower_if_expr(const hir::If &if_expr,
   // Create a result slot if needed
   std::optional<SlotId> result_slot;
   if (result_needed) {
-    result_slot =
-        builder_.new_slot(Slot::Kind::StackLocal, info.type, "<if_result>");
+    result_slot = builder_.new_slot(Slot::Kind::StackLocal, info.type,
+                                    "<if_result>", Mutability::Mutable);
   }
 
   BlockId entry_block_for_if = current_block_id();
@@ -724,7 +747,7 @@ OptFunctionLowerer::lower_loop_expr(const hir::Loop &loop,
   BlockId exit = builder_.new_block();
 
   // Pre-allocate the header's merged token
-  TokenId t_header = func_.alloc_token();
+  TokenId t_header = builder_.new_token();
 
   // Entry edge → header
   if (is_reachable()) {
@@ -786,7 +809,7 @@ OptFunctionLowerer::lower_while_expr(const hir::While &while_expr,
   BlockId body_block = builder_.new_block();
   BlockId exit = builder_.new_block();
 
-  TokenId t_header = func_.alloc_token();
+  TokenId t_header = builder_.new_token();
 
   // Entry edge → header
   BlockId entry_block_id = current_block_id();
@@ -928,7 +951,8 @@ LowerResult OptFunctionLowerer::lower_short_circuit(
 
   // Result slot
   SlotId result_slot =
-      builder_.new_slot(Slot::Kind::StackLocal, info.type, "<short_circuit>");
+      builder_.new_slot(Slot::Kind::StackLocal, info.type, "<short_circuit>",
+                        Mutability::Mutable);
 
   // Branch on LHS
   //   &&: if true → evaluate RHS, if false → short-circuit (false)
@@ -1065,27 +1089,35 @@ BinaryOpNode::Kind OptFunctionLowerer::classify_binary_op(
 LowerResult
 OptFunctionLowerer::lower_field_access(const hir::FieldAccess &fa,
                                        const semantic::ExprInfo &info) {
-  Place p = lower_expr_place(*fa.base);
+  auto p = lower_expr_place(*fa.base);
+  if (!p)
+    return std::monostate{};
   size_t index = hir::helper::get_field_index(fa);
-  p.projections.push_back(FieldProjection{index});
+  p->projections.push_back(FieldProjection{index});
 
   if (is_aggregate(info.type)) {
     // Return projection directly
-    return p;
+    return *p;
   }
-  return builder_.make_load(current_token_, std::move(p), info.type);
+  return builder_.make_load(current_token_, std::move(*p), info.type);
 }
 
 LowerResult OptFunctionLowerer::lower_index(const hir::Index &idx,
                                             const semantic::ExprInfo &info) {
-  Place p = lower_expr_place(*idx.base);
+  auto p = lower_expr_place(*idx.base);
+  if (!p)
+    return std::monostate{};
+
   NodeId index_val = lower_expr_value(*idx.index);
-  p.projections.push_back(IndexProjection{index_val});
+  if (!is_reachable())
+    return std::monostate{};
+
+  p->projections.push_back(IndexProjection{index_val});
 
   if (is_aggregate(info.type)) {
-    return p;
+    return *p;
   }
-  return builder_.make_load(current_token_, std::move(p), info.type);
+  return builder_.make_load(current_token_, std::move(*p), info.type);
 }
 
 // Struct/Array literals handled via lower_expr_to_place dispatch at definition
@@ -1095,25 +1127,42 @@ LowerResult OptFunctionLowerer::lower_index(const hir::Index &idx,
 // Place lowering
 // ═══════════════════════════════════════════════════════════════════
 
-Place OptFunctionLowerer::lower_expr_place(const hir::Expr &expr) {
+std::optional<Place>
+OptFunctionLowerer::lower_expr_place(const hir::Expr &expr) {
   // 1. Recursive handling of place-expressions
   if (const auto *var = std::get_if<hir::Variable>(&expr.value)) {
     return Place::simple(require_slot(var->local_id));
   }
   if (const auto *fa = std::get_if<hir::FieldAccess>(&expr.value)) {
-    Place p = lower_expr_place(*fa->base);
-    p.projections.push_back(FieldProjection{hir::helper::get_field_index(*fa)});
+    auto p = lower_expr_place(*fa->base);
+    if (!p) {
+      if (is_reachable()) {
+        // Should have been unreachable if base diverged, but safety check:
+        return std::nullopt;
+      }
+      return std::nullopt;
+    }
+    p->projections.push_back(
+        FieldProjection{hir::helper::get_field_index(*fa)});
     return p;
   }
   if (const auto *idx = std::get_if<hir::Index>(&expr.value)) {
-    Place p = lower_expr_place(*idx->base);
+    auto p = lower_expr_place(*idx->base);
+    if (!p)
+      return std::nullopt;
+
     NodeId index_val = lower_expr_value(*idx->index);
-    p.projections.push_back(IndexProjection{index_val});
+    if (!is_reachable())
+      return std::nullopt;
+
+    p->projections.push_back(IndexProjection{index_val});
     return p;
   }
   if (const auto *unary = std::get_if<hir::UnaryOp>(&expr.value)) {
     if (std::get_if<hir::Dereference>(&unary->op)) {
       NodeId ptr = lower_expr_value(*unary->rhs);
+      if (!is_reachable())
+        return std::nullopt;
       return Place::from_ptr(ptr);
     }
   }
@@ -1122,6 +1171,9 @@ Place OptFunctionLowerer::lower_expr_place(const hir::Expr &expr) {
   //    Create a temp slot, evaluate the expression into it, return the slot.
   semantic::ExprInfo info = hir::helper::get_expr_info(expr);
   auto result = lower_expr(expr);
+
+  if (!is_reachable())
+    return std::nullopt;
 
   if (auto *p = std::get_if<Place>(&result)) {
     return *p;
@@ -1133,8 +1185,8 @@ Place OptFunctionLowerer::lower_expr_place(const hir::Expr &expr) {
     return Place::simple(temp);
   }
 
-  throw std::logic_error(
-      "Expression produced no value (monostate) in lower_expr_place");
+  // Monostate or unreachable dropped out
+  return std::nullopt;
 }
 
 // ═══════════════════════════════════════════════════════════════════

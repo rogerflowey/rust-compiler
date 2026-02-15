@@ -90,7 +90,7 @@ private:
                                type::TypeId expected_type);
 
   // New methods for Phase 2
-  Place lower_expr_place(const hir::Expr &expr);
+  std::optional<Place> lower_expr_place(const hir::Expr &expr);
 
   LowerResult lower_field_access(const hir::FieldAccess &fa,
                                  const semantic::ExprInfo &info);

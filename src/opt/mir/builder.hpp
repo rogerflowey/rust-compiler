@@ -172,6 +172,8 @@ public:
     return entry_token_;
   }
 
+  TokenId new_token() { return func_.alloc_token(); }
+
 private:
   OptFunction &func_;
   TokenId entry_token_ = invalid_token;

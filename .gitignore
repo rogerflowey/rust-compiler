@@ -20,3 +20,5 @@ regression_failures.log
 
 *.ll
 *.ir
+
+*.tmp.md

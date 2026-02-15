@@ -384,8 +384,9 @@ OptFunctionLowerer::push_loop(const void *key, BlockId header, BlockId exit,
   ctx.break_type = break_type;
   if (break_type && !::mir::detail::is_unit_type(*break_type) &&
       !::mir::detail::is_never_type(*break_type)) {
-    ctx.break_result_slot = builder_.new_slot(Slot::Kind::StackLocal,
-                                              *break_type, "<break_result>");
+    ctx.break_result_slot =
+        builder_.new_slot(Slot::Kind::StackLocal, *break_type, "<break_result>",
+                          Mutability::Mutable);
   }
   loop_stack_.push_back({key, std::move(ctx)});
   return loop_stack_.back().second;
