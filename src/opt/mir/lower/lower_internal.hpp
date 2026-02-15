@@ -14,6 +14,12 @@
 
 namespace opt::mir {
 
+/// Result of lowering an expression:
+///   - monostate: valid execution but no value (e.g. unit/void)
+///   - NodeId: a scalar SSA value.
+///   - Place: an lvalue or an aggregate value (represented by its storage).
+using LowerResult = std::variant<std::monostate, NodeId, Place>;
+
 /// OptFunctionLowerer — translates a single HIR function/method into an
 /// OptFunction (the optimization MIR representation).
 ///
@@ -66,6 +72,7 @@ private:
 
   TokenId current_token_ = invalid_token;
   std::optional<BlockId> current_block_;
+  std::optional<SlotId> sret_slot_; // Function SRET parameter (pointer)
 
   std::unordered_map<const hir::Local *, SlotId> local_slots_;
   std::vector<std::pair<const void *, LoopContext>> loop_stack_;
@@ -79,73 +86,79 @@ private:
 
   // ─── Block / Statement lowering ───────────────────────────────────
   void lower_block(const hir::Block &block);
-  std::optional<NodeId> lower_block_expr(const hir::Block &block,
-                                         type::TypeId expected_type);
+  LowerResult lower_block_expr(const hir::Block &block,
+                               type::TypeId expected_type);
 
-  // New methods for Phase 2
   // New methods for Phase 2
   Place lower_expr_place(const hir::Expr &expr);
-  void lower_expr_to_place(const hir::Expr &expr, Place place);
 
-  std::optional<NodeId> lower_field_access(const hir::FieldAccess &fa,
-                                           const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_index(const hir::Index &idx,
-                                    const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_struct_literal(const hir::StructLiteral &sl,
-                                             const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_array_literal(const hir::ArrayLiteral &al,
-                                            const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_array_repeat(const hir::ArrayRepeat &ar,
-                                           const semantic::ExprInfo &info);
+  LowerResult lower_field_access(const hir::FieldAccess &fa,
+                                 const semantic::ExprInfo &info);
+  LowerResult lower_index(const hir::Index &idx,
+                          const semantic::ExprInfo &info);
+  LowerResult lower_struct_literal(const hir::StructLiteral &sl,
+                                   const semantic::ExprInfo &info);
+  LowerResult lower_array_literal(const hir::ArrayLiteral &al,
+                                  const semantic::ExprInfo &info);
+  LowerResult lower_array_repeat(const hir::ArrayRepeat &ar,
+                                 const semantic::ExprInfo &info);
 
   // Helpers
   SlotId allocate_temp_slot(type::TypeId type, std::string name = {});
-  void emit_aggregate_copy(SlotId dest, SlotId src, type::TypeId type);
+
+  // High-level operation helpers (handle scalar vs aggregate differences)
+  // Writes 'src' to 'dest'. Advances current_token_.
+  void emit_write(Place dest, const LowerResult &src, type::TypeId type);
+
+  // Emits a return instruction for 'res' (or void if nullopt).
+  // - Scalar: loads value (if Place) and returns it.
+  // - Aggregate: copies to sret_slot_ and returns void.
+  void emit_return_value(const std::optional<LowerResult> &res,
+                         type::TypeId type);
+
+  void emit_aggregate_copy(Place dest, Place src, type::TypeId type);
   bool lower_block_statements(const hir::Block &block);
   void lower_statement(const hir::Stmt &stmt);
   void lower_let_stmt(const hir::LetStmt &let_stmt);
 
   // ─── Expression lowering (implemented in lower_expr.cpp) ──────────
-  std::optional<NodeId> lower_expr(const hir::Expr &expr);
+  LowerResult lower_expr(const hir::Expr &expr);
   NodeId lower_expr_value(const hir::Expr &expr);
 
   // Individual expression dispatch
-  std::optional<NodeId> lower_literal(const hir::Literal &lit,
-                                      const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_variable(const hir::Variable &var,
-                                       const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_binary_op(const hir::BinaryOp &bin,
-                                        const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_unary_op(const hir::UnaryOp &unary,
-                                       const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_cast(const hir::Cast &cast,
-                                   const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_assignment(const hir::Assignment &assign,
-                                         const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_call(const hir::Call &call,
-                                   const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_method_call(const hir::MethodCall &mcall,
-                                          const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_const_use(const hir::ConstUse &cu,
-                                        const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_enum_variant(const hir::EnumVariant &ev,
-                                           const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_struct_const(const hir::StructConst &sc,
-                                           const semantic::ExprInfo &info);
+  LowerResult lower_literal(const hir::Literal &lit,
+                            const semantic::ExprInfo &info);
+  LowerResult lower_variable(const hir::Variable &var,
+                             const semantic::ExprInfo &info);
+  LowerResult lower_binary_op(const hir::BinaryOp &bin,
+                              const semantic::ExprInfo &info);
+  LowerResult lower_unary_op(const hir::UnaryOp &unary,
+                             const semantic::ExprInfo &info);
+  LowerResult lower_cast(const hir::Cast &cast, const semantic::ExprInfo &info);
+  LowerResult lower_assignment(const hir::Assignment &assign,
+                               const semantic::ExprInfo &info);
+  LowerResult lower_call(const hir::Call &call, const semantic::ExprInfo &info);
+  LowerResult lower_method_call(const hir::MethodCall &mcall,
+                                const semantic::ExprInfo &info);
+  LowerResult lower_const_use(const hir::ConstUse &cu,
+                              const semantic::ExprInfo &info);
+  LowerResult lower_enum_variant(const hir::EnumVariant &ev,
+                                 const semantic::ExprInfo &info);
+  LowerResult lower_struct_const(const hir::StructConst &sc,
+                                 const semantic::ExprInfo &info);
 
   // Control-flow expressions
-  std::optional<NodeId> lower_if_expr(const hir::If &if_expr,
-                                      const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_loop_expr(const hir::Loop &loop,
-                                        const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_while_expr(const hir::While &while_expr,
-                                         const semantic::ExprInfo &info);
-  std::optional<NodeId> lower_break_expr(const hir::Break &brk);
-  std::optional<NodeId> lower_continue_expr(const hir::Continue &cont);
-  std::optional<NodeId> lower_return_expr(const hir::Return &ret);
-  std::optional<NodeId> lower_short_circuit(const hir::BinaryOp &binary,
-                                            const semantic::ExprInfo &info,
-                                            bool is_and);
+  LowerResult lower_if_expr(const hir::If &if_expr,
+                            const semantic::ExprInfo &info);
+  LowerResult lower_loop_expr(const hir::Loop &loop,
+                              const semantic::ExprInfo &info);
+  LowerResult lower_while_expr(const hir::While &while_expr,
+                               const semantic::ExprInfo &info);
+  LowerResult lower_break_expr(const hir::Break &brk);
+  LowerResult lower_continue_expr(const hir::Continue &cont);
+  LowerResult lower_return_expr(const hir::Return &ret);
+  LowerResult lower_short_circuit(const hir::BinaryOp &binary,
+                                  const semantic::ExprInfo &info, bool is_and);
 
   // ─── Binary-op classification ─────────────────────────────────────
   static BinaryOpNode::Kind classify_binary_op(const hir::BinaryOp &binary,
@@ -165,6 +178,9 @@ private:
   LoopContext &find_loop(const void *key);
   LoopContext pop_loop(const void *key);
   void finalize_loop(const LoopContext &ctx);
+
+  // ─── Address helpers ──────────────────────────────────────────────
+  NodeId make_temp_addr(SlotId temp, type::TypeId value_type);
 
   // ─── Utilities ────────────────────────────────────────────────────
   bool is_reachable() const;

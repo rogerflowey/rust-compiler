@@ -16,3 +16,7 @@ uv.lock
 *.env
 regression_failures.log
 .kilocode/
+
+
+*.ll
+*.ir

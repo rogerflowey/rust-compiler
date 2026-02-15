@@ -61,6 +61,9 @@ private:
       case Slot::Kind::StackLocal:
         os_ << "stack_local";
         break;
+      case Slot::Kind::Parameter:
+        os_ << "parameter";
+        break;
       case Slot::Kind::HeapObject:
         os_ << "heap_object";
         break;

@@ -178,6 +178,23 @@ void OptFunctionLowerer::initialize(std::string name) {
 
   // The entry token seeds the token chain for the entire function
   current_token_ = builder_.entry_token();
+
+  // Initialize SRET slot if return type is aggregate
+  TypeId ret_type = invalid_type_id;
+  if (hir_function_ && hir_function_->sig.return_type) {
+    ret_type = hir::helper::get_resolved_type(*hir_function_->sig.return_type);
+  } else if (hir_method_ && hir_method_->sig.return_type) {
+    ret_type = hir::helper::get_resolved_type(*hir_method_->sig.return_type);
+  }
+
+  if (ret_type != invalid_type_id &&
+      ::mir::detail::is_aggregate_type(ret_type)) {
+    // SRET is a pointer parameter (handled as StackLocal in Opt MIR)
+    type::Type ptr_ty;
+    ptr_ty.value = type::ReferenceType{ret_type, true}; // &mut T
+    TypeId ptr_id = type::get_typeID(ptr_ty);
+    sret_slot_ = builder_.new_slot(Slot::Kind::Parameter, ptr_id, "sret_param");
+  }
 }
 
 OptFunction OptFunctionLowerer::lower() {
@@ -256,21 +273,29 @@ void OptFunctionLowerer::lower_block(const hir::Block &block) {
   if (block.final_expr && *block.final_expr && is_reachable()) {
     // Function body: final expression is the return value
     auto result = lower_expr(**block.final_expr);
-    if (result && is_reachable()) {
-      builder_.emit_return(current_block_id(), current_token_, *result);
+    if (!is_reachable()) {
       current_block_.reset();
+      return;
     }
+
+    const auto &info = hir::helper::get_expr_info(**block.final_expr);
+    emit_return_value(result, info.type);
+    current_block_.reset();
+  } else if (is_reachable()) {
+    // Implicit void return if no final expression
+    builder_.emit_return(current_block_id(), current_token_, std::nullopt);
+    current_block_.reset();
   }
 }
 
-std::optional<NodeId>
+LowerResult
 OptFunctionLowerer::lower_block_expr(const hir::Block &block,
-                                     type::TypeId expected_type) {
+                                     type::TypeId /*expected_type*/) {
   lower_block_statements(block);
   if (block.final_expr && *block.final_expr && is_reachable()) {
     return lower_expr(**block.final_expr);
   }
-  return std::nullopt;
+  return std::monostate{};
 }
 
 bool OptFunctionLowerer::lower_block_statements(const hir::Block &block) {
@@ -325,18 +350,21 @@ void OptFunctionLowerer::lower_let_stmt(const hir::LetStmt &let_stmt) {
 
     const auto &init = *let_stmt.initializer;
     const auto &info = hir::helper::get_expr_info(init);
-    bool is_agg = ::mir::detail::is_aggregate_type(info.type);
 
-    NodeId val = lower_expr_value(init);
-    if (is_reachable()) {
-      if (is_agg) {
-        current_token_ = builder_.emit_memcopy(
-            current_block_id(), current_token_, Place::simple(slot),
-            Place::from_ptr(val), info.type);
-      } else {
-        current_token_ = builder_.emit_store(current_block_id(), current_token_,
-                                             Place::simple(slot), val);
-      }
+    // Lower initializer (may return Place or NodeId)
+    auto result = lower_expr(init);
+    if (!is_reachable())
+      return;
+
+    if (auto *p = std::get_if<Place>(&result)) {
+      // Copy Place to slot
+      current_token_ =
+          builder_.emit_memcopy(current_block_id(), current_token_,
+                                Place::simple(slot), *p, info.type);
+    } else if (auto *n = std::get_if<NodeId>(&result)) {
+      // Store Node to slot
+      current_token_ = builder_.emit_store(current_block_id(), current_token_,
+                                           Place::simple(slot), *n);
     }
   }
 }
@@ -466,11 +494,84 @@ SlotId OptFunctionLowerer::allocate_temp_slot(type::TypeId type,
                            Mutability::Mutable);
 }
 
-void OptFunctionLowerer::emit_aggregate_copy(SlotId dest, SlotId src,
+void OptFunctionLowerer::emit_write(Place dest, const LowerResult &src,
+                                    type::TypeId type) {
+  if (::mir::detail::is_aggregate_type(type)) {
+    // Aggregate: src should be Place.
+    if (auto *p = std::get_if<Place>(&src)) {
+      current_token_ = builder_.emit_memcopy(current_block_id(), current_token_,
+                                             dest, *p, type);
+    } else {
+      throw std::logic_error("Expected Place for aggregate write");
+    }
+  } else {
+    // Scalar: load if Place, use NodeId if value
+    NodeId val = invalid_node;
+    if (auto *p = std::get_if<Place>(&src)) {
+      val = builder_.make_load(current_token_, *p, type);
+    } else if (auto *n = std::get_if<NodeId>(&src)) {
+      val = *n;
+    } else {
+      throw std::logic_error("Expected value or Place for scalar write");
+    }
+    current_token_ =
+        builder_.emit_store(current_block_id(), current_token_, dest, val);
+  }
+}
+
+void OptFunctionLowerer::emit_return_value(
+    const std::optional<LowerResult> &res, type::TypeId type) {
+  if (!res) {
+    builder_.emit_return(current_block_id(), current_token_, std::nullopt);
+    return;
+  }
+
+  if (::mir::detail::is_aggregate_type(type)) {
+    if (!sret_slot_) {
+      throw std::logic_error("Aggregate return without sret_slot");
+    }
+    // Expected Place
+    if (auto *p = std::get_if<Place>(&*res)) {
+      // Load SRET pointer
+      type::Type ptr_ty;
+      ptr_ty.value = type::ReferenceType{type, true};
+      TypeId ptr_id = type::get_typeID(ptr_ty);
+
+      NodeId sret_ptr = builder_.make_load(current_token_,
+                                           Place::simple(*sret_slot_), ptr_id);
+
+      // Memcopy to *sret_ptr
+      current_token_ =
+          builder_.emit_memcopy(current_block_id(), current_token_,
+                                Place::from_ptr(sret_ptr), *p, type);
+      // Return void
+      builder_.emit_return(current_block_id(), current_token_, std::nullopt);
+    } else {
+      throw std::logic_error("Aggregate return value must be a Place");
+    }
+  } else {
+    // Scalar return
+    NodeId val = invalid_node;
+    if (auto *p = std::get_if<Place>(&*res)) {
+      val = builder_.make_load(current_token_, *p, type);
+    } else if (auto *n = std::get_if<NodeId>(&*res)) {
+      val = *n;
+    } else {
+      if (type == type::get_typeID(type::Type{type::UnitType{}})) {
+        builder_.emit_return(current_block_id(), current_token_, std::nullopt);
+        return;
+      }
+      throw std::logic_error("Scalar return value missing");
+    }
+    builder_.emit_return(current_block_id(), current_token_,
+                         std::optional<NodeId>{val});
+  }
+}
+
+void OptFunctionLowerer::emit_aggregate_copy(Place dest, Place src,
                                              type::TypeId type) {
-  current_token_ =
-      builder_.emit_memcopy(current_block_id(), current_token_,
-                            Place::simple(dest), Place::simple(src), type);
+  current_token_ = builder_.emit_memcopy(current_block_id(), current_token_,
+                                         std::move(dest), std::move(src), type);
 }
 
 } // namespace opt::mir
