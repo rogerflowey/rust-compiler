@@ -1,0 +1,7 @@
+fn simple_add() -> i32 {
+    return 10 + 20;
+}
+
+fn nested_arith() -> i32 {
+    return (10 + 20) * 2;
+}

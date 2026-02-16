@@ -15,7 +15,9 @@ Updater::Updater(OptFunction &func)
       // Build use lists once
       use_lists_(UseLists::build(func)),
       // Initialize solver with references to our tables
-      solver_(func, node_facts_, token_facts_) {
+      solver_(func, node_facts_, token_facts_),
+      // Initialize graph mutator
+      mutator_(func, use_lists_) {
   resize_tables();
   initialize_worklist();
 }
@@ -29,7 +31,6 @@ void Updater::resize_tables() {
   inst_on_wl_.resize(func_.insts.size(), false);
 
   is_candidate_.resize(func_.nodes.size(), false);
-  rewrite_candidates_.reserve(func_.nodes.size() / 4); // Heuristic
 }
 
 void Updater::initialize_worklist() {
@@ -83,41 +84,31 @@ void Updater::analyze() {
 // ============================================================================
 
 bool Updater::perform_rewrites() {
-  // Process candidates one by one (LIFO)
-  // We preserve the rest of the list across analysis passes.
+  // Process candidates one by one (FIFO).
   while (!rewrite_candidates_.empty()) {
-    NodeId id = rewrite_candidates_.back();
-    rewrite_candidates_.pop_back();
+    NodeId id = rewrite_candidates_.front();
+    rewrite_candidates_.pop_front();
     is_candidate_[raw(id)] = false;
 
+    // It's a candidate.
     auto &node = func_.nodes[raw(id)];
     const auto &fact = node_facts_[raw(id)];
 
-    auto action = const_prop_rewriter_.try_rewrite(id, node, fact);
-    if (!action)
-      continue;
+    if (const_prop_rewriter_.try_rewrite(id, node, fact, mutator_)) {
+      // Rewrite succeeded!
+      // The mutator has collected all touched nodes/insts.
+      // Enqueue them for re-analysis.
+      for (auto nid : mutator_.drain_touched_nodes())
+        enqueue(nid);
+      for (auto iid : mutator_.drain_touched_insts())
+        enqueue(iid);
 
-    // Rewrite!
-    node.kind = std::move(action->new_kind);
-
-    // Sync UseLists & Enqueue Users
-    use_lists_.notify_node_updated(id, func_);
-    enqueue_users_of_node(id);
-
-    // Stop after ONE rewrite to re-analyze immediately.
-    return true;
+      // Return true to trigger another analysis round.
+      return true;
+    }
   }
 
   return false;
-}
-
-void Updater::add_candidate(NodeId id) {
-  if (raw(id) >= is_candidate_.size())
-    return;
-  if (!is_candidate_[raw(id)]) {
-    is_candidate_[raw(id)] = true;
-    rewrite_candidates_.push_back(id);
-  }
 }
 
 // ============================================================================
@@ -131,10 +122,10 @@ void Updater::commit_node_fact(NodeId id, NodeFact new_fact) {
     current = new_fact;
     enqueue_users_of_node(id);
 
-    // Check all rewriters for candidacy
-    auto &node = func_.nodes[raw(id)];
-    if (const_prop_rewriter_.try_rewrite(id, node, new_fact)) {
-      add_candidate(id);
+    // Mark as dirty so it gets re-checked for rewriting
+    if (!is_candidate_[raw(id)]) {
+      is_candidate_[raw(id)] = true;
+      rewrite_candidates_.push_back(id);
     }
   }
 }

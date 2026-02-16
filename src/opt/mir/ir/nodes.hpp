@@ -32,27 +32,26 @@ struct ConstantValue {
 /// Field access by index (struct/tuple field).
 struct FieldProjection {
   std::size_t index = 0;
+  bool operator==(const FieldProjection &) const = default;
 };
 
 /// Array/pointer index access. The index is a NodeId (computed at runtime).
 struct IndexProjection {
   NodeId index = invalid_node;
+  bool operator==(const IndexProjection &) const = default;
 };
 
 using Projection = std::variant<FieldProjection, IndexProjection>;
 
 /// Place — a memory location: base (slot or pointer) + zero or more
 /// projections.
-///   Slot-based:    @x.field[2]     → Place{SlotId(@x), [Field(0), Index(%2)]}
-///   Pointer-based: (%ptr).field    → Place{NodeId(%ptr), [Field(0)]}
-///
-/// A SlotId base guarantees Semantic Slicing (distinct slots don’t alias).
-/// A NodeId base is an explicit marker that aliasing must be considered.
 using PlaceBase = std::variant<SlotId, NodeId>;
 
 struct Place {
   PlaceBase base;
   std::vector<Projection> projections;
+
+  bool operator==(const Place &) const = default;
 
   /// Convenience: construct a simple slot place with no projections.
   static Place simple(SlotId s) { return Place{PlaceBase{s}, {}}; }

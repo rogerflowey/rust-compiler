@@ -21,32 +21,53 @@ struct NodeFact {
 };
 ```
 
-## 2. SlotFact
+## 2. SlotFact (RegionTree)
 
-A `SlotFact` represents what we know about the contents of a specific **Slot** at a specific point in time.
+A `SlotFact` describes the contents of a specific **Slot** at a specific point in time. Unlike `NodeFact`, it is not a simple value—it is a **Region Tree** that tracks knowledge at sub-slot granularity (fields).
 
-Like `NodeFact`, it is a product lattice:
+### 2.1 Region Tree Structure
 
-* **`value_fact`**: A `NodeFact` describing the current value stored in this slot.
-* *(Future)* `EscapeFact`: Has this slot's address escaped?
+A **Region Tree** is a trie keyed by `FieldProjection` indices. Each node in the tree contains:
+
+1. **`exact_fact`**: The `NodeFact` known for *exactly* this region.
+    * Example: `x.f` has `exact_fact = Const(5)`.
+    * If `exact_fact` is `Top`, it means this specific region's value is unknown (or depends on children).
+2. **`base_mapping`** (optional): A fallback to another slot.
+    * Meaning: "Any sub-region not explicitly present in `children` comes from `base_mapping`".
+    * Example: `x = memcpy(y)` sets `x.root.base_mapping = @y`.
+    * Reading `x.f` (if not explicitly set) forwards to `y.f`.
+3. **`children`**: Map from field index → `RegionNode`.
+
+### 2.2 Operations
+
+* **Write(path, fact)**: Sets `exact_fact` at the node corresponding to `path`.
+  * *Invalidates* the `exact_fact` of all ancestors (since modifying a field modifies the whole).
+  * *Clears* children of the target node (overwriting a struct overwrites its fields).
+* **WriteBase(path, src_slot)**: Sets `base_mapping = src_slot` at `path`.
+  * Used for `Memcopy`. Enables "bulk" forwarding of all sub-fields.
+* **Read(path)**: Walks the tree.
+  * If an `exact_fact` is found, returns it.
+  * If a `base_mapping` is encountered and the desired child is missing, recurses into the base slot with the remaining path.
+  * If `IndexProjection` is encountered, returns `Bottom` (conservative clobber).
 
 ```cpp
-struct SlotFact {
-  NodeFact value_fact;
-  static SlotFact meet(const SlotFact &a, const SlotFact &b);
+struct RegionNode {
+  NodeFact exact_fact;
+  std::optional<SlotId> base_mapping;
+  std::map<size_t, RegionNode> children;
 };
 ```
 
 ## 3. WorldSnapshot (TokenFact)
 
-A `TokenFact` (or `WorldSnapshot`) is a persistent map from `SlotId → SlotFact`. It represents the state of the "Memory World" at a given `Token`.
+A `TokenFact` (or `WorldSnapshot`) is a persistent map from `SlotId → SlotFact` (where `SlotFact` wraps a `RegionTree`).
 
-* **Structure:** `std::vector<std::pair<SlotId, SlotFact>>` (sorted). This allows efficient structural sharing and set operations (meet/merge).
-* **Semantics:** Absent entries imply `Top` (no information / not yet analyzed).
-* **Merge:** When two control paths merge (at a `TokenPhi`), their snapshots are merged via `SlotFact::meet()`.
-  * `meet(SlotFact A, SlotFact B)`
-  * `meet(Fact, Top) = Fact` (knowledge is preserved if the other path implies "reachable but no write")
-  * `meet(Const(x), Const(y)) = Bottom` (conflict)
+* **Structure:** `std::vector<std::pair<SlotId, SlotFact>>` (sorted).
+* **Semantics:** Absent entries imply `Top` (slot fully unknown/uninitialized).
+* **Merge:** Merges `RegionTree`s.
+  * `meet(limit_a, limit_b)`: Merges nodes recursively.
+  * If base mappings disagree, they are dropped.
+  * If exact facts disagree, they meet to `Bottom`.
 
 ## 4. The Bridge: Load
 

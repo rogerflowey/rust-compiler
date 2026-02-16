@@ -1,9 +1,11 @@
 #pragma once
 
 #include "opt/mir/analysis/node_fact.hpp"
+#include "opt/mir/analysis/region_tree.hpp"
 #include "opt/mir/ir/node_id.hpp"
 
 #include <algorithm>
+#include <span>
 #include <vector>
 
 namespace opt::mir {
@@ -15,116 +17,64 @@ namespace opt::mir {
 // Adding a new per-slot analysis = adding a field + its meet/==.
 // ============================================================================
 
+// ============================================================================
+// SlotFact — product lattice describing a slot's content at a point in time.
+//
+// Now backed by a RegionTree to support sub-slot facts (field projections).
+// ============================================================================
+
 struct SlotFact {
-  NodeFact value_fact; // what value was last stored here?
-  // Future: EscapeFact escape;
-  // Future: AliasFact alias;
+  RegionTree tree;
 
   // -- Convenience constructors -----------------------------------------------
 
   /// Default = Top (no information about this slot yet).
-  static SlotFact top() { return {NodeFact::top()}; }
+  static SlotFact top() { return {RegionTree::top()}; }
 
   // -- Lattice meet (component-wise) ------------------------------------------
 
   static SlotFact meet(const SlotFact &a, const SlotFact &b) {
-    return {NodeFact::meet(a.value_fact, b.value_fact)};
+    return {RegionTree::meet(a.tree, b.tree)};
   }
 
-  // -- Equality (component-wise) ----------------------------------------------
+  // -- Equality ---------------------------------------------------------------
 
-  bool operator==(const SlotFact &o) const {
-    return value_fact == o.value_fact;
-  }
+  bool operator==(const SlotFact &o) const { return tree == o.tree; }
   bool operator!=(const SlotFact &o) const { return !(*this == o); }
 };
 
 // ============================================================================
 // WorldSnapshot — immutable map from SlotId → SlotFact
 //
-// V1 implementation: sorted vector of (SlotId, SlotFact) pairs.
-// This is simple and cache-friendly for small slot counts.
-// Future: upgrade to a persistent AVL tree or HAMT for O(log N) branching.
-//
-// Absent entries mean Top (no information — slot not yet analyzed or not live).
+// Represents the state of memory at a given program point.
 // ============================================================================
 
 class WorldSnapshot {
 public:
   WorldSnapshot() = default;
 
-  /// Read the fact of a slot. Returns SlotFact::top() if not present.
-  [[nodiscard]] SlotFact read(SlotId s) const {
-    auto it = find(s);
-    if (it != entries_.end() && it->first == s) {
-      return it->second;
-    }
-    return SlotFact::top();
-  }
+  /// Read the fact of a slot at the given projection path.
+  /// Handles "base mapping" recursion: if a region delegates to another slot,
+  /// this follows the link (up to a recursion limit).
+  [[nodiscard]] NodeFact read(SlotId s,
+                              std::span<const Projection> projections) const;
 
-  /// Produce a new snapshot with slot `s` updated to fact `v`.
-  /// The original snapshot is not modified (persistent / copy-on-write).
-  [[nodiscard]] WorldSnapshot write(SlotId s, SlotFact v) const {
-    WorldSnapshot result = *this; // copy
-    auto it =
-        std::lower_bound(result.entries_.begin(), result.entries_.end(), s,
-                         [](const auto &p, SlotId id) { return p.first < id; });
-    if (it != result.entries_.end() && it->first == s) {
-      it->second = std::move(v);
-    } else {
-      result.entries_.insert(it, {s, std::move(v)});
-    }
-    return result;
-  }
+  /// Legacy helper for whole-slot read.
+  [[nodiscard]] NodeFact read(SlotId s) const { return read(s, {}); }
+
+  /// Produce a new snapshot with slot `s` updated to `fact` at `projections`.
+  [[nodiscard]] WorldSnapshot
+  write(SlotId s, std::span<const Projection> projections, NodeFact fact) const;
+
+  /// Bulk write: mapping a sub-region of `s` to `src`.
+  /// Bulk write (memcopy): set `base_mapping` at the target path.
+  [[nodiscard]] WorldSnapshot
+  write_base(SlotId s, std::span<const Projection> projections,
+             Place src) const;
 
   /// Merge two snapshots using lattice meet.
-  ///
-  /// For each slot present in either snapshot:
-  ///   - Present in both → SlotFact::meet(a, b)
-  ///   - Present in only one → meet(fact, Top) = fact (kept as-is)
-  ///
-  /// This matches the opt.md specification:
-  ///   "If all reachable predecessors agree: merged[@s] = agreed_fact"
-  ///   "If they disagree: merged[@s] = meet(facts...)"
   [[nodiscard]] static WorldSnapshot merge(const WorldSnapshot &a,
-                                           const WorldSnapshot &b) {
-    // Fast path: pointer equality (same root)
-    if (&a == &b || a.entries_ == b.entries_) {
-      return a;
-    }
-
-    WorldSnapshot result;
-    auto ia = a.entries_.begin(), ea = a.entries_.end();
-    auto ib = b.entries_.begin(), eb = b.entries_.end();
-
-    while (ia != ea && ib != eb) {
-      if (ia->first < ib->first) {
-        // Only in A; meet(fact, Top) = fact
-        result.entries_.push_back(*ia);
-        ++ia;
-      } else if (ib->first < ia->first) {
-        // Only in B; meet(Top, fact) = fact
-        result.entries_.push_back(*ib);
-        ++ib;
-      } else {
-        // Same slot in both → lattice meet
-        result.entries_.push_back(
-            {ia->first, SlotFact::meet(ia->second, ib->second)});
-        ++ia;
-        ++ib;
-      }
-    }
-    // Remaining entries exist in only one side → kept (meet with Top = self)
-    while (ia != ea) {
-      result.entries_.push_back(*ia);
-      ++ia;
-    }
-    while (ib != eb) {
-      result.entries_.push_back(*ib);
-      ++ib;
-    }
-    return result;
-  }
+                                           const WorldSnapshot &b);
 
   bool operator==(const WorldSnapshot &other) const {
     return entries_ == other.entries_;
@@ -143,11 +93,20 @@ private:
   using Entry = std::pair<SlotId, SlotFact>;
   std::vector<Entry> entries_; // sorted by SlotId
 
-  [[nodiscard]] std::vector<Entry>::const_iterator find(SlotId s) const {
-    return std::lower_bound(
+  // Internal lookup returning the SlotFact directly (no recursion).
+  [[nodiscard]] const SlotFact *find_fact(SlotId s) const {
+    auto it = std::lower_bound(
         entries_.begin(), entries_.end(), s,
         [](const Entry &p, SlotId id) { return p.first < id; });
+    if (it != entries_.end() && it->first == s) {
+      return &it->second;
+    }
+    return nullptr;
   }
+
+  // Internal helper for mutation
+  [[nodiscard]] WorldSnapshot
+  update_slot(SlotId s, std::function<RegionTree(const RegionTree &)> op) const;
 };
 
 } // namespace opt::mir

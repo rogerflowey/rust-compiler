@@ -1,22 +1,24 @@
 #include "opt/mir/passes/rewriters/const_prop_rewriter.hpp"
+#include "opt/mir/tools/graph_mutator.hpp"
 
 namespace opt::mir {
 
-std::optional<RewriteAction>
-ConstPropRewriter::try_rewrite(NodeId /*id*/, const Node &node,
-                               const NodeFact &fact) const {
+bool ConstPropRewriter::try_rewrite(NodeId id, const Node &node,
+                                    const NodeFact &fact,
+                                    GraphMutator &mutator) const {
   // If the fact says it's a constant...
   if (!fact.const_prop.is_constant()) {
-    return std::nullopt;
+    return false;
   }
 
   // ...and it's not ALREADY a constant node...
   if (std::holds_alternative<ConstantNode>(node.kind)) {
-    return std::nullopt;
+    return false;
   }
 
   // ...then rewrite it!
-  return RewriteAction{ConstantNode{fact.const_prop.value}};
+  mutator.replace_node_kind(id, ConstantNode{fact.const_prop.value});
+  return true;
 }
 
 } // namespace opt::mir

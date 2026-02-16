@@ -5,6 +5,7 @@
 #include "opt/mir/passes/rewriters/const_prop_rewriter.hpp"
 #include "opt/mir/passes/rewriters/rewriter.hpp"
 #include "opt/mir/passes/solver.hpp"
+#include "opt/mir/tools/graph_mutator.hpp"
 
 #include <deque>
 #include <variant>
@@ -40,18 +41,21 @@ private:
   std::vector<bool> node_on_wl_;
   std::vector<bool> inst_on_wl_;
 
-  // Rewriter candidates (collected during analysis)
-  std::vector<NodeId> rewrite_candidates_;
-  std::vector<bool> is_candidate_; // avoid duplicates in candidate vector
+  // Candidate Queue (FIFO)
+  // Nodes with changed facts are enqueued here for rewrite consideration.
+  std::deque<NodeId> rewrite_candidates_;
+  std::vector<bool> is_candidate_; // avoid duplicates in candidate queue
 
   // -- Rewriters --
   ConstPropRewriter const_prop_rewriter_;
+
+  // -- Graph Mutator --
+  GraphMutator mutator_;
 
   // -- Phases --
   void analyze();          // Fixpoint analysis (worklist loop)
   bool perform_rewrites(); // Process candidates -> apply rewrites -> return
                            // true if changed
-  void add_candidate(NodeId id);
 
   // -- Fact Updates --
   void commit_node_fact(NodeId id, NodeFact new_fact);

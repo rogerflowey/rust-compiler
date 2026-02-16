@@ -93,16 +93,9 @@ NodeFact ConstPropEvaluator::eval_load(const LoadNode &n) const {
   if (std::holds_alternative<SlotId>(n.place.base)) {
     SlotId slot = std::get<SlotId>(n.place.base);
 
-    // Projections: if we have projections, we need a complex fact
-    // (StructureFact). Current NodeFact only supports ConstProp (scalar). So if
-    // projections exist, we return Bottom (conservative).
-    if (!n.place.projections.empty()) {
-      return NodeFact{ConstPropFact::bottom()};
-    }
-
-    // Simple load from slot -> read from world
-    SlotFact slot_fact = world.read(slot);
-    return slot_fact.value_fact;
+    // Pass projections to the world snapshot.
+    // It handles the region tree walk and base mapping logic.
+    return world.read(slot, n.place.projections);
   }
 
   // Pointer-based load: aliasing. Return Bottom for now.
@@ -149,15 +142,14 @@ void ConstPropEvaluator::eval_store(const StoreInst &s,
   // Start with input world
   WorldSnapshot new_world = get_fact(token_facts_, raw(s.t_in));
 
-  // Only handle storing to a Slot with no projections
-  if (std::holds_alternative<SlotId>(s.place.base) &&
-      s.place.projections.empty()) {
+  // Only handle storing to a Slot
+  if (std::holds_alternative<SlotId>(s.place.base)) {
     SlotId slot = std::get<SlotId>(s.place.base);
     // Get value fact
     const auto &val_fact = get_fact(node_facts_, raw(s.value));
 
-    // Update world
-    new_world = new_world.write(slot, SlotFact{val_fact});
+    // Update world with projections
+    new_world = new_world.write(slot, s.place.projections, val_fact);
   } else {
     // Write to unknown location -> effectively clobber tracked slot?
     // See solver.cpp original comment: assume slots are isolated.
@@ -194,20 +186,16 @@ void ConstPropEvaluator::eval_branch(const BranchInst &b,
 
 void ConstPropEvaluator::eval_memcopy(const MemcopyInst &m,
                                       InstEvalOutput &out) const {
-  // Simple copy: read slot -> write slot
   WorldSnapshot world = get_fact(token_facts_, raw(m.t_in));
 
-  if (std::holds_alternative<SlotId>(m.src.base) && m.src.projections.empty() &&
-      std::holds_alternative<SlotId>(m.dest.base) &&
-      m.dest.projections.empty()) {
+  auto *src_slot = std::get_if<SlotId>(&m.src.base);
+  auto *dst_slot = std::get_if<SlotId>(&m.dest.base);
 
-    SlotId src_s = std::get<SlotId>(m.src.base);
-    SlotId dst_s = std::get<SlotId>(m.dest.base);
-
-    SlotFact fact = world.read(src_s);
-    world = world.write(dst_s, fact);
+  if (src_slot && dst_slot) {
+    // Now we CAN represent sub-slot mapping!
+    // Map dst (at projections) -> src (Slot + projections)
+    world = world.write_base(*dst_slot, m.dest.projections, m.src);
   }
-  // Else: complex copy. Original logic: no-op (keep tracking what we can).
 
   out.add(m.t_out, std::move(world));
 }

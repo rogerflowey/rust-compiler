@@ -9,8 +9,9 @@
 #include "src/lexer/lexer.hpp"
 
 #include "src/opt/mir/lower/lower.hpp"
-#include "src/opt/mir/printer.hpp"
-#include "src/opt/mir/validator.hpp"
+#include "src/opt/mir/passes/updater.hpp"
+#include "src/opt/mir/tools/printer.hpp"
+#include "src/opt/mir/tools/validator.hpp"
 #include "src/parser/parser.hpp"
 #include "src/semantic/hir/converter.hpp"
 #include "src/semantic/pass/control_flow_linking/control_flow_linking.hpp"
@@ -199,6 +200,11 @@ int main(int argc, char *argv[]) {
         std::cerr
             << "Validation Failed: Non-primitive type in pure node result\n";
         return 1;
+      }
+
+      // Optimization Pass
+      for (auto &func : opt_mod.functions) {
+        opt::mir::Updater::run(func);
       }
 
       // Output .ir file

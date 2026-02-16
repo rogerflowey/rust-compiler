@@ -1,17 +1,18 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "opt/mir/ir/basic_block.hpp"
-#include "opt/mir/tools/builder.hpp"
-#include "opt/mir/passes/const_fold.hpp"
 #include "opt/mir/analysis/node_fact.hpp"
-#include "opt/mir/ir/node_id.hpp"
-#include "opt/mir/ir/nodes.hpp"
-#include "opt/mir/ir/module.hpp"
-#include "opt/mir/tools/printer.hpp"
-#include "opt/mir/ir/slot.hpp"
-#include "opt/mir/passes/updater.hpp"
 #include "opt/mir/analysis/use_list.hpp"
 #include "opt/mir/analysis/world_state.hpp"
+#include "opt/mir/ir/basic_block.hpp"
+#include "opt/mir/ir/module.hpp"
+#include "opt/mir/ir/node_id.hpp"
+#include "opt/mir/ir/nodes.hpp"
+#include "opt/mir/ir/slot.hpp"
+#include "opt/mir/passes/const_fold.hpp"
+#include "opt/mir/passes/updater.hpp"
+#include "opt/mir/tools/builder.hpp"
+#include "opt/mir/tools/graph_mutator.hpp"
+#include "opt/mir/tools/printer.hpp"
 
 #include <deque>
 #include <sstream>
@@ -245,26 +246,27 @@ TEST_CASE("WorldSnapshot write/read round-trip", "[opt_mir][world_state]") {
   auto slot_a = SlotId{0};
   auto slot_b = SlotId{1};
 
-  auto fact_a = SlotFact::top();
-  auto fact_b = SlotFact::top();
+  auto fact_a = NodeFact::top();
+  auto fact_b = NodeFact::top(); // Or distinct fact for testing
 
-  auto ws1 = ws.write(slot_a, fact_a);
+  // write(slot, {}, fact)
+  auto ws1 = ws.write(slot_a, {}, fact_a);
   REQUIRE(ws1.size() == 1);
   REQUIRE(ws1.read(slot_a) == fact_a);
 
   // Original is unchanged (persistent)
   REQUIRE(ws.empty());
 
-  auto ws2 = ws1.write(slot_b, fact_b);
+  auto ws2 = ws1.write(slot_b, {}, fact_b);
   REQUIRE(ws2.size() == 2);
 }
 
 TEST_CASE("WorldSnapshot merge: identical snapshots",
           "[opt_mir][world_state]") {
   auto slot = SlotId{0};
-  auto fact = SlotFact::top();
+  auto fact = NodeFact::top();
 
-  auto ws = WorldSnapshot{}.write(slot, fact);
+  auto ws = WorldSnapshot{}.write(slot, {}, fact);
   auto merged = WorldSnapshot::merge(ws, ws);
 
   REQUIRE(merged.size() == 1);
@@ -275,15 +277,15 @@ TEST_CASE("WorldSnapshot merge: slots in only one side are kept",
           "[opt_mir][world_state]") {
   auto slot_a = SlotId{0};
   auto slot_b = SlotId{1};
-  auto fact = SlotFact::top();
+  auto fact = NodeFact::top();
 
   // ws_left has slot_a, ws_right has slot_b
-  auto ws_left = WorldSnapshot{}.write(slot_a, fact);
-  auto ws_right = WorldSnapshot{}.write(slot_b, fact);
+  auto ws_left = WorldSnapshot{}.write(slot_a, {}, fact);
+  auto ws_right = WorldSnapshot{}.write(slot_b, {}, fact);
 
   auto merged = WorldSnapshot::merge(ws_left, ws_right);
 
-  // Both kept: meet(fact, Top) = fact
+  // Both kept
   REQUIRE(merged.size() == 2);
 }
 
@@ -364,14 +366,14 @@ TEST_CASE("WorldSnapshot merge: disagreeing facts produce meet, not drop",
   NodeFact nf5{ConstPropFact::constant({ConstantValue::Kind::Int, 5})};
   NodeFact nf7{ConstPropFact::constant({ConstantValue::Kind::Int, 7})};
 
-  auto ws_a = WorldSnapshot{}.write(slot, SlotFact{nf5});
-  auto ws_b = WorldSnapshot{}.write(slot, SlotFact{nf7});
+  auto ws_a = WorldSnapshot{}.write(slot, {}, nf5);
+  auto ws_b = WorldSnapshot{}.write(slot, {}, nf7);
 
   auto merged = WorldSnapshot::merge(ws_a, ws_b);
 
   // Slot is preserved (not dropped), but its fact is Bottom
   REQUIRE(merged.size() == 1);
-  REQUIRE(merged.read(slot).value_fact.const_prop.is_bottom());
+  REQUIRE(merged.read(slot).const_prop.is_bottom());
 }
 
 TEST_CASE("WorldSnapshot merge: agreeing facts preserved",
@@ -380,14 +382,14 @@ TEST_CASE("WorldSnapshot merge: agreeing facts preserved",
 
   NodeFact nf5{ConstPropFact::constant({ConstantValue::Kind::Int, 5})};
 
-  auto ws_a = WorldSnapshot{}.write(slot, SlotFact{nf5});
-  auto ws_b = WorldSnapshot{}.write(slot, SlotFact{nf5});
+  auto ws_a = WorldSnapshot{}.write(slot, {}, nf5);
+  auto ws_b = WorldSnapshot{}.write(slot, {}, nf5);
 
   auto merged = WorldSnapshot::merge(ws_a, ws_b);
 
   REQUIRE(merged.size() == 1);
-  REQUIRE(merged.read(slot).value_fact.const_prop.is_constant());
-  REQUIRE(merged.read(slot).value_fact.const_prop.value.bits == 5);
+  REQUIRE(merged.read(slot).const_prop.is_constant());
+  REQUIRE(merged.read(slot).const_prop.value.bits == 5);
 }
 
 // ============================================================================
@@ -732,4 +734,157 @@ TEST_CASE("Updater: conflicting branch merge", "[opt_mir][solver]") {
   // Load should NOT be folded (it remains a LoadNode)
   const auto &n_ld = func.get_node(ld);
   REQUIRE(std::holds_alternative<LoadNode>(n_ld.kind));
+}
+
+// ============================================================================
+// GraphMutator — Beta Reduction
+// ============================================================================
+
+TEST_CASE("GraphMutator: replace_all_uses_of(NodeId) in nodes",
+          "[opt_mir][graph_mutator]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+
+  auto c1 = b.make_constant({ConstantValue::Kind::Int, 1}, i32_type);
+  auto c2 = b.make_constant({ConstantValue::Kind::Int, 2}, i32_type);
+  auto c3 = b.make_constant({ConstantValue::Kind::Int, 3}, i32_type);
+  auto sum = b.make_binary(BinaryOpNode::Kind::IAdd, c1, c2, i32_type);
+
+  auto ul = UseLists::build(func);
+  GraphMutator mutator(func, ul);
+
+  // Before: sum = c1 + c2
+  REQUIRE(ul.users_of(c2).size() == 1);
+  REQUIRE(ul.users_of(c3).empty());
+
+  // Replace c2 → c3
+  mutator.replace_all_uses_of(c2, c3);
+
+  // After: sum = c1 + c3
+  auto &bin = std::get<BinaryOpNode>(func.get_node(sum).kind);
+  REQUIRE(bin.lhs == c1);
+  REQUIRE(bin.rhs == c3);
+
+  // Use-lists updated
+  REQUIRE(ul.users_of(c2).empty());
+  REQUIRE(ul.users_of(c3).size() == 1);
+  REQUIRE(std::get<NodeUser>(ul.users_of(c3)[0]).id == sum);
+}
+
+TEST_CASE("GraphMutator: replace_all_uses_of(NodeId) across instructions",
+          "[opt_mir][graph_mutator]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+  auto t0 = b.entry_token();
+
+  auto slot = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
+  auto c1 = b.make_constant({ConstantValue::Kind::Int, 1}, i32_type);
+  auto c2 = b.make_constant({ConstantValue::Kind::Int, 2}, i32_type);
+
+  // Store c1, then return c1
+  auto t1 = b.emit_store(entry, t0, slot, c1);
+  b.emit_return(entry, t1, c1);
+
+  auto ul = UseLists::build(func);
+  GraphMutator mutator(func, ul);
+
+  // c1 should have 2 inst users (Store, Return)
+  REQUIRE(ul.users_of(c1).size() == 2);
+  REQUIRE(ul.users_of(c2).empty());
+
+  // Replace c1 → c2
+  mutator.replace_all_uses_of(c1, c2);
+
+  // Verify instructions updated
+  auto store_id = func.get_block(entry).inst_ids[0];
+  auto &store = std::get<StoreInst>(func.get_inst(store_id).kind);
+  REQUIRE(store.value == c2);
+
+  auto ret_id = func.get_block(entry).inst_ids[1];
+  auto &ret = std::get<ReturnInst>(func.get_inst(ret_id).kind);
+  REQUIRE(*ret.value == c2);
+
+  // Use-lists updated
+  REQUIRE(ul.users_of(c1).empty());
+  REQUIRE(ul.users_of(c2).size() == 2);
+}
+
+TEST_CASE("GraphMutator: replace_all_uses_of(TokenId)",
+          "[opt_mir][graph_mutator]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+
+  auto slot = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
+  auto t0 = b.entry_token();
+  auto c1 = b.make_constant({ConstantValue::Kind::Int, 42}, i32_type);
+
+  // Store produces t1; Load and Return consume t1
+  auto t1 = b.emit_store(entry, t0, slot, c1);
+  auto ld = b.make_load(t1, slot, i32_type);
+  b.emit_return(entry, t1, ld);
+
+  auto ul = UseLists::build(func);
+  GraphMutator mutator(func, ul);
+
+  // t1 has users: ld (NodeUser) and ReturnInst (InstUser)
+  REQUIRE(ul.users_of(t1).size() == 2);
+
+  // Replace t1 → t0 (bypass the store in the token chain)
+  mutator.replace_all_uses_of(t1, t0);
+
+  // Load now reads from t0
+  auto &load_node = std::get<LoadNode>(func.get_node(ld).kind);
+  REQUIRE(load_node.token == t0);
+
+  // Return now uses t0
+  auto ret_id = func.get_block(entry).inst_ids.back();
+  auto &ret = std::get<ReturnInst>(func.get_inst(ret_id).kind);
+  REQUIRE(ret.t_in == t0);
+
+  // t1 has no users; t0 picked them up
+  REQUIRE(ul.users_of(t1).empty());
+  REQUIRE(ul.users_of(t0).size() >= 2); // original store user + 2 new
+}
+
+TEST_CASE("GraphMutator: replace_all_uses_of(SlotId)",
+          "[opt_mir][graph_mutator]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+  auto t0 = b.entry_token();
+
+  auto slot_tmp = b.new_slot(Slot::Kind::StackLocal, i32_type, "tmp");
+  auto slot_dst = b.new_slot(Slot::Kind::StackLocal, i32_type, "dst");
+  auto c1 = b.make_constant({ConstantValue::Kind::Int, 10}, i32_type);
+
+  // Store to tmp, then load from tmp
+  auto t1 = b.emit_store(entry, t0, slot_tmp, c1);
+  auto ld = b.make_load(t1, slot_tmp, i32_type);
+  b.emit_return(entry, t1, ld);
+
+  auto ul = UseLists::build(func);
+  GraphMutator mutator(func, ul);
+
+  // Replace slot_tmp → slot_dst (copy elision)
+  mutator.replace_all_uses_of(slot_tmp, slot_dst);
+
+  // Store now targets slot_dst
+  auto store_id = func.get_block(entry).inst_ids[0];
+  auto &store = std::get<StoreInst>(func.get_inst(store_id).kind);
+  auto *store_base = std::get_if<SlotId>(&store.place.base);
+  REQUIRE(store_base != nullptr);
+  REQUIRE(*store_base == slot_dst);
+
+  // Load now reads from slot_dst
+  auto &load_node = std::get<LoadNode>(func.get_node(ld).kind);
+  auto *load_base = std::get_if<SlotId>(&load_node.place.base);
+  REQUIRE(load_base != nullptr);
+  REQUIRE(*load_base == slot_dst);
 }
