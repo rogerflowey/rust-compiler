@@ -66,10 +66,10 @@ void Updater::analyze() {
             inst_on_wl_[raw(id)] = false;
 
             // 1. Evaluate
-            auto updates = solver_.evaluate_inst(id);
+            auto output = solver_.evaluate_inst(id);
 
             // 2. Commit all outputs
-            for (auto &[tid, new_ws] : updates) {
+            for (auto &[tid, new_ws] : output) {
               commit_token_fact(tid, std::move(new_ws));
             }
           }
@@ -90,17 +90,15 @@ bool Updater::perform_rewrites() {
     rewrite_candidates_.pop_back();
     is_candidate_[raw(id)] = false;
 
-    // Check if still rewriteable
-    const auto &fact = node_facts_[raw(id)];
-    if (!fact.const_prop.is_constant())
-      continue;
-
     auto &node = func_.nodes[raw(id)];
-    if (std::holds_alternative<ConstantNode>(node.kind))
+    const auto &fact = node_facts_[raw(id)];
+
+    auto action = const_prop_rewriter_.try_rewrite(id, node, fact);
+    if (!action)
       continue;
 
     // Rewrite!
-    node.kind = ConstantNode{fact.const_prop.value};
+    node.kind = std::move(action->new_kind);
 
     // Sync UseLists & Enqueue Users
     use_lists_.notify_node_updated(id, func_);
@@ -133,8 +131,9 @@ void Updater::commit_node_fact(NodeId id, NodeFact new_fact) {
     current = new_fact;
     enqueue_users_of_node(id);
 
-    // If we learned a constant, this node is a candidate for rewriting!
-    if (new_fact.const_prop.is_constant()) {
+    // Check all rewriters for candidacy
+    auto &node = func_.nodes[raw(id)];
+    if (const_prop_rewriter_.try_rewrite(id, node, new_fact)) {
       add_candidate(id);
     }
   }

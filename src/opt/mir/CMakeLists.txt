@@ -9,6 +9,9 @@ add_library(opt_mir ${OPT_MIR_SOURCES})
 target_include_directories(opt_mir
     PUBLIC
         ${CMAKE_SOURCE_DIR}/src
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/passes/rewriters
+        ${CMAKE_CURRENT_SOURCE_DIR}/passes/evaluators
 )
 
 target_link_libraries(opt_mir

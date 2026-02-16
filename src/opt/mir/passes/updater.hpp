@@ -1,8 +1,10 @@
 #pragma once
 
-#include "opt/mir/ir/module.hpp"
-#include "opt/mir/passes/solver.hpp"
 #include "opt/mir/analysis/use_list.hpp"
+#include "opt/mir/ir/module.hpp"
+#include "opt/mir/passes/rewriters/const_prop_rewriter.hpp"
+#include "opt/mir/passes/rewriters/rewriter.hpp"
+#include "opt/mir/passes/solver.hpp"
 
 #include <deque>
 #include <variant>
@@ -38,9 +40,12 @@ private:
   std::vector<bool> node_on_wl_;
   std::vector<bool> inst_on_wl_;
 
-  // Rewrite candidates (collected during analysis)
+  // Rewriter candidates (collected during analysis)
   std::vector<NodeId> rewrite_candidates_;
   std::vector<bool> is_candidate_; // avoid duplicates in candidate vector
+
+  // -- Rewriters --
+  ConstPropRewriter const_prop_rewriter_;
 
   // -- Phases --
   void analyze();          // Fixpoint analysis (worklist loop)
