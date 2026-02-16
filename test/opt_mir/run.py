@@ -20,16 +20,16 @@ def main():
         print("Please build the project first or check the path.")
         sys.exit(1)
 
-    r_files = glob.glob(os.path.join(script_dir, "*.r"))
-    if not r_files:
-        print("No .r files found in", script_dir)
+    rx_files = glob.glob(os.path.join(script_dir, "*.rx"))
+    if not rx_files:
+        print("No .rx files found in", script_dir)
         sys.exit(0)
 
-    print(f"Found {len(r_files)} test files.")
+    print(f"Found {len(rx_files)} test files.")
     print(f"Using compiler: {compiler_bin}")
     print("-" * 40)
 
-    for r_file in sorted(r_files):
+    for r_file in sorted(rx_files):
         filename = os.path.basename(r_file)
         print(f"Running {filename}...", end=" ", flush=True)
         
