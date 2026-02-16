@@ -1,8 +1,8 @@
 #pragma once
 
-#include "opt/mir/builder.hpp"
-#include "opt/mir/nodes.hpp"
-#include "opt/mir/opt_mir.hpp"
+#include "opt/mir/tools/builder.hpp"
+#include "opt/mir/ir/nodes.hpp"
+#include "opt/mir/ir/module.hpp"
 
 #include "semantic/hir/hir.hpp"
 

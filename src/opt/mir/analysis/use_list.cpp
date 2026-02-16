@@ -1,5 +1,5 @@
-#include "opt/mir/use_list.hpp"
-#include "opt/mir/opt_mir.hpp"
+#include "opt/mir/analysis/use_list.hpp"
+#include "opt/mir/ir/module.hpp"
 
 namespace opt::mir {
 
@@ -164,32 +164,75 @@ UseLists UseLists::build(const OptFunction &func) {
 void UseLists::resize_for(const OptFunction &func) {
   node_users_.resize(func.nodes.size());
   token_users_.resize(func.next_token_);
+
+  node_uses_.resize(func.nodes.size());
+  inst_uses_.resize(func.insts.size());
 }
 
 void UseLists::scan_node(NodeId id, const Node &node) {
-  auto uses = uses_of(node);
-  User user = NodeUser{id};
-  for (const auto &u : uses) {
-    std::visit(Overloaded{
-                   [&](NodeUse use) { add_user(use.id, user); },
-                   [&](TokenUse use) { add_user(use.id, user); },
-                   [&](SlotUse) {}, // Not tracking slot users yet
-                   [&](BlockUse) {} // Not tracking block users yet
-               },
-               u);
-  }
+  set_uses(id, uses_of(node));
 }
 
 void UseLists::scan_inst(InstId id, const PinnedInst &inst) {
-  auto uses = uses_of(inst);
-  User user = InstUser{id};
-  for (const auto &u : uses) {
-    std::visit(Overloaded{[&](NodeUse use) { add_user(use.id, user); },
-                          [&](TokenUse use) { add_user(use.id, user); },
-                          [&](SlotUse) {}, [&](BlockUse) {}},
+  set_uses(id, uses_of(inst));
+}
+
+// ----------------------------------------------------------------------------
+// Core Update Logic (Forward + Reverse syncing)
+// ----------------------------------------------------------------------------
+
+void UseLists::set_uses(NodeId user_id, std::vector<Use> new_uses) {
+  if (raw(user_id) >= node_uses_.size()) {
+    node_uses_.resize(raw(user_id) + 1);
+  }
+
+  // 1. Remove old uses
+  User user = NodeUser{user_id};
+  for (const auto &u : node_uses_[raw(user_id)]) {
+    std::visit(Overloaded{[&](NodeUse use) { remove_user(use.id, user); },
+                          [&](TokenUse use) { remove_user(use.id, user); },
+                          [&](auto) {}},
                u);
   }
+
+  // 2. Add new uses
+  for (const auto &u : new_uses) {
+    std::visit(Overloaded{[&](NodeUse use) { add_user(use.id, user); },
+                          [&](TokenUse use) { add_user(use.id, user); },
+                          [&](auto) {}},
+               u);
+  }
+
+  // 3. Update forward map
+  node_uses_[raw(user_id)] = std::move(new_uses);
 }
+
+void UseLists::set_uses(InstId user_id, std::vector<Use> new_uses) {
+  if (raw(user_id) >= inst_uses_.size()) {
+    inst_uses_.resize(raw(user_id) + 1);
+  }
+
+  User user = InstUser{user_id};
+  for (const auto &u : inst_uses_[raw(user_id)]) {
+    std::visit(Overloaded{[&](NodeUse use) { remove_user(use.id, user); },
+                          [&](TokenUse use) { remove_user(use.id, user); },
+                          [&](auto) {}},
+               u);
+  }
+
+  for (const auto &u : new_uses) {
+    std::visit(Overloaded{[&](NodeUse use) { add_user(use.id, user); },
+                          [&](TokenUse use) { add_user(use.id, user); },
+                          [&](auto) {}},
+               u);
+  }
+
+  inst_uses_[raw(user_id)] = std::move(new_uses);
+}
+
+// ----------------------------------------------------------------------------
+// Reverse Map Primitive Helpers
+// ----------------------------------------------------------------------------
 
 void UseLists::add_user(NodeId def, User user) {
   if (raw(def) >= node_users_.size())
@@ -203,7 +246,32 @@ void UseLists::add_user(TokenId def, User user) {
   token_users_[raw(def)].push_back(user);
 }
 
+void UseLists::remove_user(NodeId def, User user) {
+  if (raw(def) >= node_users_.size())
+    return;
+  auto &users = node_users_[raw(def)];
+  auto it = std::find(users.begin(), users.end(), user);
+  if (it != users.end()) {
+    *it = users.back();
+    users.pop_back();
+  }
+}
+
+void UseLists::remove_user(TokenId def, User user) {
+  if (raw(def) >= token_users_.size())
+    return;
+  auto &users = token_users_[raw(def)];
+  auto it = std::find(users.begin(), users.end(), user);
+  if (it != users.end()) {
+    *it = users.back();
+    users.pop_back();
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Queries
+// ----------------------------------------------------------------------------
+
 std::span<const User> UseLists::users_of(NodeId def) const {
   if (raw(def) >= node_users_.size())
     return {};
@@ -216,24 +284,20 @@ std::span<const User> UseLists::users_of(TokenId def) const {
   return token_users_[raw(def)];
 }
 
+// ----------------------------------------------------------------------------
 // Notifications
-void UseLists::notify_node_added(NodeId id, const OptFunction &func) {
-  if (raw(id) >= node_users_.size())
-    node_users_.resize(raw(id) + 1);
-  scan_node(id, func.nodes[raw(id)]);
-}
-void UseLists::notify_node_removed(NodeId id) {
-  if (raw(id) < node_users_.size())
-    node_users_[raw(id)].clear();
-  // Also remove from all lists... expensive without reverse map.
-  // In a real system we might use a doubly-linked list or a stored iterator.
+// ----------------------------------------------------------------------------
+
+void UseLists::notify_node_updated(NodeId id, const OptFunction &func) {
+  set_uses(id, uses_of(func.nodes[raw(id)]));
 }
 
-void UseLists::notify_node_replaced(NodeId, NodeId, const OptFunction &) {
-  // Logic to move users would go here.
+void UseLists::notify_inst_updated(InstId id, const OptFunction &func) {
+  set_uses(id, uses_of(func.get_inst(id)));
 }
-void UseLists::notify_token_retargeted(TokenId, TokenId) {
-  // Logic to move users would go here.
-}
+
+void UseLists::notify_node_removed(NodeId id) { set_uses(id, {}); }
+
+void UseLists::notify_inst_removed(InstId id) { set_uses(id, {}); }
 
 } // namespace opt::mir

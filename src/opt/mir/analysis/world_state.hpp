@@ -1,7 +1,7 @@
 #pragma once
 
-#include "opt/mir/node_fact.hpp"
-#include "opt/mir/node_id.hpp"
+#include "opt/mir/analysis/node_fact.hpp"
+#include "opt/mir/ir/node_id.hpp"
 
 #include <algorithm>
 #include <vector>

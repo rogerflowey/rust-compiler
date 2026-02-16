@@ -8,7 +8,7 @@
 #include "common/mir/utils.hpp"
 #include "opt/mir/lower/lower.hpp"
 #include "opt/mir/lower/lower_internal.hpp"
-#include "opt/mir/nodes.hpp"
+#include "opt/mir/ir/nodes.hpp"
 
 #include "semantic/hir/helper.hpp"
 #include "semantic/utils.hpp"

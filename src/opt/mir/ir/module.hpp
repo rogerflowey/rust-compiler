@@ -1,9 +1,9 @@
 #pragma once
 
-#include "opt/mir/basic_block.hpp"
-#include "opt/mir/node_id.hpp"
-#include "opt/mir/nodes.hpp"
-#include "opt/mir/slot.hpp"
+#include "opt/mir/ir/basic_block.hpp"
+#include "opt/mir/ir/node_id.hpp"
+#include "opt/mir/ir/nodes.hpp"
+#include "opt/mir/ir/slot.hpp"
 #include "type/type.hpp"
 
 #include <cstdint>

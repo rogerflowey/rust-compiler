@@ -1,6 +1,6 @@
 #pragma once
 
-#include "opt/mir/opt_mir.hpp"
+#include "opt/mir/ir/module.hpp"
 #include "semantic/hir/hir.hpp"
 
 namespace opt::mir {

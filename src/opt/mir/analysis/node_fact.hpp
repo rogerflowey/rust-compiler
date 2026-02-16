@@ -1,6 +1,6 @@
 #pragma once
 
-#include "opt/mir/nodes.hpp" // ConstantValue
+#include "opt/mir/ir/nodes.hpp" // ConstantValue
 
 namespace opt::mir {
 

@@ -9,8 +9,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "opt/mir/lower/lower.hpp"
-#include "opt/mir/opt_mir.hpp"
-#include "opt/mir/printer.hpp"
+#include "opt/mir/ir/module.hpp"
+#include "opt/mir/tools/printer.hpp"
 #include "semantic/hir/hir.hpp"
 
 TEST_CASE("Lower empty program", "[opt_mir][lower]") {

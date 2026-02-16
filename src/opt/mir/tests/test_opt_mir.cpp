@@ -1,18 +1,22 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "opt/mir/basic_block.hpp"
-#include "opt/mir/builder.hpp"
-#include "opt/mir/node_fact.hpp"
-#include "opt/mir/node_id.hpp"
-#include "opt/mir/nodes.hpp"
-#include "opt/mir/opt_mir.hpp"
-#include "opt/mir/printer.hpp"
-#include "opt/mir/slot.hpp"
-#include "opt/mir/use_list.hpp"
-#include "opt/mir/world_state.hpp"
+#include "opt/mir/ir/basic_block.hpp"
+#include "opt/mir/tools/builder.hpp"
+#include "opt/mir/passes/const_fold.hpp"
+#include "opt/mir/analysis/node_fact.hpp"
+#include "opt/mir/ir/node_id.hpp"
+#include "opt/mir/ir/nodes.hpp"
+#include "opt/mir/ir/module.hpp"
+#include "opt/mir/tools/printer.hpp"
+#include "opt/mir/ir/slot.hpp"
+#include "opt/mir/passes/updater.hpp"
+#include "opt/mir/analysis/use_list.hpp"
+#include "opt/mir/analysis/world_state.hpp"
 
+#include <deque>
 #include <sstream>
 #include <string>
+#include <variant>
 
 using namespace opt::mir;
 
@@ -484,4 +488,248 @@ TEST_CASE("UseLists: token users tracked (Node and Inst)",
   REQUIRE(std::holds_alternative<InstUser>(t1_users[0]));
   auto return_inst = func.get_block(entry).inst_ids.back();
   REQUIRE(std::get<InstUser>(t1_users[0]).id == return_inst);
+}
+
+TEST_CASE("UseLists: incremental updates", "[opt_mir][use_list]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+
+  auto c1 = b.make_constant({ConstantValue::Kind::Int, 1}, i32_type); // Node 0
+  auto c2 = b.make_constant({ConstantValue::Kind::Int, 2}, i32_type); // Node 1
+  auto c3 = b.make_constant({ConstantValue::Kind::Int, 3}, i32_type); // Node 2
+
+  // sum = c1 + c2
+  auto sum =
+      b.make_binary(BinaryOpNode::Kind::IAdd, c1, c2, i32_type); // Node 3
+
+  auto ul = UseLists::build(func);
+
+  // Initial check
+  REQUIRE(ul.users_of(c1).size() == 1);
+  REQUIRE(std::get<NodeUser>(ul.users_of(c1)[0]).id == sum);
+  REQUIRE(ul.users_of(c2).size() == 1);
+  REQUIRE(std::get<NodeUser>(ul.users_of(c2)[0]).id == sum);
+  REQUIRE(ul.users_of(c3).empty());
+
+  // Update sum to be c1 + c3
+  auto &sum_node = func.nodes[raw(sum)];
+  auto &bin_op = std::get<BinaryOpNode>(sum_node.kind);
+  bin_op.rhs = c3;
+
+  // Notify UseLists
+  ul.notify_node_updated(sum, func);
+
+  // Check updates
+  // c1 still used by sum
+  REQUIRE(ul.users_of(c1).size() == 1);
+  REQUIRE(std::get<NodeUser>(ul.users_of(c1)[0]).id == sum);
+
+  // c2 no longer used
+  REQUIRE(ul.users_of(c2).empty());
+
+  // c3 now used by sum
+  REQUIRE(ul.users_of(c3).size() == 1);
+  REQUIRE(std::get<NodeUser>(ul.users_of(c3)[0]).id == sum);
+
+  // Remove sum
+  ul.notify_node_removed(sum);
+
+  // c1, c2, c3 should have no users from sum
+  REQUIRE(ul.users_of(c1).empty());
+  REQUIRE(ul.users_of(c3).empty());
+}
+
+// ============================================================================
+// Constant Folding Helpers
+// ============================================================================
+
+TEST_CASE("ConstFold: integers", "[opt_mir][solver]") {
+  ConstantValue v3{ConstantValue::Kind::Int, 3};
+  ConstantValue v5{ConstantValue::Kind::Int, 5};
+
+  auto sum = try_fold_binary(BinaryOpNode::Kind::IAdd, v3, v5);
+  REQUIRE(sum.has_value());
+  REQUIRE(sum->bits == 8);
+
+  auto prod = try_fold_binary(BinaryOpNode::Kind::IMul, v3, v5);
+  REQUIRE(prod.has_value());
+  REQUIRE(prod->bits == 15);
+}
+
+TEST_CASE("ConstFold: divide by zero", "[opt_mir][solver]") {
+  ConstantValue v10{ConstantValue::Kind::Int, 10};
+  ConstantValue v0{ConstantValue::Kind::Int, 0};
+
+  auto res = try_fold_binary(BinaryOpNode::Kind::IDiv, v10, v0);
+  REQUIRE_FALSE(res.has_value());
+}
+
+// ============================================================================
+// Updater (Solver Loop)
+// ============================================================================
+
+TEST_CASE("Updater: simple constant prop (3 + 5 -> 8)", "[opt_mir][solver]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+  auto t0 = b.entry_token();
+
+  auto c3 = b.make_constant({ConstantValue::Kind::Int, 3}, i32_type);
+  auto c5 = b.make_constant({ConstantValue::Kind::Int, 5}, i32_type);
+  auto add = b.make_binary(BinaryOpNode::Kind::IAdd, c3, c5, i32_type);
+  b.emit_return(entry, t0, add);
+
+  Updater::run(func);
+
+  // 'add' node should have been rewritten to Constant(8)
+  const auto &node = func.get_node(add);
+  REQUIRE(std::holds_alternative<ConstantNode>(node.kind));
+  REQUIRE(std::get<ConstantNode>(node.kind).value.bits == 8);
+}
+
+TEST_CASE("Updater: multi-hop const prop ( (3+5) * 2 )", "[opt_mir][solver]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+  auto t0 = b.entry_token();
+
+  auto c3 = b.make_constant({ConstantValue::Kind::Int, 3}, i32_type);
+  auto c5 = b.make_constant({ConstantValue::Kind::Int, 5}, i32_type);
+  auto sum = b.make_binary(BinaryOpNode::Kind::IAdd, c3, c5, i32_type); // 8
+  auto c2 = b.make_constant({ConstantValue::Kind::Int, 2}, i32_type);
+  auto prod = b.make_binary(BinaryOpNode::Kind::IMul, sum, c2, i32_type); // 16
+  b.emit_return(entry, t0, prod);
+
+  Updater::run(func);
+
+  // Verify 'sum' is 8
+  const auto &n_sum = func.get_node(sum);
+  REQUIRE(std::holds_alternative<ConstantNode>(n_sum.kind));
+  REQUIRE(std::get<ConstantNode>(n_sum.kind).value.bits == 8);
+
+  // Verify 'prod' is 16
+  const auto &n_prod = func.get_node(prod);
+  REQUIRE(std::holds_alternative<ConstantNode>(n_prod.kind));
+  REQUIRE(std::get<ConstantNode>(n_prod.kind).value.bits == 16);
+}
+
+TEST_CASE("Updater: store-load forwarding", "[opt_mir][solver]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+  auto t0 = b.entry_token();
+
+  auto slot = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
+  auto c42 = b.make_constant({ConstantValue::Kind::Int, 42}, i32_type);
+
+  // store @x, 42
+  auto t1 = b.emit_store(entry, t0, slot, c42);
+
+  // load @x (t1)
+  auto ld = b.make_load(t1, slot, i32_type);
+
+  // return ld
+  b.emit_return(entry, t1, ld);
+
+  Updater::run(func);
+
+  // Load should be rewritten to Constant(42)
+  const auto &n_ld = func.get_node(ld);
+  REQUIRE(std::holds_alternative<ConstantNode>(n_ld.kind));
+  REQUIRE(std::get<ConstantNode>(n_ld.kind).value.bits == 42);
+}
+
+TEST_CASE("Updater: branch merge (diamond)", "[opt_mir][solver]") {
+  //      entry
+  //     /     \
+  //   true   false
+  //     \     /
+  //      merge
+  //
+  // In true: store @x, 10
+  // In false: store @x, 10
+  // In merge: load @x -> expects 10 (Forwarding through Phi)
+
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  auto b_true = b.new_block();
+  auto b_false = b.new_block();
+  auto merge = b.new_block();
+  func.entry_block = entry;
+
+  auto slot = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
+  auto t0 = b.entry_token();
+  auto cond = b.make_constant({ConstantValue::Kind::Bool, 1}, bool_type);
+
+  auto [t_true_in, t_false_in] =
+      b.emit_branch(entry, t0, cond, b_true, b_false);
+
+  // True path
+  auto c10 = b.make_constant({ConstantValue::Kind::Int, 10}, i32_type);
+  auto t_true_out = b.emit_store(b_true, t_true_in, slot, c10);
+  b.emit_jump(b_true, t_true_out, merge);
+
+  // False path
+  auto t_false_out = b.emit_store(b_false, t_false_in, slot, c10);
+  b.emit_jump(b_false, t_false_out, merge);
+
+  // Merge
+  auto t_merge =
+      b.emit_token_phi(merge, {{b_true, t_true_out}, {b_false, t_false_out}});
+
+  auto ld = b.make_load(t_merge, slot, i32_type);
+  b.emit_return(merge, t_merge, ld);
+
+  Updater::run(func);
+
+  // The load should observe that x is 10 on both paths, so it's 10.
+  const auto &n_ld = func.get_node(ld);
+  REQUIRE(std::holds_alternative<ConstantNode>(n_ld.kind));
+  REQUIRE(std::get<ConstantNode>(n_ld.kind).value.bits == 10);
+}
+
+TEST_CASE("Updater: conflicting branch merge", "[opt_mir][solver]") {
+  // Same as above but true=10, false=20 -> Result Bottom (Load not folded)
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  auto b_true = b.new_block();
+  auto b_false = b.new_block();
+  auto merge = b.new_block();
+  func.entry_block = entry;
+
+  auto slot = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
+  auto t0 = b.entry_token();
+  auto cond = b.make_constant({ConstantValue::Kind::Bool, 1}, bool_type);
+
+  auto [t_true_in, t_false_in] =
+      b.emit_branch(entry, t0, cond, b_true, b_false);
+
+  // True path: 10
+  auto c10 = b.make_constant({ConstantValue::Kind::Int, 10}, i32_type);
+  auto t_true_out = b.emit_store(b_true, t_true_in, slot, c10);
+  b.emit_jump(b_true, t_true_out, merge);
+
+  // False path: 20
+  auto c20 = b.make_constant({ConstantValue::Kind::Int, 20}, i32_type);
+  auto t_false_out = b.emit_store(b_false, t_false_in, slot, c20);
+  b.emit_jump(b_false, t_false_out, merge);
+
+  auto t_merge =
+      b.emit_token_phi(merge, {{b_true, t_true_out}, {b_false, t_false_out}});
+
+  auto ld = b.make_load(t_merge, slot, i32_type);
+  b.emit_return(merge, t_merge, ld);
+
+  Updater::run(func);
+
+  // Load should NOT be folded (it remains a LoadNode)
+  const auto &n_ld = func.get_node(ld);
+  REQUIRE(std::holds_alternative<LoadNode>(n_ld.kind));
 }

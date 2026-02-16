@@ -1,9 +1,9 @@
 #pragma once
 
-#include "opt/mir/node_id.hpp"
-#include "opt/mir/nodes.hpp"
-#include "opt/mir/opt_mir.hpp"
-#include "opt/mir/slot.hpp"
+#include "opt/mir/ir/node_id.hpp"
+#include "opt/mir/ir/nodes.hpp"
+#include "opt/mir/ir/module.hpp"
+#include "opt/mir/ir/slot.hpp"
 
 #include <optional>
 #include <string>

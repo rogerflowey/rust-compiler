@@ -1,5 +1,5 @@
-#include "opt/mir/validator.hpp"
-#include "opt/mir/node_id.hpp"
+#include "opt/mir/tools/validator.hpp"
+#include "opt/mir/ir/node_id.hpp"
 #include "type/type.hpp"
 #include <iostream>
 #include <variant>
