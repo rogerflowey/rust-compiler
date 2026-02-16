@@ -1,53 +1,70 @@
 #pragma once
 
+#include "opt/mir/node_fact.hpp"
 #include "opt/mir/node_id.hpp"
 
 #include <algorithm>
-#include <variant>
 #include <vector>
 
 namespace opt::mir {
 
 // ============================================================================
-// SlotState — opaque descriptor of a slot's content at a point in time.
+// SlotFact — product lattice describing a slot's content at a point in time.
 //
-// The concrete payload is analysis-defined. For V1 we use std::monostate
-// as the only variant alternative; analyses extend this by adding types
-// to the SlotStatePayload variant.
+// Each component is an independent lattice with its own meet().
+// Adding a new per-slot analysis = adding a field + its meet/==.
 // ============================================================================
 
-using SlotStatePayload = std::variant<std::monostate>; // extend per-analysis
+struct SlotFact {
+  NodeFact value_fact; // what value was last stored here?
+  // Future: EscapeFact escape;
+  // Future: AliasFact alias;
 
-struct SlotState {
-  SlotStatePayload value;
-  bool operator==(const SlotState &o) const { return value == o.value; }
-  bool operator!=(const SlotState &o) const { return !(*this == o); }
+  // -- Convenience constructors -----------------------------------------------
+
+  /// Default = Top (no information about this slot yet).
+  static SlotFact top() { return {NodeFact::top()}; }
+
+  // -- Lattice meet (component-wise) ------------------------------------------
+
+  static SlotFact meet(const SlotFact &a, const SlotFact &b) {
+    return {NodeFact::meet(a.value_fact, b.value_fact)};
+  }
+
+  // -- Equality (component-wise) ----------------------------------------------
+
+  bool operator==(const SlotFact &o) const {
+    return value_fact == o.value_fact;
+  }
+  bool operator!=(const SlotFact &o) const { return !(*this == o); }
 };
 
 // ============================================================================
-// WorldSnapshot — immutable map from SlotId → SlotState
+// WorldSnapshot — immutable map from SlotId → SlotFact
 //
-// V1 implementation: sorted vector of (SlotId, SlotState) pairs.
+// V1 implementation: sorted vector of (SlotId, SlotFact) pairs.
 // This is simple and cache-friendly for small slot counts.
 // Future: upgrade to a persistent AVL tree or HAMT for O(log N) branching.
+//
+// Absent entries mean Top (no information — slot not yet analyzed or not live).
 // ============================================================================
 
 class WorldSnapshot {
 public:
   WorldSnapshot() = default;
 
-  /// Read the state of a slot. Returns default SlotState if not present.
-  [[nodiscard]] SlotState read(SlotId s) const {
+  /// Read the fact of a slot. Returns SlotFact::top() if not present.
+  [[nodiscard]] SlotFact read(SlotId s) const {
     auto it = find(s);
     if (it != entries_.end() && it->first == s) {
       return it->second;
     }
-    return SlotState{}; // default (monostate = unknown)
+    return SlotFact::top();
   }
 
-  /// Produce a new snapshot with slot `s` updated to state `v`.
+  /// Produce a new snapshot with slot `s` updated to fact `v`.
   /// The original snapshot is not modified (persistent / copy-on-write).
-  [[nodiscard]] WorldSnapshot write(SlotId s, SlotState v) const {
+  [[nodiscard]] WorldSnapshot write(SlotId s, SlotFact v) const {
     WorldSnapshot result = *this; // copy
     auto it =
         std::lower_bound(result.entries_.begin(), result.entries_.end(), s,
@@ -60,8 +77,15 @@ public:
     return result;
   }
 
-  /// Merge two snapshots. For V1: if both agree on a slot, keep it.
-  /// If they disagree, the slot is dropped (reverts to unknown).
+  /// Merge two snapshots using lattice meet.
+  ///
+  /// For each slot present in either snapshot:
+  ///   - Present in both → SlotFact::meet(a, b)
+  ///   - Present in only one → meet(fact, Top) = fact (kept as-is)
+  ///
+  /// This matches the opt.md specification:
+  ///   "If all reachable predecessors agree: merged[@s] = agreed_fact"
+  ///   "If they disagree: merged[@s] = meet(facts...)"
   [[nodiscard]] static WorldSnapshot merge(const WorldSnapshot &a,
                                            const WorldSnapshot &b) {
     // Fast path: pointer equality (same root)
@@ -75,18 +99,29 @@ public:
 
     while (ia != ea && ib != eb) {
       if (ia->first < ib->first) {
-        ++ia; // only in A → unknown in merge
+        // Only in A; meet(fact, Top) = fact
+        result.entries_.push_back(*ia);
+        ++ia;
       } else if (ib->first < ia->first) {
-        ++ib; // only in B → unknown in merge
+        // Only in B; meet(Top, fact) = fact
+        result.entries_.push_back(*ib);
+        ++ib;
       } else {
-        // same slot in both
-        if (ia->second == ib->second) {
-          result.entries_.push_back(*ia);
-        }
-        // else: disagree → drop (unknown)
+        // Same slot in both → lattice meet
+        result.entries_.push_back(
+            {ia->first, SlotFact::meet(ia->second, ib->second)});
         ++ia;
         ++ib;
       }
+    }
+    // Remaining entries exist in only one side → kept (meet with Top = self)
+    while (ia != ea) {
+      result.entries_.push_back(*ia);
+      ++ia;
+    }
+    while (ib != eb) {
+      result.entries_.push_back(*ib);
+      ++ib;
     }
     return result;
   }
@@ -101,11 +136,11 @@ public:
   /// Number of slots with known state.
   [[nodiscard]] std::size_t size() const { return entries_.size(); }
 
-  /// Check if snapshot is empty (all slots unknown).
+  /// Check if snapshot is empty (all slots at Top).
   [[nodiscard]] bool empty() const { return entries_.empty(); }
 
 private:
-  using Entry = std::pair<SlotId, SlotState>;
+  using Entry = std::pair<SlotId, SlotFact>;
   std::vector<Entry> entries_; // sorted by SlotId
 
   [[nodiscard]] std::vector<Entry>::const_iterator find(SlotId s) const {

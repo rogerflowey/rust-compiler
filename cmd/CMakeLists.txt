@@ -19,7 +19,6 @@ target_link_libraries(semantic_pipeline PRIVATE
 target_link_libraries(ir_pipeline PRIVATE
     parser
     semantic
-    mir
     opt_mir
 )
 

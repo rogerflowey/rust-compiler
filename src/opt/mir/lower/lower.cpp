@@ -190,10 +190,10 @@ void OptFunctionLowerer::initialize(std::string name) {
   if (ret_type != invalid_type_id &&
       ::mir::detail::is_aggregate_type(ret_type)) {
     // SRET is a pointer parameter (handled as StackLocal in Opt MIR)
-    type::Type ptr_ty;
-    ptr_ty.value = type::ReferenceType{ret_type, true}; // &mut T
-    TypeId ptr_id = type::get_typeID(ptr_ty);
-    sret_slot_ = builder_.new_slot(Slot::Kind::Parameter, ptr_id, "sret_param");
+    // We store it as the aggregate type itself, treating it as the storage
+    // location.
+    sret_slot_ =
+        builder_.new_slot(Slot::Kind::Parameter, ret_type, "sret_param");
   }
 }
 
@@ -427,8 +427,9 @@ void OptFunctionLowerer::finalize_loop(const LoopContext &ctx) {
 
     PinnedInst pinned;
     pinned.kind = phi;
+    auto inst_id = func_.alloc_inst(std::move(pinned), ctx.header_block);
     auto &header = func_.blocks[static_cast<std::size_t>(ctx.header_block)];
-    header.instructions.insert(header.instructions.begin(), std::move(pinned));
+    header.inst_ids.insert(header.inst_ids.begin(), inst_id);
   }
 }
 
@@ -533,18 +534,10 @@ void OptFunctionLowerer::emit_return_value(
     }
     // Expected Place
     if (auto *p = std::get_if<Place>(&*res)) {
-      // Load SRET pointer
-      type::Type ptr_ty;
-      ptr_ty.value = type::ReferenceType{type, true};
-      TypeId ptr_id = type::get_typeID(ptr_ty);
-
-      NodeId sret_ptr = builder_.make_load(current_token_,
-                                           Place::simple(*sret_slot_), ptr_id);
-
-      // Memcopy to *sret_ptr
+      // Memcopy directly to SRET slot
       current_token_ =
           builder_.emit_memcopy(current_block_id(), current_token_,
-                                Place::from_ptr(sret_ptr), *p, type);
+                                Place::simple(*sret_slot_), *p, type);
       // Return void
       builder_.emit_return(current_block_id(), current_token_, std::nullopt);
     } else {

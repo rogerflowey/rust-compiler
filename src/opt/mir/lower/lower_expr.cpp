@@ -388,6 +388,9 @@ OptFunctionLowerer::lower_binary_op(const hir::BinaryOp &binary,
   semantic::ExprInfo rhs_info = hir::helper::get_expr_info(*binary.rhs);
 
   NodeId lhs = lower_expr_value(*binary.lhs);
+  if (!is_reachable())
+    return std::monostate{};
+
   NodeId rhs = lower_expr_value(*binary.rhs);
 
   auto kind =
@@ -589,7 +592,10 @@ OptFunctionLowerer::lower_method_call(const hir::MethodCall &mcall,
 
     if (is_aggregate) {
       // Aggregate passed by value (ByVal)
-      Place p = *lower_expr_place(arg_expr);
+      auto p_opt = lower_expr_place(arg_expr);
+      if (!p_opt)
+        return;
+      Place p = *p_opt;
       if (std::holds_alternative<SlotId>(p.base) && p.projections.empty()) {
         args.push_back(std::get<SlotId>(p.base));
       } else {

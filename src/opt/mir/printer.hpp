@@ -160,7 +160,8 @@ private:
       }
       os_ << "\n";
 
-      for (const auto &inst : bb.instructions) {
+      for (auto iid : bb.inst_ids) {
+        const auto &inst = func.get_inst(iid);
         os_ << "    ";
         print_pinned(inst.kind);
         os_ << "\n";

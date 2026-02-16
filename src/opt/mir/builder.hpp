@@ -71,8 +71,9 @@ public:
   TokenId emit_store(BlockId block, TokenId t_in, Place place, NodeId value) {
     auto t_out = func_.alloc_token();
     auto &bb = func_.get_block_mut(block);
-    bb.instructions.push_back(
-        PinnedInst{StoreInst{t_in, std::move(place), value, t_out}});
+    auto inst_id = func_.alloc_inst(
+        PinnedInst{StoreInst{t_in, std::move(place), value, t_out}}, block);
+    bb.inst_ids.push_back(inst_id);
     return t_out;
   }
 
@@ -86,8 +87,11 @@ public:
                        type::TypeId type) {
     auto t_out = func_.alloc_token();
     auto &bb = func_.get_block_mut(block);
-    bb.instructions.push_back(PinnedInst{
-        MemcopyInst{t_in, std::move(dest), std::move(src), type, t_out}});
+    auto inst_id =
+        func_.alloc_inst(PinnedInst{MemcopyInst{t_in, std::move(dest),
+                                                std::move(src), type, t_out}},
+                         block);
+    bb.inst_ids.push_back(inst_id);
     return t_out;
   }
 
@@ -99,8 +103,10 @@ public:
     auto t_false = func_.alloc_token();
 
     auto &bb = func_.get_block_mut(block);
-    bb.instructions.push_back(
-        PinnedInst{BranchInst{t_in, cond, t_true, t_false, bb_true, bb_false}});
+    auto inst_id = func_.alloc_inst(
+        PinnedInst{BranchInst{t_in, cond, t_true, t_false, bb_true, bb_false}},
+        block);
+    bb.inst_ids.push_back(inst_id);
 
     // Wire CFG edges
     add_edge(block, bb_true);
@@ -112,7 +118,8 @@ public:
   /// Emit an unconditional Jump. Also wires CFG edge.
   void emit_jump(BlockId block, TokenId t_in, BlockId target) {
     auto &bb = func_.get_block_mut(block);
-    bb.instructions.push_back(PinnedInst{JumpInst{t_in, target}});
+    auto inst_id = func_.alloc_inst(PinnedInst{JumpInst{t_in, target}}, block);
+    bb.inst_ids.push_back(inst_id);
     add_edge(block, target);
   }
 
@@ -126,8 +133,9 @@ public:
       entries.push_back(TokenPhiIncoming{bid, tid});
     }
     auto &bb = func_.get_block_mut(block);
-    bb.instructions.push_back(
-        PinnedInst{TokenPhiInst{std::move(entries), t_out}});
+    auto inst_id = func_.alloc_inst(
+        PinnedInst{TokenPhiInst{std::move(entries), t_out}}, block);
+    bb.inst_ids.push_back(inst_id);
     return t_out;
   }
 
@@ -135,7 +143,8 @@ public:
   void emit_return(BlockId block, TokenId t_in,
                    std::optional<NodeId> value = {}) {
     auto &bb = func_.get_block_mut(block);
-    bb.instructions.push_back(PinnedInst{ReturnInst{t_in, value}});
+    auto inst_id = func_.alloc_inst(PinnedInst{ReturnInst{t_in, value}}, block);
+    bb.inst_ids.push_back(inst_id);
   }
 
   /// Emit a Call instruction. Returns t_out.
@@ -145,9 +154,11 @@ public:
                     type::TypeId result_type = type::invalid_type_id) {
     auto t_out = func_.alloc_token();
     auto &bb = func_.get_block_mut(block);
-    bb.instructions.push_back(
+    auto inst_id = func_.alloc_inst(
         PinnedInst{CallInst{t_in, std::move(target), std::move(args), t_out,
-                            sret_slot, result_type}});
+                            sret_slot, result_type}},
+        block);
+    bb.inst_ids.push_back(inst_id);
     return t_out;
   }
 

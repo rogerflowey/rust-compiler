@@ -1,7 +1,6 @@
 #pragma once
 
 #include "opt/mir/node_id.hpp"
-#include "opt/mir/nodes.hpp"
 
 #include <vector>
 
@@ -11,7 +10,7 @@ namespace opt::mir {
 /// Floating nodes are NOT stored here; they live in the function's arena.
 struct BasicBlock {
   BlockId id = invalid_block;
-  std::vector<PinnedInst> instructions;
+  std::vector<InstId> inst_ids;
 
   // CFG edges (maintained by the Builder)
   std::vector<BlockId> predecessors;
