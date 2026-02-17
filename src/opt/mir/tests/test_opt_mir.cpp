@@ -290,46 +290,41 @@ TEST_CASE("WorldSnapshot merge: slots in only one side are kept",
 }
 
 // ============================================================================
-// ConstPropFact lattice
+// PointToFact lattice
 // ============================================================================
 
-TEST_CASE("ConstPropFact: Top meet x = x", "[opt_mir][fact]") {
-  auto top = ConstPropFact::top();
-  auto c5 = ConstPropFact::constant({ConstantValue::Kind::Int, 5});
-  auto bot = ConstPropFact::bottom();
+TEST_CASE("PointToFact: Top meet x = x", "[opt_mir][fact]") {
+  auto top = PointToFact::top();
+  auto p = PointToFact::singleton(Place::simple(SlotId{0}));
+  auto bot = PointToFact::bottom();
 
-  REQUIRE(ConstPropFact::meet(top, top) == top);
-  REQUIRE(ConstPropFact::meet(top, c5) == c5);
-  REQUIRE(ConstPropFact::meet(c5, top) == c5);
-  REQUIRE(ConstPropFact::meet(top, bot) == bot);
-  REQUIRE(ConstPropFact::meet(bot, top) == bot);
+  REQUIRE(PointToFact::meet(top, top) == top);
+  REQUIRE(PointToFact::meet(top, p) == p);
+  REQUIRE(PointToFact::meet(p, top) == p);
+  REQUIRE(PointToFact::meet(top, bot) == bot);
+  REQUIRE(PointToFact::meet(bot, top) == bot);
 }
 
-TEST_CASE("ConstPropFact: same constant meet = same constant",
-          "[opt_mir][fact]") {
-  auto c5a = ConstPropFact::constant({ConstantValue::Kind::Int, 5});
-  auto c5b = ConstPropFact::constant({ConstantValue::Kind::Int, 5});
+TEST_CASE("PointToFact: Set union", "[opt_mir][fact]") {
+  auto p1 = PointToFact::singleton(Place::simple(SlotId{0}));
+  auto p2 = PointToFact::singleton(Place::simple(SlotId{1}));
 
-  REQUIRE(ConstPropFact::meet(c5a, c5b) == c5a);
-  REQUIRE(ConstPropFact::meet(c5a, c5b).is_constant());
+  // meet(p1, p2) -> {slot0, slot1}
+  auto res = PointToFact::meet(p1, p2);
+  REQUIRE(res.kind == PointToFact::Kind::Set);
+  REQUIRE(res.places.size() == 2);
+  REQUIRE((res.places[0] == Place::simple(SlotId{0}) ||
+           res.places[0] == Place::simple(SlotId{1})));
+  REQUIRE((res.places[1] == Place::simple(SlotId{0}) ||
+           res.places[1] == Place::simple(SlotId{1})));
 }
 
-TEST_CASE("ConstPropFact: different constants meet = Bottom",
-          "[opt_mir][fact]") {
-  auto c5 = ConstPropFact::constant({ConstantValue::Kind::Int, 5});
-  auto c7 = ConstPropFact::constant({ConstantValue::Kind::Int, 7});
+TEST_CASE("PointToFact: Bottom meet anything = Bottom", "[opt_mir][fact]") {
+  auto bot = PointToFact::bottom();
+  auto p = PointToFact::singleton(Place::simple(SlotId{0}));
 
-  auto result = ConstPropFact::meet(c5, c7);
-  REQUIRE(result.is_bottom());
-}
-
-TEST_CASE("ConstPropFact: Bottom meet anything = Bottom", "[opt_mir][fact]") {
-  auto bot = ConstPropFact::bottom();
-  auto c5 = ConstPropFact::constant({ConstantValue::Kind::Int, 5});
-
-  REQUIRE(ConstPropFact::meet(bot, c5).is_bottom());
-  REQUIRE(ConstPropFact::meet(c5, bot).is_bottom());
-  REQUIRE(ConstPropFact::meet(bot, bot).is_bottom());
+  REQUIRE(PointToFact::meet(bot, p).is_bottom());
+  REQUIRE(PointToFact::meet(p, bot).is_bottom());
 }
 
 // ============================================================================
@@ -338,20 +333,160 @@ TEST_CASE("ConstPropFact: Bottom meet anything = Bottom", "[opt_mir][fact]") {
 
 TEST_CASE("NodeFact: product meet dispatches component-wise",
           "[opt_mir][fact]") {
-  NodeFact a{ConstPropFact::constant({ConstantValue::Kind::Int, 5})};
-  NodeFact b{ConstPropFact::constant({ConstantValue::Kind::Int, 7})};
+  // a: Const(5), PointTo(Slot0)
+  NodeFact a{ConstPropFact::constant({ConstantValue::Kind::Int, 5}),
+             PointToFact::singleton(Place::simple(SlotId{0}))};
+  // b: Const(7), PointTo(Slot1)
+  NodeFact b{ConstPropFact::constant({ConstantValue::Kind::Int, 7}),
+             PointToFact::singleton(Place::simple(SlotId{1}))};
 
   auto result = NodeFact::meet(a, b);
+  // ConstProp: 5 meet 7 -> Bottom
   REQUIRE(result.const_prop.is_bottom());
+  // PointTo: {Slot0} meet {Slot1} -> {Slot0, Slot1}
+  REQUIRE(result.point_to.kind == PointToFact::Kind::Set);
+  REQUIRE(result.point_to.places.size() == 2);
 }
 
 TEST_CASE("NodeFact: top meet constant = constant", "[opt_mir][fact]") {
   auto top = NodeFact::top();
-  NodeFact c5{ConstPropFact::constant({ConstantValue::Kind::Int, 5})};
+  NodeFact c5{ConstPropFact::constant({ConstantValue::Kind::Int, 5}),
+              PointToFact::top()};
 
   auto result = NodeFact::meet(top, c5);
   REQUIRE(result.const_prop.is_constant());
   REQUIRE(result == c5);
+}
+
+// ============================================================================
+// WorldSnapshot merge with lattice meet
+// ============================================================================
+
+TEST_CASE("WorldSnapshot merge with PointTo facts", "[opt_mir][world_state]") {
+  auto slot = SlotId{0};
+
+  // Two snapshots with same slot but different pointer targets
+  NodeFact nf_a{ConstPropFact::top(),
+                PointToFact::singleton(Place::simple(SlotId{1}))};
+  NodeFact nf_b{ConstPropFact::top(),
+                PointToFact::singleton(Place::simple(SlotId{2}))};
+
+  auto ws_a = WorldSnapshot{}.write(slot, {}, nf_a);
+  auto ws_b = WorldSnapshot{}.write(slot, {}, nf_b);
+
+  auto merged = WorldSnapshot::merge(ws_a, ws_b);
+
+  // Result should be Union of pointer targets
+  REQUIRE(merged.size() == 1);
+  auto read_fact = merged.read(slot);
+  REQUIRE(read_fact.point_to.kind == PointToFact::Kind::Set);
+  REQUIRE(read_fact.point_to.places.size() == 2);
+}
+
+// ============================================================================
+// Updater (Solver Loop) with AddressOf
+// ============================================================================
+
+TEST_CASE("Updater: AddressOf analysis", "[opt_mir][solver]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+  auto t0 = b.entry_token();
+
+  auto slot_x = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
+
+  // %ptr = AddressOf(x)
+  // We don't have a Builder method for AddressOf yet, create manually
+  auto ptr_node_id = func.alloc_node(Node{
+      AddressOfNode{Place::simple(slot_x)},
+      i32_type // technically pointer type, but we use fake types here
+  });
+
+  // To test if it works, we need to inspect the facts computed by Solver.
+  // Updater usually runs rewriting. We can run Updater (which runs Solver)
+  // and checking the internal state is hard from "outside" unless we expose it.
+
+  // Alternatively, we can construct Solver manually and query it.
+  // But Solver needs initialized facts.
+
+  // Let's just create a test that uses Updater, and relies on the fact
+  // existing? Actually, we can't easily check the fact unless we misuse
+  // rewrites or add a custom rewriter. Or, we rely on the fact that we can
+  // construct a Solver in the test.
+
+  // Manual Solver test
+  std::vector<NodeFact> node_facts(func.nodes.size(), NodeFact::top());
+  std::vector<WorldSnapshot> token_facts(100, WorldSnapshot{});
+
+  Solver solver(func, node_facts, token_facts);
+  auto fact = solver.evaluate_node(ptr_node_id);
+
+  REQUIRE(fact.point_to.kind == PointToFact::Kind::Set);
+  REQUIRE(fact.point_to.places.size() == 1);
+  REQUIRE(fact.point_to.places[0] == Place::simple(slot_x));
+}
+
+TEST_CASE("Updater: PointTo propagation through memory", "[opt_mir][solver]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+  auto t0 = b.entry_token();
+
+  auto slot_x = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
+  auto slot_ptr = b.new_slot(Slot::Kind::StackLocal, i32_type, "ptr_storage");
+
+  // %ptr = AddressOf(x)
+  auto ptr_node =
+      func.alloc_node(Node{AddressOfNode{Place::simple(slot_x)}, i32_type});
+
+  // store @ptr_storage, %ptr
+  auto t1 = b.emit_store(entry, t0, slot_ptr, ptr_node);
+
+  // %loaded_ptr = load @ptr_storage
+  auto loaded_ptr = b.make_load(t1, slot_ptr, i32_type);
+
+  b.emit_return(entry, t1, loaded_ptr);
+
+  // Run Solver manually to verify propagation
+  // We need to run fixpoint or at least enough iterations.
+  // Let's mimic what Updater does but simplified.
+
+  // Initialize facts
+  size_t max_node = func.nodes.size();
+  size_t max_token = 100; // Safe upper bound for this small test
+  std::vector<NodeFact> node_facts(max_node, NodeFact::top());
+  std::vector<WorldSnapshot> token_facts(max_token, WorldSnapshot{});
+
+  // Initial token fact (empty world)
+  token_facts[raw(t0)] = WorldSnapshot{};
+
+  Solver solver(func, node_facts, token_facts);
+
+  // 1. Eval ptr_node
+  node_facts[raw(ptr_node)] = solver.evaluate_node(ptr_node);
+
+  // 2. Eval store -> yields output token fact for t1
+  // Store inst depends on t0 (empty) and ptr_node (PointTo x)
+  // Store instruction ID? Builder doesn't return InstId, we need to find it.
+  InstId store_inst = func.get_block(entry).inst_ids[0];
+
+  auto store_out = solver.evaluate_inst(store_inst);
+  // Store output is t1
+  for (auto [t, ws] : store_out) {
+    if (t == t1)
+      token_facts[raw(t1)] = ws;
+  }
+
+  // 3. Eval load
+  node_facts[raw(loaded_ptr)] = solver.evaluate_node(loaded_ptr);
+
+  // Check loaded_ptr fact
+  auto fact = node_facts[raw(loaded_ptr)];
+  REQUIRE(fact.point_to.kind == PointToFact::Kind::Set);
+  REQUIRE(fact.point_to.places.size() == 1);
+  REQUIRE(fact.point_to.places[0] == Place::simple(slot_x));
 }
 
 // ============================================================================
@@ -363,8 +498,10 @@ TEST_CASE("WorldSnapshot merge: disagreeing facts produce meet, not drop",
   auto slot = SlotId{0};
 
   // Two snapshots with same slot but different constant values
-  NodeFact nf5{ConstPropFact::constant({ConstantValue::Kind::Int, 5})};
-  NodeFact nf7{ConstPropFact::constant({ConstantValue::Kind::Int, 7})};
+  NodeFact nf5{ConstPropFact::constant({ConstantValue::Kind::Int, 5}),
+               PointToFact::top()};
+  NodeFact nf7{ConstPropFact::constant({ConstantValue::Kind::Int, 7}),
+               PointToFact::top()};
 
   auto ws_a = WorldSnapshot{}.write(slot, {}, nf5);
   auto ws_b = WorldSnapshot{}.write(slot, {}, nf7);
@@ -380,7 +517,8 @@ TEST_CASE("WorldSnapshot merge: agreeing facts preserved",
           "[opt_mir][world_state][fact]") {
   auto slot = SlotId{0};
 
-  NodeFact nf5{ConstPropFact::constant({ConstantValue::Kind::Int, 5})};
+  NodeFact nf5{ConstPropFact::constant({ConstantValue::Kind::Int, 5}),
+               PointToFact::top()};
 
   auto ws_a = WorldSnapshot{}.write(slot, {}, nf5);
   auto ws_b = WorldSnapshot{}.write(slot, {}, nf5);

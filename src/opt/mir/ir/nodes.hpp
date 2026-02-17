@@ -33,12 +33,14 @@ struct ConstantValue {
 struct FieldProjection {
   std::size_t index = 0;
   bool operator==(const FieldProjection &) const = default;
+  auto operator<=>(const FieldProjection &) const = default;
 };
 
 /// Array/pointer index access. The index is a NodeId (computed at runtime).
 struct IndexProjection {
   NodeId index = invalid_node;
   bool operator==(const IndexProjection &) const = default;
+  auto operator<=>(const IndexProjection &) const = default;
 };
 
 using Projection = std::variant<FieldProjection, IndexProjection>;
@@ -52,6 +54,7 @@ struct Place {
   std::vector<Projection> projections;
 
   bool operator==(const Place &) const = default;
+  auto operator<=>(const Place &) const = default;
 
   /// Convenience: construct a simple slot place with no projections.
   static Place simple(SlotId s) { return Place{PlaceBase{s}, {}}; }

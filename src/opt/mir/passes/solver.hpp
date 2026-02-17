@@ -4,6 +4,7 @@
 #include "opt/mir/ir/module.hpp"
 #include "opt/mir/passes/evaluators/const_prop_evaluator.hpp"
 #include "opt/mir/passes/evaluators/evaluator.hpp"
+#include "opt/mir/passes/evaluators/point_to_evaluator.hpp"
 
 #include <vector>
 
@@ -31,7 +32,19 @@ public:
   [[nodiscard]] InstEvalOutput evaluate_inst(InstId id) const;
 
 private:
+  const OptFunction &func_;
+  const std::vector<NodeFact> &node_facts_;
+  const std::vector<WorldSnapshot> &token_facts_;
+
   ConstPropEvaluator const_prop_;
+  PointToEvaluator point_to_;
+
+  // -- Inst Helpers --
+  void eval_store(const StoreInst &s, InstEvalOutput &out) const;
+  void eval_phi(const TokenPhiInst &p, InstEvalOutput &out) const;
+  void eval_branch(const BranchInst &b, InstEvalOutput &out) const;
+  void eval_memcopy(const MemcopyInst &m, InstEvalOutput &out) const;
+  void eval_call(const CallInst &c, InstEvalOutput &out) const;
 };
 
 } // namespace opt::mir
