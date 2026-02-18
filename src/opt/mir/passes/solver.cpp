@@ -116,16 +116,18 @@ NodeFact Solver::eval_load(const LoadNode &n, type::TypeId type) const {
   NodeId ptr = std::get<NodeId>(n.place.base);
   const auto &ptr_fact = get_fact(node_facts_, raw(ptr)).point_to;
 
-  if (ptr_fact.is_bottom()) {
-    return make_bottom(type);
-  }
-
   if (ptr_fact.is_top()) {
     return make_top(type);
   }
 
   if (ptr_fact.is_not_applicable()) {
-    return make_top(type);
+    return make_top(type); // Should not happen in valid code
+  }
+
+  // If the pointer can point to external/unknown memory, the result of loading
+  // from it is unknown. (Union with Bottom is Bottom).
+  if (ptr_fact.points_to_external) {
+    return make_bottom(type);
   }
 
   // Set of places
@@ -140,7 +142,8 @@ NodeFact Solver::eval_load(const LoadNode &n, type::TypeId type) const {
                                   n.place.projections.begin(),
                                   n.place.projections.end());
 
-          NodeFact val = world.read(slot_types(), target_slot, combined_projections);
+      NodeFact val =
+          world.read(slot_types(), target_slot, combined_projections);
 
       // Coerce 'val' to match the Load's expected type schema.
       // If memory has Bottom/Const for a pointer, we must treat it as NA.
@@ -154,6 +157,7 @@ NodeFact Solver::eval_load(const LoadNode &n, type::TypeId type) const {
 
       result = NodeFact::meet(result, val);
     } else {
+      // Points to something we can't load from (e.g. function/block label?)
       return make_bottom(type);
     }
   }
@@ -215,9 +219,14 @@ void Solver::eval_store(const StoreInst &s, InstEvalOutput &out) const {
     NodeId ptr = std::get<NodeId>(s.place.base);
     const auto &ptr_fact = get_fact(node_facts_, raw(ptr)).point_to;
 
+    // Must be a Set (or Top/NA, but those are handled by default/ignored)
     if (ptr_fact.kind == PointToFact::Kind::Set) {
-      bool is_strong = (ptr_fact.places.size() == 1);
+      // If we have external pointers, we can't be sure we are writing to *only*
+      // one place, so updates to locals must be weak.
+      bool is_strong =
+          (ptr_fact.places.size() == 1) && !ptr_fact.points_to_external;
 
+      // Update known local targets
       for (const auto &target_place : ptr_fact.places) {
         if (std::holds_alternative<SlotId>(target_place.base)) {
           SlotId target_slot = std::get<SlotId>(target_place.base);
@@ -231,31 +240,37 @@ void Solver::eval_store(const StoreInst &s, InstEvalOutput &out) const {
 
           if (is_strong) {
             // Strong update: Overwrite
-            world = world.write(slot_types(), target_slot,
-                                combined_projections, val_fact);
+            world = world.write(slot_types(), target_slot, combined_projections,
+                                val_fact);
           } else {
             // Weak update
             NodeFact old_val =
                 world.read(slot_types(), target_slot, combined_projections);
             NodeFact new_val = NodeFact::meet(old_val, val_fact);
 
-            world = world.write(slot_types(), target_slot,
-                                combined_projections, new_val);
+            world = world.write(slot_types(), target_slot, combined_projections,
+                                new_val);
           }
         }
       }
-    } else {
-      // Bottom / Too complex: Clobber all escaped slots
-      for (std::uint32_t i = 0; i < func_.slots.size(); ++i) {
-        SlotId slot{static_cast<std::uint32_t>(i)};
-        if (escape_analysis_.escapes(slot)) {
-          // Clobber with Bottom appropriate for the slot type
-          type::TypeId slot_type = func_.slots[i].type;
-          NodeFact clobber = make_bottom(slot_type);
-          world = world.write(slot_types(), slot, {}, clobber);
+
+      // If possibly pointing to external/unknown, we must clobber escaped
+      // facts.
+      if (ptr_fact.points_to_external) {
+        for (std::uint32_t i = 0; i < func_.slots.size(); ++i) {
+          SlotId slot{static_cast<std::uint32_t>(i)};
+          if (escape_analysis_.escapes(slot)) {
+            // Clobber with Bottom appropriate for the slot type
+            // (Note: we use make_bottom to generate generic "Unknown" fact)
+            type::TypeId slot_type = func_.slots[i].type;
+            NodeFact clobber = make_bottom(slot_type);
+            world = world.write(slot_types(), slot, {}, clobber);
+          }
         }
       }
     }
+    // If Top or NotApplicable, do nothing (safe approx for store is no-op if
+    // dead/invalid)
   }
 
   out.add(s.t_out, std::move(world));
@@ -294,8 +309,8 @@ void Solver::eval_memcopy(const MemcopyInst &m, InstEvalOutput &out) const {
   if (src_slot && dst_slot) {
     // Now we CAN represent sub-slot mapping!
     // Map dst (at projections) -> src (Slot + projections)
-    world = world.write_base(slot_types(), *dst_slot, m.dest.projections,
-                             m.src);
+    world =
+        world.write_base(slot_types(), *dst_slot, m.dest.projections, m.src);
   }
 
   out.add(m.t_out, std::move(world));

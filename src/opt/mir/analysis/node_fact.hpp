@@ -128,25 +128,36 @@ struct ConstPropFact {
 // ============================================================================
 
 struct PointToFact {
-  enum class Kind { Top, Set, Bottom, NotApplicable };
+  enum class Kind { Top, Set, NotApplicable };
 
   Kind kind = Kind::Top;
   std::vector<Place> places; // Sorted and deduplicated
+  bool points_to_external = false;
 
   // -- Convenience constructors -----------------------------------------------
 
   static PointToFact top() { return {Kind::Top, {}}; }
 
-  static PointToFact singleton(Place p) { return {Kind::Set, {std::move(p)}}; }
+  static PointToFact singleton(Place p) {
+    return {Kind::Set, {std::move(p)}, false};
+  }
 
-  static PointToFact bottom() { return {Kind::Bottom, {}}; }
+  // "Bottom" in the old sense (total unknown) corresponds to external + no
+  // known locals.
+  static PointToFact bottom() { return {Kind::Set, {}, true}; }
 
   static PointToFact not_applicable() { return {Kind::NotApplicable, {}}; }
 
   // -- Predicates -------------------------------------------------------------
 
   [[nodiscard]] bool is_top() const { return kind == Kind::Top; }
-  [[nodiscard]] bool is_bottom() const { return kind == Kind::Bottom; }
+
+  // "Bottom" check now looks for valid external flag with no known places.
+  // Note: logic should generally check points_to_external directly.
+  [[nodiscard]] bool is_bottom() const {
+    return kind == Kind::Set && points_to_external && places.empty();
+  }
+
   [[nodiscard]] bool is_not_applicable() const {
     return kind == Kind::NotApplicable;
   }
@@ -154,13 +165,9 @@ struct PointToFact {
   // -- Lattice meet -----------------------------------------------------------
   //
   //   NA  ^ NA       = NA
-  //   NA  ^ x        = THROW
-  //   x   ^ NA       = THROW
   //   Top ^ x        = x
   //   x   ^ Top      = x
-  //   Set(A) ^ Set(B) = Set(A U B)
-  //   Bottom ^ x     = Bottom
-  //   x ^ Bottom     = Bottom
+  //   Set(A, extA) ^ Set(B, extB) = Set(A U B, extA | extB)
 
   static PointToFact meet(const PointToFact &a, const PointToFact &b) {
     if (a.is_not_applicable() && b.is_not_applicable()) {
@@ -175,18 +182,21 @@ struct PointToFact {
       return b;
     if (b.is_top())
       return a;
-    if (a.is_bottom() || b.is_bottom())
-      return bottom();
 
-    // Both are Sets: union
+    // Both are Sets (or what used to be Bottom)
     PointToFact result;
     result.kind = Kind::Set;
+    result.points_to_external = a.points_to_external || b.points_to_external;
     result.places.reserve(a.places.size() + b.places.size());
 
     // Set union (assuming sorted inputs)
     std::set_union(a.places.begin(), a.places.end(), b.places.begin(),
                    b.places.end(), std::back_inserter(result.places),
                    std::less<Place>{});
+
+    // Deduplicate if needed? set_union handles sorted ranges correctly for
+    // Union. If input vectors are sorted and unique, output is sorted and
+    // unique. We assume invariant is maintained.
 
     return result;
   }
@@ -201,7 +211,7 @@ struct PointToFact {
     if (kind != o.kind)
       return false;
     if (kind == Kind::Set)
-      return places == o.places;
+      return points_to_external == o.points_to_external && places == o.places;
     return true;
   }
 

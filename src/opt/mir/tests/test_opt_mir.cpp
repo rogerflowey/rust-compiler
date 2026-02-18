@@ -329,12 +329,22 @@ TEST_CASE("PointToFact: Set union", "[opt_mir][fact]") {
            res.places[1] == Place::simple(SlotId{1})));
 }
 
-TEST_CASE("PointToFact: Bottom meet anything = Bottom", "[opt_mir][fact]") {
-  auto bot = PointToFact::bottom();
+TEST_CASE("PointToFact: External meet Place preserves both",
+          "[opt_mir][fact]") {
+  auto ext = PointToFact::bottom();
   auto p = PointToFact::singleton(Place::simple(SlotId{0}));
 
-  REQUIRE(PointToFact::meet(bot, p).is_bottom());
-  REQUIRE(PointToFact::meet(p, bot).is_bottom());
+  // meet(External, {0}) -> {0} + External
+  auto res1 = PointToFact::meet(ext, p);
+  REQUIRE(res1.kind == PointToFact::Kind::Set);
+  REQUIRE(res1.points_to_external);
+  REQUIRE(res1.places.size() == 1);
+  REQUIRE(res1.places[0] == Place::simple(SlotId{0}));
+  REQUIRE_FALSE(res1.is_bottom()); // Not empty
+
+  auto res2 = PointToFact::meet(p, ext);
+  REQUIRE(res2.points_to_external);
+  REQUIRE(res2.places.size() == 1);
 }
 
 // ============================================================================
@@ -559,6 +569,11 @@ TEST_CASE("Solver: pointer-base store clobbers escaped slots",
   }
 
   node_facts[raw(c2)] = solver.evaluate_node(c2);
+
+  // Manually set ptr to Unknown/External to verify that it clobbers escaped
+  // slots
+  node_facts[raw(ptr)].point_to = PointToFact::bottom();
+
   auto store2 = solver.evaluate_inst(ptr_store);
   for (auto [t, ws] : store2) {
     if (t == t2)
