@@ -1,11 +1,13 @@
 #pragma once
 
+#include "opt/mir/analysis/escape_analysis.hpp"
 #include "opt/mir/analysis/node_fact.hpp"
 #include "opt/mir/ir/module.hpp"
 #include "opt/mir/passes/evaluators/const_prop_evaluator.hpp"
 #include "opt/mir/passes/evaluators/evaluator.hpp"
 #include "opt/mir/passes/evaluators/point_to_evaluator.hpp"
 
+#include <span>
 #include <vector>
 
 namespace opt::mir {
@@ -21,7 +23,8 @@ namespace opt::mir {
 class Solver {
 public:
   Solver(const OptFunction &func, const std::vector<NodeFact> &node_facts,
-         const std::vector<WorldSnapshot> &token_facts);
+         const std::vector<WorldSnapshot> &token_facts,
+         const EscapeAnalysis &escape_analysis);
 
   /// Evaluate a floating node to determine its current fact.
   /// Merges results from all lattice evaluators.
@@ -35,11 +38,18 @@ private:
   const OptFunction &func_;
   const std::vector<NodeFact> &node_facts_;
   const std::vector<WorldSnapshot> &token_facts_;
+  const EscapeAnalysis &escape_analysis_;
+  std::vector<type::TypeId> slot_types_;
+
+  [[nodiscard]] std::span<const type::TypeId> slot_types() const {
+    return slot_types_;
+  }
 
   ConstPropEvaluator const_prop_;
   PointToEvaluator point_to_;
 
   // -- Inst Helpers --
+  NodeFact eval_load(const LoadNode &l, type::TypeId type) const;
   void eval_store(const StoreInst &s, InstEvalOutput &out) const;
   void eval_phi(const TokenPhiInst &p, InstEvalOutput &out) const;
   void eval_branch(const BranchInst &b, InstEvalOutput &out) const;

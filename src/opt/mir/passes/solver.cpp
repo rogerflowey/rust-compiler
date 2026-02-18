@@ -1,30 +1,168 @@
 #include "opt/mir/passes/solver.hpp"
+#include "opt/mir/analysis/type_analysis.hpp"
 
 namespace opt::mir {
 
 Solver::Solver(const OptFunction &func, const std::vector<NodeFact> &node_facts,
-               const std::vector<WorldSnapshot> &token_facts)
+               const std::vector<WorldSnapshot> &token_facts,
+               const EscapeAnalysis &escape_analysis)
     : func_(func), node_facts_(node_facts), token_facts_(token_facts),
+      escape_analysis_(escape_analysis),
       const_prop_(func, node_facts, token_facts),
-      point_to_(func, node_facts, token_facts) {}
+      point_to_(func, node_facts, token_facts) {
+  slot_types_.reserve(func_.slots.size());
+  for (const auto &slot : func_.slots) {
+    slot_types_.push_back(slot.type);
+  }
+}
+
+// Helper: safe vector access
+template <typename T> const T &get_fact(const std::vector<T> &vec, size_t idx) {
+  return vec[idx];
+}
 
 // ============================================================================
 // Node Evaluation
 // ============================================================================
 
 NodeFact Solver::evaluate_node(NodeId id) const {
-  // Assemble facts from all lattice evaluators
-  return NodeFact{const_prop_.evaluate_node(id), point_to_.evaluate_node(id)};
+  const auto &node = func_.get_node(id);
+  const auto type = func_.node_type(id);
+
+  // Dispatch based on node kind
+  return std::visit(
+      [&](const auto &kind) -> NodeFact {
+        using T = std::decay_t<decltype(kind)>;
+
+        if constexpr (std::is_same_v<T, LoadNode>) {
+          // Solver handles loads (requires access to PointTo facts + World)
+          return eval_load(kind, type);
+        } else if constexpr (std::is_same_v<T, ConstantNode>) {
+          return {const_prop_.eval_constant(kind),
+                  PointToFact::not_applicable()};
+        } else if constexpr (std::is_same_v<T, BinaryOpNode>) {
+          return {const_prop_.eval_binary(kind), PointToFact::not_applicable()};
+        } else if constexpr (std::is_same_v<T, UnaryOpNode>) {
+          return {const_prop_.eval_unary(kind), PointToFact::not_applicable()};
+        } else if constexpr (std::is_same_v<T, AddressOfNode>) {
+          return {ConstPropFact::not_applicable(),
+                  point_to_.eval_address_of(kind)};
+        } else {
+          // Default: Check applicability for each lattice
+          NodeFact result;
+          if (TypeAnalysis::is_const_applicable(type))
+            result.const_prop = ConstPropFact::bottom();
+          else
+            result.const_prop = ConstPropFact::not_applicable();
+
+          if (TypeAnalysis::is_point_to_applicable(type))
+            result.point_to = PointToFact::bottom();
+          else
+            result.point_to = PointToFact::not_applicable();
+
+          return result;
+        }
+      },
+      node.kind);
+}
+
+// Helper to construct "Bottom" respecting NotApplicable
+static NodeFact make_bottom(type::TypeId type) {
+  NodeFact result;
+  if (TypeAnalysis::is_const_applicable(type))
+    result.const_prop = ConstPropFact::bottom();
+  else
+    result.const_prop = ConstPropFact::not_applicable();
+
+  if (TypeAnalysis::is_point_to_applicable(type))
+    result.point_to = PointToFact::bottom();
+  else
+    result.point_to = PointToFact::not_applicable();
+  return result;
+}
+
+static NodeFact make_top(type::TypeId type) {
+  NodeFact result;
+  if (TypeAnalysis::is_const_applicable(type))
+    result.const_prop = ConstPropFact::top();
+  else
+    result.const_prop = ConstPropFact::not_applicable();
+
+  if (TypeAnalysis::is_point_to_applicable(type))
+    result.point_to = PointToFact::top();
+  else
+    result.point_to = PointToFact::not_applicable();
+  return result;
+}
+
+NodeFact Solver::eval_load(const LoadNode &n, type::TypeId type) const {
+  if (n.token == invalid_token)
+    return make_top(type);
+
+  // Access world at input token
+  // Check bounds mainly for safety, though valid IR should be fine.
+  if (raw(n.token) >= token_facts_.size())
+    return make_bottom(type);
+
+  const auto &world = get_fact(token_facts_, raw(n.token));
+
+  // 1. Direct Slot Load
+  if (std::holds_alternative<SlotId>(n.place.base)) {
+    return world.read(slot_types(), std::get<SlotId>(n.place.base),
+                      n.place.projections);
+  }
+
+  // 2. Pointer-based Load
+  NodeId ptr = std::get<NodeId>(n.place.base);
+  const auto &ptr_fact = get_fact(node_facts_, raw(ptr)).point_to;
+
+  if (ptr_fact.is_bottom()) {
+    return make_bottom(type);
+  }
+
+  if (ptr_fact.is_top()) {
+    return make_top(type);
+  }
+
+  if (ptr_fact.is_not_applicable()) {
+    return make_top(type);
+  }
+
+  // Set of places
+  NodeFact result = make_top(type); // Join identity
+
+  for (const auto &target_place : ptr_fact.places) {
+    if (std::holds_alternative<SlotId>(target_place.base)) {
+      SlotId target_slot = std::get<SlotId>(target_place.base);
+
+      std::vector<Projection> combined_projections = target_place.projections;
+      combined_projections.insert(combined_projections.end(),
+                                  n.place.projections.begin(),
+                                  n.place.projections.end());
+
+          NodeFact val = world.read(slot_types(), target_slot, combined_projections);
+
+      // Coerce 'val' to match the Load's expected type schema.
+      // If memory has Bottom/Const for a pointer, we must treat it as NA.
+      // If memory has Bottom/Set for an int, we must treat PointTo as NA.
+      if (!TypeAnalysis::is_const_applicable(type)) {
+        val.const_prop = ConstPropFact::not_applicable();
+      }
+      if (!TypeAnalysis::is_point_to_applicable(type)) {
+        val.point_to = PointToFact::not_applicable();
+      }
+
+      result = NodeFact::meet(result, val);
+    } else {
+      return make_bottom(type);
+    }
+  }
+  return result;
 }
 
 // ============================================================================
 // Instruction Evaluation
 // ============================================================================
-
-// Helper: safe vector access
-template <typename T> const T &get_fact(const std::vector<T> &vec, size_t idx) {
-  return vec[idx];
-}
 
 InstEvalOutput Solver::evaluate_inst(InstId id) const {
   const auto &inst = func_.get_inst(id);
@@ -63,22 +201,64 @@ void Solver::eval_store(const StoreInst &s, InstEvalOutput &out) const {
     return;
 
   // Start with input world
-  WorldSnapshot new_world = get_fact(token_facts_, raw(s.t_in));
+  WorldSnapshot world = get_fact(token_facts_, raw(s.t_in));
 
-  // Only handle storing to a Slot
+  // Get value fact to write
+  const auto &val_fact = get_fact(node_facts_, raw(s.value));
+
+  // 1. Direct Store to Slot
   if (std::holds_alternative<SlotId>(s.place.base)) {
     SlotId slot = std::get<SlotId>(s.place.base);
-    // Get value fact
-    const auto &val_fact = get_fact(node_facts_, raw(s.value));
-
-    // Update world with projections
-    new_world = new_world.write(slot, s.place.projections, val_fact);
+    world = world.write(slot_types(), slot, s.place.projections, val_fact);
   } else {
-    // Write to unknown location -> effectively clobber tracked slot?
-    // See solver.cpp original comment: assume slots are isolated.
+    // 2. Pointer Store
+    NodeId ptr = std::get<NodeId>(s.place.base);
+    const auto &ptr_fact = get_fact(node_facts_, raw(ptr)).point_to;
+
+    if (ptr_fact.kind == PointToFact::Kind::Set) {
+      bool is_strong = (ptr_fact.places.size() == 1);
+
+      for (const auto &target_place : ptr_fact.places) {
+        if (std::holds_alternative<SlotId>(target_place.base)) {
+          SlotId target_slot = std::get<SlotId>(target_place.base);
+
+          // Combine projections
+          std::vector<Projection> combined_projections =
+              target_place.projections;
+          combined_projections.insert(combined_projections.end(),
+                                      s.place.projections.begin(),
+                                      s.place.projections.end());
+
+          if (is_strong) {
+            // Strong update: Overwrite
+            world = world.write(slot_types(), target_slot,
+                                combined_projections, val_fact);
+          } else {
+            // Weak update
+            NodeFact old_val =
+                world.read(slot_types(), target_slot, combined_projections);
+            NodeFact new_val = NodeFact::meet(old_val, val_fact);
+
+            world = world.write(slot_types(), target_slot,
+                                combined_projections, new_val);
+          }
+        }
+      }
+    } else {
+      // Bottom / Too complex: Clobber all escaped slots
+      for (std::uint32_t i = 0; i < func_.slots.size(); ++i) {
+        SlotId slot{static_cast<std::uint32_t>(i)};
+        if (escape_analysis_.escapes(slot)) {
+          // Clobber with Bottom appropriate for the slot type
+          type::TypeId slot_type = func_.slots[i].type;
+          NodeFact clobber = make_bottom(slot_type);
+          world = world.write(slot_types(), slot, {}, clobber);
+        }
+      }
+    }
   }
 
-  out.add(s.t_out, std::move(new_world));
+  out.add(s.t_out, std::move(world));
 }
 
 void Solver::eval_phi(const TokenPhiInst &p, InstEvalOutput &out) const {
@@ -114,7 +294,8 @@ void Solver::eval_memcopy(const MemcopyInst &m, InstEvalOutput &out) const {
   if (src_slot && dst_slot) {
     // Now we CAN represent sub-slot mapping!
     // Map dst (at projections) -> src (Slot + projections)
-    world = world.write_base(*dst_slot, m.dest.projections, m.src);
+    world = world.write_base(slot_types(), *dst_slot, m.dest.projections,
+                             m.src);
   }
 
   out.add(m.t_out, std::move(world));

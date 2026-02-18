@@ -1,5 +1,6 @@
 #pragma once
 
+#include "opt/mir/analysis/escape_analysis.hpp"
 #include "opt/mir/analysis/use_list.hpp"
 #include "opt/mir/ir/module.hpp"
 #include "opt/mir/passes/rewriters/const_prop_rewriter.hpp"
@@ -32,6 +33,9 @@ private:
   // Fact State
   std::vector<NodeFact> node_facts_;
   std::vector<WorldSnapshot> token_facts_;
+
+  // Time-independent analyses
+  EscapeAnalysis escape_analysis_;
 
   // Solver (stateless helper)
   Solver solver_;

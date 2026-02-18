@@ -15,8 +15,8 @@ public:
                    const std::vector<NodeFact> &node_facts,
                    const std::vector<WorldSnapshot> &token_facts);
 
-  /// Evaluate a floating node to determine its current PointToFact.
-  [[nodiscard]] PointToFact evaluate_node(NodeId id) const;
+  /// Evaluate AddressOf logic.
+  [[nodiscard]] PointToFact eval_address_of(const AddressOfNode &n) const;
 
 private:
   const OptFunction &func_;

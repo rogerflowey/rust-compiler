@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "opt/mir/analysis/escape_analysis.hpp"
 #include "opt/mir/analysis/node_fact.hpp"
 #include "opt/mir/analysis/use_list.hpp"
 #include "opt/mir/analysis/world_state.hpp"
@@ -19,11 +20,17 @@
 #include <string>
 #include <variant>
 
+#include "type/type.hpp"
+
 using namespace opt::mir;
 
-// Helper: fake type id (we don't depend on a real TypeContext in these tests)
-static constexpr type::TypeId i32_type = type::TypeId{0};
-static constexpr type::TypeId bool_type = type::TypeId{1};
+// Helper: real type id registration
+static const type::TypeId i32_type =
+    type::get_typeID(type::Type{type::PrimitiveKind::I32});
+static const type::TypeId bool_type =
+    type::get_typeID(type::Type{type::PrimitiveKind::BOOL});
+static const type::TypeId ptr_i32_type =
+    type::get_typeID(type::Type{type::ReferenceType{i32_type, false}});
 
 // ============================================================================
 // ID Types
@@ -245,43 +252,46 @@ TEST_CASE("WorldSnapshot write/read round-trip", "[opt_mir][world_state]") {
 
   auto slot_a = SlotId{0};
   auto slot_b = SlotId{1};
+  std::vector<type::TypeId> slot_types = {i32_type, i32_type};
 
-  auto fact_a = NodeFact::top();
-  auto fact_b = NodeFact::top(); // Or distinct fact for testing
+  auto fact_a = NodeFact::initial_of(i32_type);
+  auto fact_b = NodeFact::initial_of(i32_type); // Or distinct fact for testing
 
   // write(slot, {}, fact)
-  auto ws1 = ws.write(slot_a, {}, fact_a);
+  auto ws1 = ws.write(slot_types, slot_a, {}, fact_a);
   REQUIRE(ws1.size() == 1);
-  REQUIRE(ws1.read(slot_a) == fact_a);
+  REQUIRE(ws1.read(slot_types, slot_a) == fact_a);
 
   // Original is unchanged (persistent)
   REQUIRE(ws.empty());
 
-  auto ws2 = ws1.write(slot_b, {}, fact_b);
+  auto ws2 = ws1.write(slot_types, slot_b, {}, fact_b);
   REQUIRE(ws2.size() == 2);
 }
 
 TEST_CASE("WorldSnapshot merge: identical snapshots",
           "[opt_mir][world_state]") {
   auto slot = SlotId{0};
-  auto fact = NodeFact::top();
+  std::vector<type::TypeId> slot_types = {i32_type};
+  auto fact = NodeFact::initial_of(i32_type);
 
-  auto ws = WorldSnapshot{}.write(slot, {}, fact);
+  auto ws = WorldSnapshot{}.write(slot_types, slot, {}, fact);
   auto merged = WorldSnapshot::merge(ws, ws);
 
   REQUIRE(merged.size() == 1);
-  REQUIRE(merged.read(slot) == fact);
+  REQUIRE(merged.read(slot_types, slot) == fact);
 }
 
 TEST_CASE("WorldSnapshot merge: slots in only one side are kept",
           "[opt_mir][world_state]") {
   auto slot_a = SlotId{0};
   auto slot_b = SlotId{1};
-  auto fact = NodeFact::top();
+  std::vector<type::TypeId> slot_types = {i32_type, i32_type};
+  auto fact = NodeFact::initial_of(i32_type);
 
   // ws_left has slot_a, ws_right has slot_b
-  auto ws_left = WorldSnapshot{}.write(slot_a, {}, fact);
-  auto ws_right = WorldSnapshot{}.write(slot_b, {}, fact);
+  auto ws_left = WorldSnapshot{}.write(slot_types, slot_a, {}, fact);
+  auto ws_right = WorldSnapshot{}.write(slot_types, slot_b, {}, fact);
 
   auto merged = WorldSnapshot::merge(ws_left, ws_right);
 
@@ -364,6 +374,7 @@ TEST_CASE("NodeFact: top meet constant = constant", "[opt_mir][fact]") {
 
 TEST_CASE("WorldSnapshot merge with PointTo facts", "[opt_mir][world_state]") {
   auto slot = SlotId{0};
+  std::vector<type::TypeId> slot_types = {ptr_i32_type};
 
   // Two snapshots with same slot but different pointer targets
   NodeFact nf_a{ConstPropFact::top(),
@@ -371,18 +382,17 @@ TEST_CASE("WorldSnapshot merge with PointTo facts", "[opt_mir][world_state]") {
   NodeFact nf_b{ConstPropFact::top(),
                 PointToFact::singleton(Place::simple(SlotId{2}))};
 
-  auto ws_a = WorldSnapshot{}.write(slot, {}, nf_a);
-  auto ws_b = WorldSnapshot{}.write(slot, {}, nf_b);
+  auto ws_a = WorldSnapshot{}.write(slot_types, slot, {}, nf_a);
+  auto ws_b = WorldSnapshot{}.write(slot_types, slot, {}, nf_b);
 
   auto merged = WorldSnapshot::merge(ws_a, ws_b);
 
   // Result should be Union of pointer targets
   REQUIRE(merged.size() == 1);
-  auto read_fact = merged.read(slot);
+  auto read_fact = merged.read(slot_types, slot);
   REQUIRE(read_fact.point_to.kind == PointToFact::Kind::Set);
   REQUIRE(read_fact.point_to.places.size() == 2);
 }
-
 // ============================================================================
 // Updater (Solver Loop) with AddressOf
 // ============================================================================
@@ -392,7 +402,7 @@ TEST_CASE("Updater: AddressOf analysis", "[opt_mir][solver]") {
   Builder b(func);
   auto entry = b.new_block();
   func.entry_block = entry;
-  auto t0 = b.entry_token();
+  // auto t0 = b.entry_token();
 
   auto slot_x = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
 
@@ -400,7 +410,7 @@ TEST_CASE("Updater: AddressOf analysis", "[opt_mir][solver]") {
   // We don't have a Builder method for AddressOf yet, create manually
   auto ptr_node_id = func.alloc_node(Node{
       AddressOfNode{Place::simple(slot_x)},
-      i32_type // technically pointer type, but we use fake types here
+      ptr_i32_type // correctly use pointer type
   });
 
   // To test if it works, we need to inspect the facts computed by Solver.
@@ -419,7 +429,8 @@ TEST_CASE("Updater: AddressOf analysis", "[opt_mir][solver]") {
   std::vector<NodeFact> node_facts(func.nodes.size(), NodeFact::top());
   std::vector<WorldSnapshot> token_facts(100, WorldSnapshot{});
 
-  Solver solver(func, node_facts, token_facts);
+  auto escape = EscapeAnalysis::run(func);
+  Solver solver(func, node_facts, token_facts, escape);
   auto fact = solver.evaluate_node(ptr_node_id);
 
   REQUIRE(fact.point_to.kind == PointToFact::Kind::Set);
@@ -435,17 +446,18 @@ TEST_CASE("Updater: PointTo propagation through memory", "[opt_mir][solver]") {
   auto t0 = b.entry_token();
 
   auto slot_x = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
-  auto slot_ptr = b.new_slot(Slot::Kind::StackLocal, i32_type, "ptr_storage");
+  auto slot_ptr =
+      b.new_slot(Slot::Kind::StackLocal, ptr_i32_type, "ptr_storage");
 
   // %ptr = AddressOf(x)
   auto ptr_node =
-      func.alloc_node(Node{AddressOfNode{Place::simple(slot_x)}, i32_type});
+      func.alloc_node(Node{AddressOfNode{Place::simple(slot_x)}, ptr_i32_type});
 
   // store @ptr_storage, %ptr
   auto t1 = b.emit_store(entry, t0, slot_ptr, ptr_node);
 
   // %loaded_ptr = load @ptr_storage
-  auto loaded_ptr = b.make_load(t1, slot_ptr, i32_type);
+  auto loaded_ptr = b.make_load(t1, slot_ptr, ptr_i32_type);
 
   b.emit_return(entry, t1, loaded_ptr);
 
@@ -462,7 +474,8 @@ TEST_CASE("Updater: PointTo propagation through memory", "[opt_mir][solver]") {
   // Initial token fact (empty world)
   token_facts[raw(t0)] = WorldSnapshot{};
 
-  Solver solver(func, node_facts, token_facts);
+  auto escape = EscapeAnalysis::run(func);
+  Solver solver(func, node_facts, token_facts, escape);
 
   // 1. Eval ptr_node
   node_facts[raw(ptr_node)] = solver.evaluate_node(ptr_node);
@@ -489,6 +502,78 @@ TEST_CASE("Updater: PointTo propagation through memory", "[opt_mir][solver]") {
   REQUIRE(fact.point_to.places[0] == Place::simple(slot_x));
 }
 
+TEST_CASE("EscapeAnalysis: marks slots with AddressOf", "[opt_mir][escape]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+
+  auto slot_x = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
+  auto slot_y = b.new_slot(Slot::Kind::StackLocal, i32_type, "y");
+
+  (void)b.make_address_of(Place::simple(slot_x), Mutability::Immutable,
+                          ptr_i32_type);
+
+  auto escape = EscapeAnalysis::run(func);
+  REQUIRE(escape.escapes(slot_x));
+  REQUIRE_FALSE(escape.escapes(slot_y));
+}
+
+TEST_CASE("Solver: pointer-base store clobbers escaped slots",
+          "[opt_mir][solver][escape]") {
+  OptFunction func;
+  Builder b(func);
+  auto entry = b.new_block();
+  func.entry_block = entry;
+
+  auto t0 = b.entry_token();
+
+  auto slot_x = b.new_slot(Slot::Kind::StackLocal, i32_type, "x");
+  b.new_slot(Slot::Kind::StackLocal, i32_type, "p");
+
+  auto c1 = b.make_constant({ConstantValue::Kind::Int, 1}, i32_type);
+  auto t1 = b.emit_store(entry, t0, slot_x, c1);
+
+  auto ptr = b.make_address_of(Place::simple(slot_x), Mutability::Immutable,
+                               ptr_i32_type);
+  auto c2 = b.make_constant({ConstantValue::Kind::Int, 2}, i32_type);
+
+  Place ptr_place = Place::from_ptr(ptr);
+  auto t2 = func.alloc_token();
+  auto ptr_store =
+      func.alloc_inst(PinnedInst{StoreInst{t1, ptr_place, c2, t2}}, entry);
+  func.get_block_mut(entry).inst_ids.push_back(ptr_store);
+
+  std::vector<NodeFact> node_facts(func.nodes.size(), NodeFact::top());
+  std::vector<WorldSnapshot> token_facts(64, WorldSnapshot{});
+  token_facts[raw(t0)] = WorldSnapshot{};
+
+  auto escape = EscapeAnalysis::run(func);
+  Solver solver(func, node_facts, token_facts, escape);
+
+  node_facts[raw(c1)] = solver.evaluate_node(c1);
+  auto store1 = solver.evaluate_inst(func.get_block(entry).inst_ids[0]);
+  for (auto [t, ws] : store1) {
+    if (t == t1)
+      token_facts[raw(t1)] = ws;
+  }
+
+  node_facts[raw(c2)] = solver.evaluate_node(c2);
+  auto store2 = solver.evaluate_inst(ptr_store);
+  for (auto [t, ws] : store2) {
+    if (t == t2)
+      token_facts[raw(t2)] = ws;
+  }
+
+  std::vector<type::TypeId> slot_types;
+  slot_types.reserve(func.slots.size());
+  for (const auto &slot : func.slots) {
+    slot_types.push_back(slot.type);
+  }
+  auto fact_after = token_facts[raw(t2)].read(slot_types, slot_x);
+  REQUIRE(fact_after.const_prop.is_bottom());
+}
+
 // ============================================================================
 // WorldSnapshot merge with lattice meet
 // ============================================================================
@@ -496,6 +581,7 @@ TEST_CASE("Updater: PointTo propagation through memory", "[opt_mir][solver]") {
 TEST_CASE("WorldSnapshot merge: disagreeing facts produce meet, not drop",
           "[opt_mir][world_state][fact]") {
   auto slot = SlotId{0};
+  std::vector<type::TypeId> slot_types = {i32_type};
 
   // Two snapshots with same slot but different constant values
   NodeFact nf5{ConstPropFact::constant({ConstantValue::Kind::Int, 5}),
@@ -503,31 +589,32 @@ TEST_CASE("WorldSnapshot merge: disagreeing facts produce meet, not drop",
   NodeFact nf7{ConstPropFact::constant({ConstantValue::Kind::Int, 7}),
                PointToFact::top()};
 
-  auto ws_a = WorldSnapshot{}.write(slot, {}, nf5);
-  auto ws_b = WorldSnapshot{}.write(slot, {}, nf7);
+  auto ws_a = WorldSnapshot{}.write(slot_types, slot, {}, nf5);
+  auto ws_b = WorldSnapshot{}.write(slot_types, slot, {}, nf7);
 
   auto merged = WorldSnapshot::merge(ws_a, ws_b);
 
   // Slot is preserved (not dropped), but its fact is Bottom
   REQUIRE(merged.size() == 1);
-  REQUIRE(merged.read(slot).const_prop.is_bottom());
+  REQUIRE(merged.read(slot_types, slot).const_prop.is_bottom());
 }
 
 TEST_CASE("WorldSnapshot merge: agreeing facts preserved",
           "[opt_mir][world_state][fact]") {
   auto slot = SlotId{0};
+  std::vector<type::TypeId> slot_types = {i32_type};
 
   NodeFact nf5{ConstPropFact::constant({ConstantValue::Kind::Int, 5}),
                PointToFact::top()};
 
-  auto ws_a = WorldSnapshot{}.write(slot, {}, nf5);
-  auto ws_b = WorldSnapshot{}.write(slot, {}, nf5);
+  auto ws_a = WorldSnapshot{}.write(slot_types, slot, {}, nf5);
+  auto ws_b = WorldSnapshot{}.write(slot_types, slot, {}, nf5);
 
   auto merged = WorldSnapshot::merge(ws_a, ws_b);
 
   REQUIRE(merged.size() == 1);
-  REQUIRE(merged.read(slot).const_prop.is_constant());
-  REQUIRE(merged.read(slot).const_prop.value.bits == 5);
+  REQUIRE(merged.read(slot_types, slot).const_prop.is_constant());
+  REQUIRE(merged.read(slot_types, slot).const_prop.value.bits == 5);
 }
 
 // ============================================================================
@@ -786,7 +873,7 @@ TEST_CASE("Updater: store-load forwarding", "[opt_mir][solver]") {
 
 TEST_CASE("Updater: branch merge (diamond)", "[opt_mir][solver]") {
   //      entry
-  //     /     \
+  //     /     \ (split)
   //   true   false
   //     \     /
   //      merge

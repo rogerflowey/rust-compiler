@@ -14,8 +14,10 @@ Updater::Updater(OptFunction &func)
     : func_(func),
       // Build use lists once
       use_lists_(UseLists::build(func)),
+      // Compute time-independent analyses once
+      escape_analysis_(EscapeAnalysis::run(func)),
       // Initialize solver with references to our tables
-      solver_(func, node_facts_, token_facts_),
+      solver_(func, node_facts_, token_facts_, escape_analysis_),
       // Initialize graph mutator
       mutator_(func, use_lists_) {
   resize_tables();
@@ -23,7 +25,12 @@ Updater::Updater(OptFunction &func)
 }
 
 void Updater::resize_tables() {
-  node_facts_.resize(func_.nodes.size(), NodeFact::top());
+  node_facts_.reserve(func_.nodes.size());
+  for (size_t i = node_facts_.size(); i < func_.nodes.size(); ++i) {
+    node_facts_.push_back(NodeFact::initial_of(
+        func_.node_type(NodeId{static_cast<uint32_t>(i)})));
+  }
+
   token_facts_.resize(func_.next_token_,
                       WorldSnapshot{}); // Default is empty/top
 

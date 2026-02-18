@@ -5,6 +5,7 @@
 #include "opt/mir/ir/node_id.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -56,21 +57,26 @@ public:
   /// Read the fact of a slot at the given projection path.
   /// Handles "base mapping" recursion: if a region delegates to another slot,
   /// this follows the link (up to a recursion limit).
-  [[nodiscard]] NodeFact read(SlotId s,
+  [[nodiscard]] NodeFact read(std::span<const type::TypeId> slot_types,
+                              SlotId s,
                               std::span<const Projection> projections) const;
 
   /// Legacy helper for whole-slot read.
-  [[nodiscard]] NodeFact read(SlotId s) const { return read(s, {}); }
+  [[nodiscard]] NodeFact read(std::span<const type::TypeId> slot_types,
+                              SlotId s) const {
+    return read(slot_types, s, {});
+  }
 
   /// Produce a new snapshot with slot `s` updated to `fact` at `projections`.
   [[nodiscard]] WorldSnapshot
-  write(SlotId s, std::span<const Projection> projections, NodeFact fact) const;
+  write(std::span<const type::TypeId> slot_types, SlotId s,
+        std::span<const Projection> projections, NodeFact fact) const;
 
   /// Bulk write: mapping a sub-region of `s` to `src`.
   /// Bulk write (memcopy): set `base_mapping` at the target path.
   [[nodiscard]] WorldSnapshot
-  write_base(SlotId s, std::span<const Projection> projections,
-             Place src) const;
+  write_base(std::span<const type::TypeId> slot_types, SlotId s,
+             std::span<const Projection> projections, Place src) const;
 
   /// Merge two snapshots using lattice meet.
   [[nodiscard]] static WorldSnapshot merge(const WorldSnapshot &a,

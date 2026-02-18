@@ -1,13 +1,12 @@
 #pragma once
 
 #include "opt/mir/analysis/node_fact.hpp"
+#include "type/type.hpp"
 #include "opt/mir/ir/nodes.hpp"
-#include "opt/mir/ir/slot.hpp"
 
 #include <map>
 #include <optional>
 #include <span>
-#include <vector>
 
 namespace opt::mir {
 
@@ -56,12 +55,14 @@ struct RegionTree {
   /// type. BUT: RegionTree implies we only track FieldProjections. If
   /// `projections` contains IndexProjection, this returns Bottom
   /// (conservative).
-  [[nodiscard]] NodeFact read(std::span<const Projection> projections) const;
+  [[nodiscard]] NodeFact read(type::TypeId root_type,
+                              std::span<const Projection> projections) const;
 
   /// Produce a new tree with the fact at `projections` updated.
   /// If `projections` contains IndexProjection, this is a "weak update"
   /// (conservative clobber of the nearest ancestor).
-  [[nodiscard]] RegionTree write(std::span<const Projection> projections,
+  [[nodiscard]] RegionTree write(type::TypeId root_type,
+                                 std::span<const Projection> projections,
                                  NodeFact fact) const;
 
   /// Bulk write (memcopy): set `base_mapping` at the target path.
@@ -71,7 +72,8 @@ struct RegionTree {
   ///   path = [.f], src = Place(src, [.g])
   ///   root.children[.f] becomes { exact=Top, base=Place(src, [.g]),
   ///   children={} }
-  [[nodiscard]] RegionTree write_base(std::span<const Projection> projections,
+  [[nodiscard]] RegionTree write_base(type::TypeId root_type,
+                                      std::span<const Projection> projections,
                                       Place src) const;
 
   /// Lattice meet: merge two trees.

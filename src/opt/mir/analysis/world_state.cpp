@@ -1,12 +1,35 @@
 #include "opt/mir/analysis/world_state.hpp"
 
+#include "opt/mir/analysis/type_analysis.hpp"
+
 namespace opt::mir {
+
+namespace {
+
+type::TypeId slot_type_of(std::span<const type::TypeId> slot_types, SlotId slot) {
+  if (raw(slot) >= slot_types.size()) {
+    return type::invalid_type_id;
+  }
+  return slot_types[raw(slot)];
+}
+
+NodeFact read_default(std::span<const type::TypeId> slot_types, SlotId slot,
+                      std::span<const Projection> projections) {
+  const auto root_type = slot_type_of(slot_types, slot);
+  auto projected = TypeAnalysis::projected_type(root_type, projections);
+  if (!projected.has_value()) {
+    return NodeFact::bottom();
+  }
+  return NodeFact::initial_of(*projected);
+}
+
+} // namespace
 
 // ============================================================================
 // WorldSnapshot implementation
 // ============================================================================
 
-NodeFact WorldSnapshot::read(SlotId s,
+NodeFact WorldSnapshot::read(std::span<const type::TypeId> slot_types, SlotId s,
                              std::span<const Projection> projections) const {
   // Recursion limit to prevent infinite loops with cyclic base mappings
   constexpr int MAX_DEPTH = 10;
@@ -22,8 +45,7 @@ NodeFact WorldSnapshot::read(SlotId s,
   for (int depth = 0; depth < MAX_DEPTH; ++depth) {
     const SlotFact *fact = find_fact(current_slot);
     if (!fact) {
-      // Slot not present in snapshot -> Top.
-      return NodeFact::top();
+      return read_default(slot_types, current_slot, current_path);
     }
 
     const RegionNode *node = &fact->tree.root;
@@ -36,12 +58,12 @@ NodeFact WorldSnapshot::read(SlotId s,
       // Monotonicity check: if the current container is Bottom, the field is
       // Bottom.
       if (node->exact_fact.const_prop.is_bottom()) {
-        return NodeFact{ConstPropFact::bottom()};
+        return NodeFact::bottom();
       }
 
       const auto &p = current_path[i];
       if (std::holds_alternative<IndexProjection>(p)) {
-        return NodeFact{ConstPropFact::bottom()};
+        return NodeFact::bottom();
       }
 
       size_t index = std::get<FieldProjection>(p).index;
@@ -74,10 +96,9 @@ NodeFact WorldSnapshot::read(SlotId s,
             break;
           }
           // If base is not a slot (e.g. NodeId), we can't track it here.
-          return NodeFact::top();
+          return read_default(slot_types, current_slot, current_path);
         } else {
-          // Missing and no mapping -> Top.
-          return NodeFact::top();
+          return read_default(slot_types, current_slot, current_path);
         }
       }
 
@@ -85,37 +106,67 @@ NodeFact WorldSnapshot::read(SlotId s,
       node = &it->second;
     }
 
+    // Finished path successfully.
+    // Only apply terminal base-mapping redirect when this iteration did not
+    // already redirect from a missing child.
+    if (!redirected && node->base_mapping) {
+      const Place &place = *node->base_mapping;
+      if (std::holds_alternative<SlotId>(place.base)) {
+        current_slot = std::get<SlotId>(place.base);
+        // New path = [place.projections...]
+        projection_buffer.clear();
+        projection_buffer.insert(projection_buffer.end(),
+                                 place.projections.begin(),
+                                 place.projections.end());
+        current_path = projection_buffer;
+        redirected = true;
+
+        // Reset depth search at new slot
+        // Break inner loop, continue outer depth loop
+        i = 0; // Not needed as we continue outer
+        // The outer loop will restart with new current_slot and current_path
+      } else {
+        return read_default(slot_types, current_slot, current_path);
+      }
+    }
+
     if (redirected) {
       continue; // Next depth iteration
     }
 
-    // Finished path successfully.
     return node->exact_fact;
   }
 
   // Depth limit exceeded
-  return NodeFact{ConstPropFact::bottom()};
+  return NodeFact::bottom();
 }
 
-WorldSnapshot WorldSnapshot::write(SlotId s,
+WorldSnapshot WorldSnapshot::write(std::span<const type::TypeId> slot_types,
+                                   SlotId s,
                                    std::span<const Projection> projections,
                                    NodeFact fact) const {
   const SlotFact *old_fact = find_fact(s);
   RegionTree new_tree = old_fact ? old_fact->tree : RegionTree::top();
 
-  new_tree = new_tree.write(projections, fact);
+  const auto root_type = slot_type_of(slot_types, s);
+
+  new_tree = new_tree.write(root_type, projections, fact);
 
   // Update the map (sorted vector)
   return update_slot(s, [&](const RegionTree &) { return new_tree; });
 }
 
-WorldSnapshot WorldSnapshot::write_base(SlotId s,
+WorldSnapshot WorldSnapshot::write_base(
+                                        std::span<const type::TypeId> slot_types,
+                                        SlotId s,
                                         std::span<const Projection> projections,
                                         Place src) const {
   const SlotFact *old_fact = find_fact(s);
   RegionTree new_tree = old_fact ? old_fact->tree : RegionTree::top();
 
-  new_tree = new_tree.write_base(projections, src);
+  const auto root_type = slot_type_of(slot_types, s);
+
+  new_tree = new_tree.write_base(root_type, projections, src);
 
   return update_slot(s, [&](const RegionTree &) { return new_tree; });
 }

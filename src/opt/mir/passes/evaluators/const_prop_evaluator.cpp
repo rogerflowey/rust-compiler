@@ -1,4 +1,5 @@
 #include "opt/mir/passes/evaluators/const_prop_evaluator.hpp"
+
 #include "opt/mir/passes/const_fold.hpp"
 
 namespace opt::mir {
@@ -17,26 +18,9 @@ ConstPropEvaluator::ConstPropEvaluator(
 // Node Evaluation
 // ============================================================================
 
-ConstPropFact ConstPropEvaluator::evaluate_node(NodeId id) const {
-  const auto &node = func_.get_node(id);
+// ... (existing includes)
 
-  return std::visit(
-      [&](const auto &kind) {
-        using T = std::decay_t<decltype(kind)>;
-        if constexpr (std::is_same_v<T, ConstantNode>) {
-          return eval_constant(kind);
-        } else if constexpr (std::is_same_v<T, BinaryOpNode>) {
-          return eval_binary(kind);
-        } else if constexpr (std::is_same_v<T, UnaryOpNode>) {
-          return eval_unary(kind);
-        } else if constexpr (std::is_same_v<T, LoadNode>) {
-          return eval_load(kind);
-        } else {
-          return ConstPropFact::bottom();
-        }
-      },
-      node.kind);
-}
+// evaluate_node removed (Solver handles dispatch)
 
 ConstPropFact ConstPropEvaluator::eval_constant(const ConstantNode &n) const {
   return ConstPropFact::constant(n.value);
@@ -82,24 +66,6 @@ ConstPropFact ConstPropEvaluator::eval_unary(const UnaryOpNode &n) const {
   return ConstPropFact::bottom();
 }
 
-ConstPropFact ConstPropEvaluator::eval_load(const LoadNode &n) const {
-  // Load retrieves facts from the WorldSnapshot at its input token.
-  if (n.token == invalid_token)
-    return ConstPropFact::top(); // Should not happen in valid IR
-
-  const auto &world = get_fact(token_facts_, raw(n.token));
-
-  // We can only load from a known Slot.
-  if (std::holds_alternative<SlotId>(n.place.base)) {
-    SlotId slot = std::get<SlotId>(n.place.base);
-
-    // Pass projections to the world snapshot.
-    // It handles the region tree walk and base mapping logic.
-    return world.read(slot, n.place.projections).const_prop;
-  }
-
-  // Pointer-based load: aliasing. Return Bottom for now.
-  return ConstPropFact::bottom();
-}
+// eval_load removed (Solver handles it)
 
 } // namespace opt::mir

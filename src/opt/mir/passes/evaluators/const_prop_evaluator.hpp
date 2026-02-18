@@ -14,19 +14,15 @@ public:
                      const std::vector<NodeFact> &node_facts,
                      const std::vector<WorldSnapshot> &token_facts);
 
-  /// Evaluate a floating node to determine its current fact.
-  [[nodiscard]] ConstPropFact evaluate_node(NodeId id) const;
+  // -- Node Helpers --
+  ConstPropFact eval_constant(const ConstantNode &n) const;
+  ConstPropFact eval_binary(const BinaryOpNode &n) const;
+  ConstPropFact eval_unary(const UnaryOpNode &n) const;
 
 private:
   const OptFunction &func_;
   const std::vector<NodeFact> &node_facts_;
   const std::vector<WorldSnapshot> &token_facts_;
-
-  // -- Node Helpers --
-  ConstPropFact eval_constant(const ConstantNode &n) const;
-  ConstPropFact eval_binary(const BinaryOpNode &n) const;
-  ConstPropFact eval_unary(const UnaryOpNode &n) const;
-  ConstPropFact eval_load(const LoadNode &n) const;
 };
 
 } // namespace opt::mir

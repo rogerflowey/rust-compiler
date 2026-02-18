@@ -1,0 +1,18 @@
+fn valid_ptr_store_load() -> i32 {
+    let mut x: i32 = 0;
+    let p = &mut x;
+    *p = 42;
+    return *p; // Should be 42
+}
+
+fn alias_store_load() -> i32 {
+    let mut x: i32 = 0;
+    let p = &mut x;
+    let q = p; 
+    // Note: in Rust 'p' would be moved here, but this language might not have move semantics implemented yet.
+    // If it has Copy semantics for pointers, this is fine.
+    // If we need to reborrow, maybe `let q = &mut *p;`?
+    // Let's assume simple copy or reborrow for now.
+    *p = 100;
+    return *q; // Should be 100
+}

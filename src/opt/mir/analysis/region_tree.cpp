@@ -1,15 +1,35 @@
 #include "opt/mir/analysis/region_tree.hpp"
 
+#include "opt/mir/analysis/type_analysis.hpp"
+
 namespace opt::mir {
+
+namespace {
+
+NodeFact fact_at(type::TypeId root_type, std::span<const Projection> projections) {
+  auto projected = TypeAnalysis::projected_type(root_type, projections);
+  if (!projected.has_value()) {
+    return NodeFact::bottom();
+  }
+  return NodeFact::initial_of(*projected);
+}
+
+} // namespace
 
 // ============================================================================
 // RegionTree::write
 // ============================================================================
 
-RegionTree RegionTree::write(std::span<const Projection> projections,
+RegionTree RegionTree::write(type::TypeId root_type,
+                             std::span<const Projection> projections,
                              NodeFact fact) const {
+  if (!TypeAnalysis::projected_type(root_type, projections).has_value()) {
+    return *this;
+  }
+
   RegionTree new_tree = *this; // Copy
   RegionNode *current = &new_tree.root;
+  std::vector<Projection> walked;
 
   // 1. Walk the path, creating nodes as needed.
   for (const auto &proj : projections) {
@@ -17,7 +37,7 @@ RegionTree RegionTree::write(std::span<const Projection> projections,
       // Conservative: IndexProjection means we don't know exactly which field.
       // We must invalidate (clobber) the current node and all its
       // children/mappings because we might be writing to *any* child.
-      current->exact_fact = NodeFact{ConstPropFact::bottom()};
+      current->exact_fact = NodeFact::bottom();
       current->children.clear();
       current->base_mapping.reset();
       return new_tree;
@@ -27,8 +47,9 @@ RegionTree RegionTree::write(std::span<const Projection> projections,
     size_t index = std::get<FieldProjection>(proj).index;
 
     // When Descending, the parent (aggregate) value is no longer valid/known.
-    current->exact_fact = NodeFact::top();
+    current->exact_fact = fact_at(root_type, walked);
     current = &current->children[index];
+    walked.push_back(proj);
   }
 
   // 2. We reached the target node. Set the fact.
@@ -46,26 +67,33 @@ RegionTree RegionTree::write(std::span<const Projection> projections,
 // RegionTree::write_base
 // ============================================================================
 
-RegionTree RegionTree::write_base(std::span<const Projection> projections,
+RegionTree RegionTree::write_base(type::TypeId root_type,
+                                  std::span<const Projection> projections,
                                   Place src) const {
+  if (!TypeAnalysis::projected_type(root_type, projections).has_value()) {
+    return *this;
+  }
+
   RegionTree new_tree = *this;
   RegionNode *current = &new_tree.root;
+  std::vector<Projection> walked;
 
   for (const auto &proj : projections) {
     if (std::holds_alternative<IndexProjection>(proj)) {
-      current->exact_fact = NodeFact{ConstPropFact::bottom()};
+      current->exact_fact = NodeFact::bottom();
       current->children.clear();
       current->base_mapping.reset();
       return new_tree;
     }
 
     size_t index = std::get<FieldProjection>(proj).index;
-    current->exact_fact = NodeFact::top();
+    current->exact_fact = fact_at(root_type, walked);
     current = &current->children[index];
+    walked.push_back(proj);
   }
 
   // Set the base mapping
-  current->exact_fact = NodeFact::top();
+  current->exact_fact = fact_at(root_type, projections);
   current->base_mapping = src;
   current->children.clear(); // Previous children are overwritten by the copy
 
@@ -139,19 +167,21 @@ RegionTree RegionTree::meet(const RegionTree &a, const RegionTree &b) {
 }
 
 // Strictly local read (no base mapping delegation)
-NodeFact RegionTree::read(std::span<const Projection> projections) const {
+NodeFact RegionTree::read(type::TypeId root_type,
+                          std::span<const Projection> projections) const {
+  const NodeFact fallback = fact_at(root_type, projections);
   const RegionNode *current = &root;
 
   for (const auto &proj : projections) {
     if (std::holds_alternative<IndexProjection>(proj)) {
-      return NodeFact{ConstPropFact::bottom()};
+      return NodeFact::bottom();
     }
 
     size_t index = std::get<FieldProjection>(proj).index;
     auto it = current->children.find(index);
     if (it == current->children.end()) {
       // Not in tree. Cannot resolve base mappings locally, so return Top.
-      return NodeFact::top();
+      return fallback;
     }
     current = &it->second;
   }
