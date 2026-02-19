@@ -152,8 +152,8 @@ OptModule lower_program(const hir::Program &program) {
 
 OptFunctionLowerer::OptFunctionLowerer(
     const hir::Function &function,
-  const std::unordered_map<CallableKey, CallTarget, CallableKeyHash,
-               CallableKeyEq> &func_map,
+    const std::unordered_map<CallableKey, CallTarget, CallableKeyHash,
+                             CallableKeyEq> &func_map,
     std::string name)
     : function_kind_(FunctionKind::Function), hir_function_(&function),
       func_map_(func_map) {
@@ -162,8 +162,8 @@ OptFunctionLowerer::OptFunctionLowerer(
 
 OptFunctionLowerer::OptFunctionLowerer(
     const hir::Method &method,
-  const std::unordered_map<CallableKey, CallTarget, CallableKeyHash,
-               CallableKeyEq> &func_map,
+    const std::unordered_map<CallableKey, CallTarget, CallableKeyHash,
+                             CallableKeyEq> &func_map,
     std::string name)
     : function_kind_(FunctionKind::Method), hir_method_(&method),
       func_map_(func_map) {
@@ -187,6 +187,8 @@ void OptFunctionLowerer::initialize(std::string name) {
 
   // The entry token seeds the token chain for the entire function
   current_token_ = builder_.entry_token();
+
+  emit_param_prologue_inits();
 
   // Initialize SRET slot if return type is aggregate
   TypeId ret_type = invalid_type_id;
@@ -263,12 +265,27 @@ void OptFunctionLowerer::register_params() {
     const type::Type &ty = type::get_type_from_id(full_type);
     if (const auto *ref = std::get_if<type::ReferenceType>(&ty.value)) {
       if (ref->is_mutable) {
-        // It is &mut T -> Create MutRefParam slot of type T
+        // For &mut T params, always create a MutRefParam backing slot of T.
+        // Immutable binding: local maps directly to backing slot and each use
+        // re-materializes &mut via AddressOf.
+        // Mutable binding: local remains a regular pointer slot (&mut T), but
+        // we synthesize an entry assignment local = &mut backing_slot.
         TypeId inner_type =
             ::mir::detail::canonicalize_type_for_mir(ref->referenced_type);
-        SlotId id = builder_.new_slot(Slot::Kind::MutRefParam, inner_type,
-                                      local->name.name);
-        local_slots_.emplace(local, id);
+        SlotId backing = builder_.new_slot(
+            Slot::Kind::MutRefParam, inner_type,
+            local->is_mutable ? (local->name.name + ".mutref") : local->name.name);
+
+        if (!local->is_mutable) {
+          local_slots_.emplace(local, backing);
+          return;
+        }
+
+        TypeId normalized = ::mir::detail::canonicalize_type_for_mir(full_type);
+        SlotId local_slot = builder_.new_slot(Slot::Kind::Parameter, normalized,
+                                              local->name.name);
+        local_slots_.emplace(local, local_slot);
+        mut_ref_param_inits_.push_back({local_slot, backing});
         return;
       }
     }
@@ -303,6 +320,16 @@ void OptFunctionLowerer::register_params() {
         }
       }
     }
+  }
+}
+
+void OptFunctionLowerer::emit_param_prologue_inits() {
+  for (const auto &[local_slot, backing_slot] : mut_ref_param_inits_) {
+    const type::TypeId local_type = func_.get_slot(local_slot).type;
+    NodeId addr = builder_.make_address_of(Place::simple(backing_slot),
+                                           Mutability::Mutable, local_type);
+    current_token_ = builder_.emit_store(current_block_id(), current_token_,
+                                         Place::simple(local_slot), addr);
   }
 }
 

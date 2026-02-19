@@ -113,3 +113,93 @@ TEST_CASE("Lowering MutRefParam creates MutRefParam slot and AddressOf access",
   }
   REQUIRE(found_addr_of);
 }
+
+TEST_CASE("Lowering mutable &mut param seeds local ref from MutRefParam",
+          "[opt_mir][lower]") {
+  // fn test(mut p: &mut i32) { p; }
+  auto i32 = type::get_typeID(type::Type{type::PrimitiveKind::I32});
+  auto mut_i32 = type::get_typeID(type::Type{type::ReferenceType{i32, true}});
+
+  hir::Program prog;
+  auto func_ptr = std::make_unique<hir::Function>();
+  func_ptr->sig.name.name = "test";
+
+  auto local_p = std::make_unique<hir::Local>();
+  local_p->name.name = "p";
+  local_p->is_mutable = true;
+  local_p->type_annotation = mut_i32;
+  hir::Local *p_ptr = local_p.get();
+
+  std::vector<std::unique_ptr<hir::Local>> param_storage;
+  param_storage.push_back(std::move(local_p));
+
+  hir::BindingDef binding;
+  binding.local = param_storage.back().get();
+  auto pattern =
+      std::make_unique<hir::Pattern>(hir::BindingDef(std::move(binding)));
+  func_ptr->sig.params.push_back(std::move(pattern));
+
+  func_ptr->body = hir::FunctionBody{};
+  func_ptr->body->block = std::make_unique<hir::Block>();
+
+  auto var_expr = std::make_unique<hir::Expr>(hir::Variable{p_ptr});
+  var_expr->expr_info = semantic::ExprInfo{};
+  var_expr->expr_info->type = mut_i32;
+  var_expr->expr_info->is_place = true;
+  var_expr->expr_info->is_mut = true;
+
+  auto stmt = std::make_unique<hir::Stmt>(hir::ExprStmt{std::move(var_expr)});
+  func_ptr->body->block->stmts.push_back(std::move(stmt));
+
+  prog.items.push_back(std::make_unique<hir::Item>(std::move(*func_ptr)));
+
+  opt::mir::OptModule module;
+  try {
+    module = opt::mir::lower_program(prog);
+  } catch (const std::exception &e) {
+    FAIL("Lowering failed: " << e.what());
+  }
+
+  REQUIRE(module.functions.size() == 1);
+  const auto &func = module.functions[0];
+
+  SlotId mutref_slot = invalid_slot;
+  SlotId param_slot = invalid_slot;
+  for (size_t i = 0; i < func.slots.size(); ++i) {
+    const SlotId sid{static_cast<std::uint32_t>(i)};
+    if (func.slots[i].kind == Slot::Kind::MutRefParam) {
+      mutref_slot = sid;
+      REQUIRE(func.slots[i].type == i32);
+    }
+    if (func.slots[i].kind == Slot::Kind::Parameter &&
+        func.slots[i].debug_name == "p") {
+      param_slot = sid;
+      REQUIRE(func.slots[i].type == mut_i32);
+    }
+  }
+  REQUIRE(mutref_slot != invalid_slot);
+  REQUIRE(param_slot != invalid_slot);
+
+  bool found_seed_store = false;
+  for (const auto &inst : func.insts) {
+    if (const auto *store = std::get_if<StoreInst>(&inst.kind)) {
+      if (!std::holds_alternative<SlotId>(store->place.base)) {
+        continue;
+      }
+      if (std::get<SlotId>(store->place.base) != param_slot) {
+        continue;
+      }
+
+      const Node &value_node = func.get_node(store->value);
+      const auto *addr = std::get_if<AddressOfNode>(&value_node.kind);
+      if (!addr || !std::holds_alternative<SlotId>(addr->place.base)) {
+        continue;
+      }
+      if (std::get<SlotId>(addr->place.base) == mutref_slot) {
+        found_seed_store = true;
+        break;
+      }
+    }
+  }
+  REQUIRE(found_seed_store);
+}

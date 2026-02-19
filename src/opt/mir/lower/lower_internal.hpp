@@ -109,11 +109,13 @@ private:
   std::optional<SlotId> sret_slot_; // Function SRET parameter (pointer)
 
   std::unordered_map<const hir::Local *, SlotId> local_slots_;
+  std::vector<std::pair<SlotId, SlotId>> mut_ref_param_inits_;
   std::vector<std::pair<const void *, LoopContext>> loop_stack_;
 
   // ─── Initialisation ───────────────────────────────────────────────
   void initialize(std::string name);
   void register_params();
+  void emit_param_prologue_inits();
   void register_locals();
   SlotId register_local(const hir::Local *local);
   const hir::Block *get_body() const;
