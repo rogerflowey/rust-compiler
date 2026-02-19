@@ -1,8 +1,8 @@
 #pragma once
 
-#include "opt/mir/tools/builder.hpp"
-#include "opt/mir/ir/nodes.hpp"
 #include "opt/mir/ir/module.hpp"
+#include "opt/mir/ir/nodes.hpp"
+#include "opt/mir/tools/builder.hpp"
 
 #include "semantic/hir/hir.hpp"
 
@@ -10,9 +10,40 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <functional>
 #include <vector>
+#include <type_traits>
 
 namespace opt::mir {
+
+using CallableKey = std::variant<const hir::Function *, const hir::Method *>;
+
+struct CallableKeyHash {
+  std::size_t operator()(const CallableKey &key) const noexcept {
+    return std::visit(
+        [](const auto *ptr) -> std::size_t {
+          return std::hash<const void *>{}(static_cast<const void *>(ptr));
+        },
+        key);
+  }
+};
+
+struct CallableKeyEq {
+  bool operator()(const CallableKey &lhs, const CallableKey &rhs) const
+      noexcept {
+    if (lhs.index() != rhs.index()) {
+      return false;
+    }
+    return std::visit(
+        [](const auto *l, const auto *r) -> bool {
+          if constexpr (std::is_same_v<decltype(l), decltype(r)>) {
+            return l == r;
+          }
+          return false;
+        },
+        lhs, rhs);
+  }
+};
 
 /// Result of lowering an expression:
 ///   - monostate: valid execution but no value (e.g. unit/void)
@@ -36,12 +67,14 @@ public:
 
   OptFunctionLowerer(
       const hir::Function &function,
-      const std::unordered_map<const void *, CallTarget> &func_map,
+      const std::unordered_map<CallableKey, CallTarget, CallableKeyHash,
+                   CallableKeyEq> &func_map,
       std::string name);
 
   OptFunctionLowerer(
       const hir::Method &method,
-      const std::unordered_map<const void *, CallTarget> &func_map,
+      const std::unordered_map<CallableKey, CallTarget, CallableKeyHash,
+                   CallableKeyEq> &func_map,
       std::string name);
 
   OptFunction lower();
@@ -65,7 +98,8 @@ private:
   FunctionKind function_kind_ = FunctionKind::Function;
   const hir::Function *hir_function_ = nullptr;
   const hir::Method *hir_method_ = nullptr;
-  const std::unordered_map<const void *, CallTarget> &func_map_;
+  const std::unordered_map<CallableKey, CallTarget, CallableKeyHash,
+                           CallableKeyEq> &func_map_;
 
   OptFunction func_;
   Builder builder_{func_};
@@ -79,6 +113,7 @@ private:
 
   // ─── Initialisation ───────────────────────────────────────────────
   void initialize(std::string name);
+  void register_params();
   void register_locals();
   SlotId register_local(const hir::Local *local);
   const hir::Block *get_body() const;
@@ -146,6 +181,10 @@ private:
                                  const semantic::ExprInfo &info);
   LowerResult lower_struct_const(const hir::StructConst &sc,
                                  const semantic::ExprInfo &info);
+  bool lower_call_argument(const hir::Expr &arg_expr, std::vector<CallArg> &args);
+  LowerResult emit_call_and_materialize_result(const CallTarget &target,
+                                               std::vector<CallArg> args,
+                                               const semantic::ExprInfo &info);
 
   // Control-flow expressions
   LowerResult lower_if_expr(const hir::If &if_expr,
@@ -162,9 +201,7 @@ private:
 
   // ─── Binary-op classification ─────────────────────────────────────
   static BinaryOpNode::Kind classify_binary_op(const hir::BinaryOp &binary,
-                                               type::TypeId lhs_type,
-                                               type::TypeId rhs_type,
-                                               type::TypeId result_type);
+                                               type::TypeId lhs_type);
 
   // ─── Constant helpers ─────────────────────────────────────────────
   NodeId make_const_int(std::uint64_t value, type::TypeId type,
@@ -178,9 +215,6 @@ private:
   LoopContext &find_loop(const void *key);
   LoopContext pop_loop(const void *key);
   void finalize_loop(const LoopContext &ctx);
-
-  // ─── Address helpers ──────────────────────────────────────────────
-  NodeId make_temp_addr(SlotId temp, type::TypeId value_type);
 
   // ─── Utilities ────────────────────────────────────────────────────
   bool is_reachable() const;

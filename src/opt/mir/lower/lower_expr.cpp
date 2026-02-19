@@ -6,9 +6,8 @@
 
 #include "common/mir/lower_const.hpp"
 #include "common/mir/utils.hpp"
-#include "opt/mir/lower/lower.hpp"
-#include "opt/mir/lower/lower_internal.hpp"
 #include "opt/mir/ir/nodes.hpp"
+#include "opt/mir/lower/lower_internal.hpp"
 
 #include "semantic/hir/helper.hpp"
 #include "semantic/utils.hpp"
@@ -268,6 +267,18 @@ LowerResult OptFunctionLowerer::lower_literal(const hir::Literal &lit,
 LowerResult OptFunctionLowerer::lower_variable(const hir::Variable &var,
                                                const semantic::ExprInfo &info) {
   SlotId slot = require_slot(var.local_id);
+
+  // Check if it's a MutRefParam (which models a "Live-In" value)
+  // Accessing the variable means "taking its address" in the user's mental
+  // model, because the slot actually holds the value (T), but the user sees a
+  // reference
+  // (&mut T).
+  if (func_.get_slot(slot).kind == Slot::Kind::MutRefParam) {
+    // Return address of the slot (effectively re-creating the &mut T)
+    return builder_.make_address_of(Place::simple(slot), Mutability::Mutable,
+                                    info.type);
+  }
+
   // Always return the slot as a Place.
   // The caller (lower_expr_value) will emit a Load if it needs a scalar value.
   return Place::simple(slot);
@@ -385,7 +396,6 @@ OptFunctionLowerer::lower_binary_op(const hir::BinaryOp &binary,
   }
 
   semantic::ExprInfo lhs_info = hir::helper::get_expr_info(*binary.lhs);
-  semantic::ExprInfo rhs_info = hir::helper::get_expr_info(*binary.rhs);
 
   NodeId lhs = lower_expr_value(*binary.lhs);
   if (!is_reachable())
@@ -394,7 +404,7 @@ OptFunctionLowerer::lower_binary_op(const hir::BinaryOp &binary,
   NodeId rhs = lower_expr_value(*binary.rhs);
 
   auto kind =
-      classify_binary_op(binary, lhs_info.type, rhs_info.type, info.type);
+      classify_binary_op(binary, lhs_info.type);
 
   if (!is_reachable())
     return std::monostate{};
@@ -436,6 +446,7 @@ LowerResult OptFunctionLowerer::lower_unary_op(const hir::UnaryOp &unary,
                           NodeId ptr = lower_expr_value(*unary.rhs);
                           if (!is_reachable())
                             return std::monostate{};
+
                           return Place::from_ptr(ptr);
                         },
                     },
@@ -489,6 +500,67 @@ LowerResult OptFunctionLowerer::lower_assignment(const hir::Assignment &assign,
 // Calls
 // ═══════════════════════════════════════════════════════════════════
 
+bool OptFunctionLowerer::lower_call_argument(const hir::Expr &arg_expr,
+                                             std::vector<CallArg> &args) {
+  semantic::ExprInfo arg_info = hir::helper::get_expr_info(arg_expr);
+  bool arg_is_aggregate = ::mir::detail::is_aggregate_type(arg_info.type);
+
+  if (arg_is_aggregate) {
+    auto p_opt = lower_expr_place(arg_expr);
+    if (!p_opt) {
+      if (is_reachable()) {
+        throw std::logic_error(
+            "Failed to lower reachable aggregate call argument to Place");
+      }
+      return false;
+    }
+
+    Place p = *p_opt;
+    if (std::holds_alternative<SlotId>(p.base) && p.projections.empty()) {
+      args.push_back(std::get<SlotId>(p.base));
+    } else {
+      SlotId temp = allocate_temp_slot(arg_info.type, "<arg_copy>");
+      current_token_ =
+          builder_.emit_memcopy(current_block_id(), current_token_,
+                                Place::simple(temp), p, arg_info.type);
+      args.push_back(temp);
+    }
+    return is_reachable();
+  }
+
+  NodeId value = lower_expr_value(arg_expr);
+  if (!is_reachable()) {
+    return false;
+  }
+  args.push_back(value);
+  return true;
+}
+
+LowerResult OptFunctionLowerer::emit_call_and_materialize_result(
+    const CallTarget &target, std::vector<CallArg> args,
+    const semantic::ExprInfo &info) {
+  bool ret_is_aggregate = ::mir::detail::is_aggregate_type(info.type);
+
+  std::optional<SlotId> sret_slot;
+  if (ret_is_aggregate) {
+    sret_slot = allocate_temp_slot(info.type, "<sret>");
+  }
+
+  TokenId t_out = builder_.emit_call(current_block_id(), current_token_, target,
+                                     std::move(args), sret_slot, info.type);
+  current_token_ = t_out;
+
+  if (ret_is_aggregate) {
+    return Place::simple(*sret_slot);
+  }
+  if (!::mir::detail::is_unit_type(info.type) &&
+      !::mir::detail::is_never_type(info.type)) {
+    return builder_.make_call_result(current_token_, info.type);
+  }
+
+  return std::monostate{};
+}
+
 LowerResult OptFunctionLowerer::lower_call(const hir::Call &call,
                                            const semantic::ExprInfo &info) {
   if (!call.callee) {
@@ -499,7 +571,7 @@ LowerResult OptFunctionLowerer::lower_call(const hir::Call &call,
     throw std::logic_error("Call callee not a resolved function use");
   }
 
-  auto it = func_map_.find(func_use->def);
+  auto it = func_map_.find(CallableKey{func_use->def});
   if (it == func_map_.end()) {
     throw std::logic_error("Call target not registered in opt MIR lowering");
   }
@@ -513,59 +585,12 @@ LowerResult OptFunctionLowerer::lower_call(const hir::Call &call,
     if (!arg)
       throw std::logic_error("Call argument missing");
 
-    semantic::ExprInfo arg_info = hir::helper::get_expr_info(*arg);
-    bool is_aggregate = ::mir::detail::is_aggregate_type(arg_info.type);
-
-    if (is_aggregate) {
-
-      auto p = lower_expr_place(*arg);
-      if (!p)
-        return std::monostate{};
-
-      // Optimization: if the argument is already a simple slot, pass it
-      // directly (move semantic). Otherwise, copy to a temp.
-      if (std::holds_alternative<SlotId>(p->base) && p->projections.empty()) {
-        args.push_back(std::get<SlotId>(p->base));
-      } else {
-        SlotId temp = allocate_temp_slot(arg_info.type, "<arg_copy>");
-        current_token_ =
-            builder_.emit_memcopy(current_block_id(), current_token_,
-                                  Place::simple(temp), *p, arg_info.type);
-        args.push_back(temp);
-      }
-    } else {
-      // Scalar passed by value
-      args.push_back(lower_expr_value(*arg));
-    }
-
-    if (!is_reachable())
+    if (!lower_call_argument(*arg, args)) {
       return std::monostate{};
+    }
   }
 
-  // Handle Return Value
-  bool ret_is_aggregate = ::mir::detail::is_aggregate_type(info.type);
-  std::optional<SlotId> sret_slot;
-  type::TypeId ret_type = info.type;
-
-  if (ret_is_aggregate) {
-    // SRET: Allocate destination slot
-    sret_slot = allocate_temp_slot(info.type, "<sret>");
-  }
-
-  TokenId t_out = builder_.emit_call(current_block_id(), current_token_, target,
-                                     args, sret_slot, ret_type);
-  current_token_ = t_out;
-
-  // Result Node
-  if (ret_is_aggregate) {
-    return Place::simple(*sret_slot);
-  } else if (!::mir::detail::is_unit_type(info.type) &&
-             !::mir::detail::is_never_type(info.type)) {
-    // Scalar result observed by CallResultNode
-    return builder_.make_call_result(current_token_, info.type);
-  }
-
-  return std::monostate{}; // Unit/Different handling
+  return emit_call_and_materialize_result(target, std::move(args), info);
 }
 
 LowerResult
@@ -575,8 +600,11 @@ OptFunctionLowerer::lower_method_call(const hir::MethodCall &mcall,
   if (!mcall.receiver) {
     throw std::logic_error("Method call missing receiver in opt MIR lowering");
   }
+  if (!method_def) {
+    throw std::logic_error("Method call missing resolved method definition");
+  }
 
-  auto it = func_map_.find(method_def);
+  auto it = func_map_.find(CallableKey{method_def});
   if (it == func_map_.end()) {
     throw std::logic_error("Method target not registered in opt MIR lowering");
   }
@@ -586,68 +614,22 @@ OptFunctionLowerer::lower_method_call(const hir::MethodCall &mcall,
   std::vector<CallArg> args;
   args.reserve(1 + mcall.args.size());
 
-  auto process_arg = [&](const hir::Expr &arg_expr) {
-    semantic::ExprInfo arg_info = hir::helper::get_expr_info(arg_expr);
-    bool is_aggregate = ::mir::detail::is_aggregate_type(arg_info.type);
-
-    if (is_aggregate) {
-      // Aggregate passed by value (ByVal)
-      auto p_opt = lower_expr_place(arg_expr);
-      if (!p_opt)
-        return;
-      Place p = *p_opt;
-      if (std::holds_alternative<SlotId>(p.base) && p.projections.empty()) {
-        args.push_back(std::get<SlotId>(p.base));
-      } else {
-        SlotId temp = allocate_temp_slot(arg_info.type, "<arg_copy>");
-        current_token_ =
-            builder_.emit_memcopy(current_block_id(), current_token_,
-                                  Place::simple(temp), p, arg_info.type);
-        args.push_back(temp);
-      }
-    } else {
-      // Scalar passed by value
-      args.push_back(lower_expr_value(arg_expr));
-    }
-  };
-
   // 1. Receiver
-  process_arg(*mcall.receiver);
-  if (!is_reachable())
+  if (!lower_call_argument(*mcall.receiver, args)) {
     return std::monostate{};
+  }
 
   // 2. Explicit Args
   for (const auto &arg : mcall.args) {
     if (!arg) {
       throw std::logic_error("Method call argument missing");
     }
-    process_arg(*arg);
-    if (!is_reachable())
+    if (!lower_call_argument(*arg, args)) {
       return std::monostate{};
+    }
   }
 
-  // Handle Return Value (SRET)
-  bool ret_is_aggregate = ::mir::detail::is_aggregate_type(info.type);
-  std::optional<SlotId> sret_slot;
-  type::TypeId ret_type = info.type;
-
-  if (ret_is_aggregate) {
-    sret_slot = allocate_temp_slot(info.type, "<sret>");
-  }
-
-  TokenId t_out = builder_.emit_call(current_block_id(), current_token_, target,
-                                     args, sret_slot, ret_type);
-  current_token_ = t_out;
-
-  // Result Node
-  if (ret_is_aggregate) {
-    return Place::simple(*sret_slot);
-  } else if (!::mir::detail::is_unit_type(info.type) &&
-             !::mir::detail::is_never_type(info.type)) {
-    return builder_.make_call_result(current_token_, info.type);
-  }
-
-  return std::monostate{};
+  return emit_call_and_materialize_result(target, std::move(args), info);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -748,7 +730,7 @@ LowerResult OptFunctionLowerer::lower_if_expr(const hir::If &if_expr,
 
 LowerResult
 OptFunctionLowerer::lower_loop_expr(const hir::Loop &loop,
-                                    const semantic::ExprInfo &info) {
+                                    const semantic::ExprInfo & /*info*/) {
   BlockId header = builder_.new_block();
   BlockId exit = builder_.new_block();
 
@@ -810,7 +792,7 @@ OptFunctionLowerer::lower_loop_expr(const hir::Loop &loop,
 
 LowerResult
 OptFunctionLowerer::lower_while_expr(const hir::While &while_expr,
-                                     const semantic::ExprInfo &info) {
+                                     const semantic::ExprInfo & /*info*/) {
   BlockId header = builder_.new_block();
   BlockId body_block = builder_.new_block();
   BlockId exit = builder_.new_block();
@@ -1013,8 +995,7 @@ LowerResult OptFunctionLowerer::lower_short_circuit(
 // ═══════════════════════════════════════════════════════════════════
 
 BinaryOpNode::Kind OptFunctionLowerer::classify_binary_op(
-    const hir::BinaryOp &binary, type::TypeId lhs_type, type::TypeId rhs_type,
-    type::TypeId result_type) {
+  const hir::BinaryOp &binary, type::TypeId lhs_type) {
   return std::visit(
       Overloaded{
           [&](const hir::Add &) {
@@ -1198,13 +1179,5 @@ OptFunctionLowerer::lower_expr_place(const hir::Expr &expr) {
 // ═══════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════
-
-NodeId OptFunctionLowerer::make_temp_addr(SlotId temp,
-                                          type::TypeId value_type) {
-  type::Type ptr_ty;
-  ptr_ty.value = type::ReferenceType{value_type, true};
-  return builder_.make_address_of(Place::simple(temp), Mutability::Mutable,
-                                  type::get_typeID(ptr_ty));
-}
 
 } // namespace opt::mir

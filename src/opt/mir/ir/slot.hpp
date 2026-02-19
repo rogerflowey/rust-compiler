@@ -14,7 +14,8 @@ enum class Mutability { Immutable, Mutable };
 struct Slot {
   enum class Kind {
     StackLocal,
-    Parameter, // Caller-initialized, logically immutable unless &mut
+    Parameter,   // Caller-initialized, logically immutable unless &mut
+    MutRefParam, // &mut T parameter, treated as "Live-In" local of type T
     HeapObject,
     Global,
     // Temp slots are now just StackLocal

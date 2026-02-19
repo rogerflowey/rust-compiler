@@ -4,8 +4,8 @@
 // threading (sea-of-nodes style) instead of old MIR's implicit ordering.
 
 #include "opt/mir/lower/lower.hpp"
-#include "opt/mir/lower/lower_internal.hpp"
 #include "opt/mir/ir/nodes.hpp"
+#include "opt/mir/lower/lower_internal.hpp"
 
 #include "common/mir/utils.hpp" // shared type helpers
 
@@ -30,7 +30,7 @@ namespace {
 
 struct FunctionDescriptor {
   std::variant<const hir::Function *, const hir::Method *> fn;
-  const void *key = nullptr;
+  CallableKey key = static_cast<const hir::Function *>(nullptr);
   std::string name;
   bool is_external = false;
 };
@@ -116,7 +116,8 @@ OptModule lower_program(const hir::Program &program) {
   auto descriptors = collect_function_descriptors(program);
 
   // Build function map: HIR pointer → CallTarget
-  std::unordered_map<const void *, CallTarget> func_map;
+  std::unordered_map<CallableKey, CallTarget, CallableKeyHash, CallableKeyEq>
+      func_map;
   for (std::uint32_t i = 0; i < descriptors.size(); ++i) {
     CallTarget target;
     target.kind = descriptors[i].is_external ? CallTarget::Kind::External
@@ -151,7 +152,8 @@ OptModule lower_program(const hir::Program &program) {
 
 OptFunctionLowerer::OptFunctionLowerer(
     const hir::Function &function,
-    const std::unordered_map<const void *, CallTarget> &func_map,
+  const std::unordered_map<CallableKey, CallTarget, CallableKeyHash,
+               CallableKeyEq> &func_map,
     std::string name)
     : function_kind_(FunctionKind::Function), hir_function_(&function),
       func_map_(func_map) {
@@ -160,7 +162,8 @@ OptFunctionLowerer::OptFunctionLowerer(
 
 OptFunctionLowerer::OptFunctionLowerer(
     const hir::Method &method,
-    const std::unordered_map<const void *, CallTarget> &func_map,
+  const std::unordered_map<CallableKey, CallTarget, CallableKeyHash,
+               CallableKeyEq> &func_map,
     std::string name)
     : function_kind_(FunctionKind::Method), hir_method_(&method),
       func_map_(func_map) {
@@ -168,7 +171,13 @@ OptFunctionLowerer::OptFunctionLowerer(
 }
 
 void OptFunctionLowerer::initialize(std::string name) {
+  if (!get_body()) {
+    throw std::logic_error(
+        "Function missing body during opt MIR lowerer initialization");
+  }
+
   func_.name = std::move(name);
+  register_params();
   register_locals();
 
   // Create entry block and initial token
@@ -225,7 +234,13 @@ const hir::Block *OptFunctionLowerer::get_body() const {
 const std::vector<std::unique_ptr<hir::Local>> &
 OptFunctionLowerer::get_locals() const {
   if (function_kind_ == FunctionKind::Function) {
+    if (!hir_function_ || !hir_function_->body) {
+      throw std::logic_error("Function body missing while reading locals");
+    }
     return hir_function_->body->locals;
+  }
+  if (!hir_method_ || !hir_method_->body) {
+    throw std::logic_error("Method body missing while reading locals");
   }
   return hir_method_->body->locals;
 }
@@ -234,12 +249,65 @@ OptFunctionLowerer::get_locals() const {
 // Local registration — create a Slot for each HIR Local
 // ═══════════════════════════════════════════════════════════════════
 
-void OptFunctionLowerer::register_locals() {
-  // Self parameter for methods
-  if (function_kind_ == FunctionKind::Method && hir_method_ &&
-      hir_method_->body && hir_method_->body->self_local) {
-    register_local(hir_method_->body->self_local.get());
+void OptFunctionLowerer::register_params() {
+  // Helper to register a single parameter local
+  auto process_param = [&](const hir::Local *local, const char *ctx) {
+    if (!local)
+      throw std::logic_error(std::string("Null param local in ") + ctx);
+    if (!local->type_annotation)
+      throw std::logic_error(std::string("Param missing type in ") + ctx);
+
+    TypeId full_type = hir::helper::get_resolved_type(*local->type_annotation);
+
+    // Check for &mut T
+    const type::Type &ty = type::get_type_from_id(full_type);
+    if (const auto *ref = std::get_if<type::ReferenceType>(&ty.value)) {
+      if (ref->is_mutable) {
+        // It is &mut T -> Create MutRefParam slot of type T
+        TypeId inner_type =
+            ::mir::detail::canonicalize_type_for_mir(ref->referenced_type);
+        SlotId id = builder_.new_slot(Slot::Kind::MutRefParam, inner_type,
+                                      local->name.name);
+        local_slots_.emplace(local, id);
+        return;
+      }
+    }
+
+    // Normal parameter
+    TypeId normalized = ::mir::detail::canonicalize_type_for_mir(full_type);
+    SlotId id =
+        builder_.new_slot(Slot::Kind::Parameter, normalized, local->name.name);
+    local_slots_.emplace(local, id);
+  };
+
+  if (function_kind_ == FunctionKind::Function && hir_function_) {
+    for (const auto &pat : hir_function_->sig.params) {
+      if (const auto *binding = std::get_if<hir::BindingDef>(&pat->value)) {
+        if (const auto *local_ptr =
+                std::get_if<hir::Local *>(&binding->local)) {
+          process_param(*local_ptr, "function param");
+        }
+      }
+    }
+  } else if (function_kind_ == FunctionKind::Method && hir_method_) {
+    // Self
+    if (hir_method_->body && hir_method_->body->self_local) {
+      process_param(hir_method_->body->self_local.get(), "self param");
+    }
+    // Explicit params
+    for (const auto &pat : hir_method_->sig.params) {
+      if (const auto *binding = std::get_if<hir::BindingDef>(&pat->value)) {
+        if (const auto *local_ptr =
+                std::get_if<hir::Local *>(&binding->local)) {
+          process_param(*local_ptr, "method param");
+        }
+      }
+    }
   }
+}
+
+void OptFunctionLowerer::register_locals() {
+  // Locals (skip self, handled in register_params)
   for (const auto &local_ptr : get_locals()) {
     if (local_ptr) {
       register_local(local_ptr.get());

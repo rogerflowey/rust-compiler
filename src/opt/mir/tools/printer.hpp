@@ -1,9 +1,9 @@
 #pragma once
 
 #include "opt/mir/ir/basic_block.hpp"
+#include "opt/mir/ir/module.hpp"
 #include "opt/mir/ir/node_id.hpp"
 #include "opt/mir/ir/nodes.hpp"
-#include "opt/mir/ir/module.hpp"
 #include "opt/mir/ir/slot.hpp"
 
 #include <ostream>
@@ -69,6 +69,9 @@ private:
         break;
       case Slot::Kind::Global:
         os_ << "global";
+        break;
+      case Slot::Kind::MutRefParam:
+        os_ << "mut_ref_param";
         break;
       }
       os_ << " type:" << raw_type(s.type);
