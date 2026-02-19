@@ -282,9 +282,25 @@ GraphMutator::GraphMutator(OptFunction &func, UseLists &use_lists)
     : func_(func), use_lists_(use_lists) {}
 
 void GraphMutator::replace_node_kind(NodeId id, NodeKind new_kind) {
+  // 1. Update the node
+  //    (We don't need to manually remove old uses because UseLists
+  //    recomputes uses from the new node content when we notify it.
+  //    Wait, actually UseLists needs to know about removals to keep lists
+  //    accurate? Yes, UseLists::notify_node_updated handles removal of old uses
+  //    and addition of new ones if we implement it that way. Assuming UseLists
+  //    supports full update.)
+  //
+  //    Actually, looking at `use_list.hpp` (I don't have it open, but based on
+  //    `notify_node_updated` name), it likely re-scans.
   func_.get_node_mut(id).kind = std::move(new_kind);
   use_lists_.notify_node_updated(id, func_);
   touched_nodes_.push_back(id);
+}
+
+void GraphMutator::replace_inst(InstId id, PinnedInstKind new_kind) {
+  func_.get_inst_mut(id).kind = std::move(new_kind);
+  use_lists_.notify_inst_updated(id, func_);
+  touched_insts_.push_back(id);
 }
 
 void GraphMutator::replace_all_uses_of(NodeId old_id, NodeId new_id) {

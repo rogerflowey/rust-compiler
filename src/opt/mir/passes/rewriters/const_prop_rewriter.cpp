@@ -4,8 +4,8 @@
 namespace opt::mir {
 
 bool ConstPropRewriter::try_rewrite(NodeId id, const Node &node,
-                                    const NodeFact &fact,
                                     GraphMutator &mutator) const {
+  const auto &fact = facts_[raw(id)];
   // If the fact says it's a constant...
   if (!fact.const_prop.is_constant()) {
     return false;

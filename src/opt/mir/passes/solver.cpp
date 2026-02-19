@@ -108,8 +108,15 @@ NodeFact Solver::eval_load(const LoadNode &n, type::TypeId type) const {
 
   // 1. Direct Slot Load
   if (std::holds_alternative<SlotId>(n.place.base)) {
-    return world.read(slot_types(), std::get<SlotId>(n.place.base),
-                      n.place.projections);
+    NodeFact val = world.read(slot_types(), std::get<SlotId>(n.place.base),
+                              n.place.projections);
+    if (!TypeAnalysis::is_const_applicable(type)) {
+      val.const_prop = ConstPropFact::not_applicable();
+    }
+    if (!TypeAnalysis::is_point_to_applicable(type)) {
+      val.point_to = PointToFact::not_applicable();
+    }
+    return val;
   }
 
   // 2. Pointer-based Load

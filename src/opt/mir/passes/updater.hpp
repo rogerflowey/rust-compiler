@@ -4,7 +4,7 @@
 #include "opt/mir/analysis/use_list.hpp"
 #include "opt/mir/ir/module.hpp"
 #include "opt/mir/passes/rewriters/const_prop_rewriter.hpp"
-#include "opt/mir/passes/rewriters/rewriter.hpp"
+#include "opt/mir/passes/rewriters/place_rewriter.hpp"
 #include "opt/mir/passes/solver.hpp"
 #include "opt/mir/tools/graph_mutator.hpp"
 
@@ -45,13 +45,17 @@ private:
   std::vector<bool> node_on_wl_;
   std::vector<bool> inst_on_wl_;
 
-  // Candidate Queue (FIFO)
-  // Nodes with changed facts are enqueued here for rewrite consideration.
-  std::deque<NodeId> rewrite_candidates_;
-  std::vector<bool> is_candidate_; // avoid duplicates in candidate queue
+  // Candidate Queues (FIFO)
+  // Nodes/Insts with changed inputs/facts are enqueued here for rewrite
+  // consideration.
+  std::deque<NodeId> node_rewrite_candidates_;
+  std::deque<InstId> inst_rewrite_candidates_;
+  std::vector<bool> is_node_candidate_; // avoid duplicates
+  std::vector<bool> is_inst_candidate_; // avoid duplicates
 
   // -- Rewriters --
   ConstPropRewriter const_prop_rewriter_;
+  PlaceRewriter place_rewriter_;
 
   // -- Graph Mutator --
   GraphMutator mutator_;

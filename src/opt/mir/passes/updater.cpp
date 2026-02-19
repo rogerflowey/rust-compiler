@@ -2,6 +2,13 @@
 
 namespace opt::mir {
 
+namespace {
+template <class... Ts> struct Overloaded : Ts... {
+  using Ts::operator()...;
+};
+template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
+} // namespace
+
 void Updater::run(OptFunction &func) {
   Updater updater(func);
   // Loop: Analyze -> Rewrite -> Repeat if changed
@@ -16,8 +23,9 @@ Updater::Updater(OptFunction &func)
       use_lists_(UseLists::build(func)),
       // Compute time-independent analyses once
       escape_analysis_(EscapeAnalysis::run(func)),
-      // Initialize solver with references to our tables
       solver_(func, node_facts_, token_facts_, escape_analysis_),
+      // Initialize rewriters with reference to facts
+      const_prop_rewriter_(node_facts_), place_rewriter_(node_facts_),
       // Initialize graph mutator
       mutator_(func, use_lists_) {
   resize_tables();
@@ -37,7 +45,8 @@ void Updater::resize_tables() {
   node_on_wl_.resize(func_.nodes.size(), false);
   inst_on_wl_.resize(func_.insts.size(), false);
 
-  is_candidate_.resize(func_.nodes.size(), false);
+  is_node_candidate_.resize(func_.nodes.size(), false);
+  is_inst_candidate_.resize(func_.insts.size(), false);
 }
 
 void Updater::initialize_worklist() {
@@ -91,31 +100,52 @@ void Updater::analyze() {
 // ============================================================================
 
 bool Updater::perform_rewrites() {
-  // Process candidates one by one (FIFO).
-  while (!rewrite_candidates_.empty()) {
-    NodeId id = rewrite_candidates_.front();
-    rewrite_candidates_.pop_front();
-    is_candidate_[raw(id)] = false;
+  bool any_change = false;
+
+  // 1. Process Node Candidates
+  while (!node_rewrite_candidates_.empty()) {
+    NodeId id = node_rewrite_candidates_.front();
+    node_rewrite_candidates_.pop_front();
+    is_node_candidate_[raw(id)] = false;
 
     // It's a candidate.
     auto &node = func_.nodes[raw(id)];
-    const auto &fact = node_facts_[raw(id)];
 
-    if (const_prop_rewriter_.try_rewrite(id, node, fact, mutator_)) {
-      // Rewrite succeeded!
+    bool rewritten = false;
+    rewritten |= const_prop_rewriter_.try_rewrite(id, node, mutator_);
+    if (!rewritten) {
+      rewritten |= place_rewriter_.try_rewrite(id, node, mutator_);
+    }
+
+    if (rewritten) {
+      any_change = true;
       // The mutator has collected all touched nodes/insts.
       // Enqueue them for re-analysis.
       for (auto nid : mutator_.drain_touched_nodes())
         enqueue(nid);
       for (auto iid : mutator_.drain_touched_insts())
         enqueue(iid);
-
-      // Return true to trigger another analysis round.
-      return true;
     }
   }
 
-  return false;
+  // 2. Process Instruction Candidates
+  while (!inst_rewrite_candidates_.empty()) {
+    InstId id = inst_rewrite_candidates_.front();
+    inst_rewrite_candidates_.pop_front();
+    is_inst_candidate_[raw(id)] = false;
+
+    auto &inst = func_.insts[raw(id)];
+
+    if (place_rewriter_.try_rewrite(id, inst, mutator_)) {
+      any_change = true;
+      for (auto nid : mutator_.drain_touched_nodes())
+        enqueue(nid);
+      for (auto iid : mutator_.drain_touched_insts())
+        enqueue(iid);
+    }
+  }
+
+  return any_change;
 }
 
 // ============================================================================
@@ -129,10 +159,28 @@ void Updater::commit_node_fact(NodeId id, NodeFact new_fact) {
     current = new_fact;
     enqueue_users_of_node(id);
 
-    // Mark as dirty so it gets re-checked for rewriting
-    if (!is_candidate_[raw(id)]) {
-      is_candidate_[raw(id)] = true;
-      rewrite_candidates_.push_back(id);
+    // If a node's fact changed, it might be rewriteable (e.g. to Constant)
+    if (!is_node_candidate_[raw(id)]) {
+      is_node_candidate_[raw(id)] = true;
+      node_rewrite_candidates_.push_back(id);
+    }
+
+    // AND its users might be rewriteable (e.g. Load(ptr) where ptr fact
+    // changed)
+    for (const auto &user : use_lists_.users_of(id)) {
+      std::visit(Overloaded{[&](const NodeUser &u) {
+                              if (!is_node_candidate_[raw(u.id)]) {
+                                is_node_candidate_[raw(u.id)] = true;
+                                node_rewrite_candidates_.push_back(u.id);
+                              }
+                            },
+                            [&](const InstUser &u) {
+                              if (!is_inst_candidate_[raw(u.id)]) {
+                                is_inst_candidate_[raw(u.id)] = true;
+                                inst_rewrite_candidates_.push_back(u.id);
+                              }
+                            }},
+                 user);
     }
   }
 }

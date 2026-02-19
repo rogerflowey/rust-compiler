@@ -21,6 +21,10 @@ public:
   /// Updates UseLists to reflect the new operand set.
   void replace_node_kind(NodeId id, NodeKind new_kind);
 
+  /// Replace an instruction's kind in-place.
+  /// Updates UseLists to reflect the new operand set.
+  void replace_inst(InstId id, PinnedInstKind new_kind);
+
   /// Beta reduction: retarget all users of old_id to new_id.
   /// Rewrites every Node/Inst that references old_id, then syncs UseLists.
   void replace_all_uses_of(NodeId old_id, NodeId new_id);
