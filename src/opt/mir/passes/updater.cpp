@@ -64,34 +64,22 @@ void Updater::initialize_worklist() {
 
 void Updater::analyze() {
   while (!worklist_.empty()) {
-    auto item = worklist_.front();
+    ItemId item = worklist_.front();
     worklist_.pop_front();
 
-    std::visit(
-        [&](auto id) {
-          using T = std::decay_t<decltype(id)>;
-          if constexpr (std::is_same_v<T, NodeId>) {
-            node_on_wl_[raw(id)] = false;
-
-            // 1. Evaluate
-            NodeFact new_fact = solver_.evaluate_node(id);
-
-            // 2. Commit (diff & propagate) & Add Rewrite Candidate
-            commit_node_fact(id, new_fact);
-
-          } else if constexpr (std::is_same_v<T, InstId>) {
-            inst_on_wl_[raw(id)] = false;
-
-            // 1. Evaluate
-            auto output = solver_.evaluate_inst(id);
-
-            // 2. Commit all outputs
-            for (auto &[tid, new_ws] : output) {
-              commit_token_fact(tid, std::move(new_ws));
-            }
-          }
-        },
-        item);
+    std::visit(Overloaded{[&](NodeId id) {
+                            node_on_wl_[raw(id)] = false;
+                            auto result = solver_.evaluate(id);
+                            commit_node_fact(id, std::get<NodeFact>(result));
+                          },
+                          [&](InstId id) {
+                            inst_on_wl_[raw(id)] = false;
+                            auto result = solver_.evaluate(id);
+                            for (auto &[tid, new_ws] : std::get<InstEvalOutput>(result)) {
+                              commit_token_fact(tid, std::move(new_ws));
+                            }
+                          }},
+               item);
   }
 }
 
@@ -102,41 +90,29 @@ void Updater::analyze() {
 bool Updater::perform_rewrites() {
   bool any_change = false;
 
-  // 1. Process Node Candidates
-  while (!node_rewrite_candidates_.empty()) {
-    NodeId id = node_rewrite_candidates_.front();
-    node_rewrite_candidates_.pop_front();
-    is_node_candidate_[raw(id)] = false;
-
-    // It's a candidate.
-    auto &node = func_.nodes[raw(id)];
+  while (!rewrite_candidates_.empty()) {
+    ItemId id = rewrite_candidates_.front();
+    rewrite_candidates_.pop_front();
 
     bool rewritten = false;
-    rewritten |= const_prop_rewriter_.try_rewrite(id, node, mutator_);
-    if (!rewritten) {
-      rewritten |= place_rewriter_.try_rewrite(id, node, mutator_);
-    }
+    std::visit(Overloaded{[&](NodeId nid) {
+                            is_node_candidate_[raw(nid)] = false;
+                            auto &node = func_.nodes[raw(nid)];
+                            rewritten =
+                                const_prop_rewriter_.try_rewrite(nid, node, mutator_);
+                            if (!rewritten) {
+                              rewritten =
+                                  place_rewriter_.try_rewrite(nid, node, mutator_);
+                            }
+                          },
+                          [&](InstId iid) {
+                            is_inst_candidate_[raw(iid)] = false;
+                            auto &inst = func_.insts[raw(iid)];
+                            rewritten = place_rewriter_.try_rewrite(iid, inst, mutator_);
+                          }},
+               id);
 
     if (rewritten) {
-      any_change = true;
-      // The mutator has collected all touched nodes/insts.
-      // Enqueue them for re-analysis.
-      for (auto nid : mutator_.drain_touched_nodes())
-        enqueue(nid);
-      for (auto iid : mutator_.drain_touched_insts())
-        enqueue(iid);
-    }
-  }
-
-  // 2. Process Instruction Candidates
-  while (!inst_rewrite_candidates_.empty()) {
-    InstId id = inst_rewrite_candidates_.front();
-    inst_rewrite_candidates_.pop_front();
-    is_inst_candidate_[raw(id)] = false;
-
-    auto &inst = func_.insts[raw(id)];
-
-    if (place_rewriter_.try_rewrite(id, inst, mutator_)) {
       any_change = true;
       for (auto nid : mutator_.drain_touched_nodes())
         enqueue(nid);
@@ -160,25 +136,16 @@ void Updater::commit_node_fact(NodeId id, NodeFact new_fact) {
     enqueue_users_of_node(id);
 
     // If a node's fact changed, it might be rewriteable (e.g. to Constant)
-    if (!is_node_candidate_[raw(id)]) {
-      is_node_candidate_[raw(id)] = true;
-      node_rewrite_candidates_.push_back(id);
-    }
+    enqueue_rewrite_candidate(id);
 
     // AND its users might be rewriteable (e.g. Load(ptr) where ptr fact
     // changed)
     for (const auto &user : use_lists_.users_of(id)) {
       std::visit(Overloaded{[&](const NodeUser &u) {
-                              if (!is_node_candidate_[raw(u.id)]) {
-                                is_node_candidate_[raw(u.id)] = true;
-                                node_rewrite_candidates_.push_back(u.id);
-                              }
+                              enqueue_rewrite_candidate(u.id);
                             },
                             [&](const InstUser &u) {
-                              if (!is_inst_candidate_[raw(u.id)]) {
-                                is_inst_candidate_[raw(u.id)] = true;
-                                inst_rewrite_candidates_.push_back(u.id);
-                              }
+                              enqueue_rewrite_candidate(u.id);
                             }},
                  user);
     }
@@ -201,22 +168,44 @@ void Updater::commit_token_fact(TokenId id, WorldSnapshot new_fact) {
 // Worklist Management
 // ============================================================================
 
-void Updater::enqueue(NodeId id) {
-  if (raw(id) >= node_on_wl_.size())
-    return;
-  if (!node_on_wl_[raw(id)]) {
-    node_on_wl_[raw(id)] = true;
-    worklist_.push_back(id);
-  }
+void Updater::enqueue(ItemId id) {
+  std::visit(Overloaded{[&](NodeId nid) {
+                          if (raw(nid) >= node_on_wl_.size())
+                            return;
+                          if (!node_on_wl_[raw(nid)]) {
+                            node_on_wl_[raw(nid)] = true;
+                            worklist_.push_back(nid);
+                          }
+                        },
+                        [&](InstId iid) {
+                          if (raw(iid) >= inst_on_wl_.size())
+                            return;
+                          if (!inst_on_wl_[raw(iid)]) {
+                            inst_on_wl_[raw(iid)] = true;
+                            worklist_.push_back(iid);
+                          }
+                        }},
+             id);
 }
 
-void Updater::enqueue(InstId id) {
-  if (raw(id) >= inst_on_wl_.size())
-    return;
-  if (!inst_on_wl_[raw(id)]) {
-    inst_on_wl_[raw(id)] = true;
-    worklist_.push_back(id);
-  }
+void Updater::enqueue_rewrite_candidate(ItemId id) {
+  std::visit(Overloaded{[&](NodeId nid) {
+                          if (raw(nid) >= is_node_candidate_.size())
+                            return;
+                          if (!is_node_candidate_[raw(nid)]) {
+                            is_node_candidate_[raw(nid)] = true;
+                            rewrite_candidates_.push_back(nid);
+                          }
+                        },
+                        [&](InstId iid) {
+                          if (raw(iid) >= is_inst_candidate_.size())
+                            return;
+                          if (!is_inst_candidate_[raw(iid)]) {
+                            is_inst_candidate_[raw(iid)] = true;
+                            rewrite_candidates_.push_back(iid);
+                          }
+                        }},
+             id);
 }
 
 void Updater::enqueue_users_of_node(NodeId id) {

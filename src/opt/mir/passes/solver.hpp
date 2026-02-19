@@ -8,6 +8,7 @@
 #include "opt/mir/passes/evaluators/point_to_evaluator.hpp"
 
 #include <span>
+#include <variant>
 #include <vector>
 
 namespace opt::mir {
@@ -22,9 +23,15 @@ namespace opt::mir {
 ///   1. Constant Propagation (ConstPropEvaluator)
 class Solver {
 public:
+  using EvaluandId = std::variant<NodeId, InstId>;
+  using EvalResult = std::variant<NodeFact, InstEvalOutput>;
+
   Solver(const OptFunction &func, const std::vector<NodeFact> &node_facts,
          const std::vector<WorldSnapshot> &token_facts,
          const EscapeAnalysis &escape_analysis);
+
+  /// Evaluate either a floating node or pinned instruction.
+  [[nodiscard]] EvalResult evaluate(EvaluandId id) const;
 
   /// Evaluate a floating node to determine its current fact.
   /// Merges results from all lattice evaluators.

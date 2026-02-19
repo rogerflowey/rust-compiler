@@ -16,6 +16,19 @@ Solver::Solver(const OptFunction &func, const std::vector<NodeFact> &node_facts,
   }
 }
 
+Solver::EvalResult Solver::evaluate(EvaluandId id) const {
+  return std::visit(
+      [&](const auto &typed_id) -> EvalResult {
+        using T = std::decay_t<decltype(typed_id)>;
+        if constexpr (std::is_same_v<T, NodeId>) {
+          return evaluate_node(typed_id);
+        } else {
+          return evaluate_inst(typed_id);
+        }
+      },
+      id);
+}
+
 // Helper: safe vector access
 template <typename T> const T &get_fact(const std::vector<T> &vec, size_t idx) {
   return vec[idx];

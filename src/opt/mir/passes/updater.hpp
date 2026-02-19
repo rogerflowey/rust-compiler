@@ -9,7 +9,6 @@
 #include "opt/mir/tools/graph_mutator.hpp"
 
 #include <deque>
-#include <variant>
 #include <vector>
 
 namespace opt::mir {
@@ -22,6 +21,8 @@ namespace opt::mir {
 /// 4. Drives the loop: pop -> call Solver -> update facts -> trigger rewrites.
 class Updater {
 public:
+  using ItemId = Solver::EvaluandId;
+
   static void run(OptFunction &func);
 
 private:
@@ -41,15 +42,14 @@ private:
   Solver solver_;
 
   // Worklist (deduplicated)
-  std::deque<std::variant<NodeId, InstId>> worklist_;
+  std::deque<ItemId> worklist_;
   std::vector<bool> node_on_wl_;
   std::vector<bool> inst_on_wl_;
 
   // Candidate Queues (FIFO)
-  // Nodes/Insts with changed inputs/facts are enqueued here for rewrite
+  // Items with changed inputs/facts are enqueued here for rewrite
   // consideration.
-  std::deque<NodeId> node_rewrite_candidates_;
-  std::deque<InstId> inst_rewrite_candidates_;
+  std::deque<ItemId> rewrite_candidates_;
   std::vector<bool> is_node_candidate_; // avoid duplicates
   std::vector<bool> is_inst_candidate_; // avoid duplicates
 
@@ -73,8 +73,8 @@ private:
   void resize_tables();
   void initialize_worklist();
 
-  void enqueue(NodeId id);
-  void enqueue(InstId id);
+  void enqueue(ItemId id);
+  void enqueue_rewrite_candidate(ItemId id);
   void enqueue_users_of_node(NodeId id);
   void enqueue_users_of_token(TokenId id);
 };
