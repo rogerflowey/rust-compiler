@@ -4,6 +4,7 @@
 #include "semantic/hir/visitor/visitor_base.hpp"
 #include "semantic/hir/helper.hpp"
 #include "semantic/type/type.hpp"
+#include "semantic/query/semantic_context.hpp"
 #include "semantic/utils.hpp"
 #include "ast/common.hpp"
 
@@ -15,8 +16,6 @@
 namespace semantic {
 
 using namespace hir::helper;
-
-// Use hir::helper::hir::helper::get_resolved_type instead of duplicate function
 
 // Data structures for trait validation
 struct TraitItemInfo {
@@ -50,8 +49,11 @@ private:
         VALIDATION
     } current_phase = Phase::EXTRACTION;
 
+    SemanticContext* context = nullptr;
+
 public:
     TraitValidator() = default;
+    explicit TraitValidator(SemanticContext& ctx) : context(&ctx) {}
     
     // Main entry point
     void validate(hir::Program& program);
@@ -92,6 +94,13 @@ private:
     void report_signature_mismatch(const ast::Identifier& trait_name,
                                   const ast::Identifier& item_name,
                                   const std::string& details);
+
+    TypeId resolve_type(const hir::TypeAnnotation& annotation) const {
+        if (context) {
+            return context->type_query(const_cast<hir::TypeAnnotation&>(annotation));
+        }
+        return hir::helper::get_resolved_type(annotation);
+    }
 };
 
 // Inline implementations
@@ -255,8 +264,8 @@ inline bool TraitValidator::validate_function_signature(const hir::Function& tra
     
     // Check return type TypeId equality
     if (trait_fn.return_type && impl_fn.return_type) {
-        auto trait_return_type = hir::helper::get_resolved_type(*trait_fn.return_type);
-        auto impl_return_type = hir::helper::get_resolved_type(*impl_fn.return_type);
+        auto trait_return_type = resolve_type(*trait_fn.return_type);
+        auto impl_return_type = resolve_type(*impl_fn.return_type);
         if (trait_return_type != impl_return_type) {
             return false;
         }
@@ -268,8 +277,8 @@ inline bool TraitValidator::validate_function_signature(const hir::Function& tra
     // Check parameter type TypeId equality
     for (size_t i = 0; i < trait_fn.param_type_annotations.size(); ++i) {
         if (trait_fn.param_type_annotations[i] && impl_fn.param_type_annotations[i]) {
-            auto trait_param_type = hir::helper::get_resolved_type(*trait_fn.param_type_annotations[i]);
-            auto impl_param_type = hir::helper::get_resolved_type(*impl_fn.param_type_annotations[i]);
+            auto trait_param_type = resolve_type(*trait_fn.param_type_annotations[i]);
+            auto impl_param_type = resolve_type(*impl_fn.param_type_annotations[i]);
             if (trait_param_type != impl_param_type) {
                 return false;
             }
@@ -296,8 +305,8 @@ inline bool TraitValidator::validate_method_signature(const hir::Method& trait_m
     
     // Check return type TypeId equality
     if (trait_method.return_type && impl_method.return_type) {
-        auto trait_return_type = hir::helper::get_resolved_type(*trait_method.return_type);
-        auto impl_return_type = hir::helper::get_resolved_type(*impl_method.return_type);
+        auto trait_return_type = resolve_type(*trait_method.return_type);
+        auto impl_return_type = resolve_type(*impl_method.return_type);
         if (trait_return_type != impl_return_type) {
             return false;
         }
@@ -309,8 +318,8 @@ inline bool TraitValidator::validate_method_signature(const hir::Method& trait_m
     // Check parameter type TypeId equality
     for (size_t i = 0; i < trait_method.param_type_annotations.size(); ++i) {
         if (trait_method.param_type_annotations[i] && impl_method.param_type_annotations[i]) {
-            auto trait_param_type = hir::helper::get_resolved_type(*trait_method.param_type_annotations[i]);
-            auto impl_param_type = hir::helper::get_resolved_type(*impl_method.param_type_annotations[i]);
+            auto trait_param_type = resolve_type(*trait_method.param_type_annotations[i]);
+            auto impl_param_type = resolve_type(*impl_method.param_type_annotations[i]);
             if (trait_param_type != impl_param_type) {
                 return false;
             }
@@ -326,8 +335,8 @@ inline bool TraitValidator::validate_method_signature(const hir::Method& trait_m
 inline bool TraitValidator::validate_const_signature(const hir::ConstDef& trait_const, const hir::ConstDef& impl_const) {
     // Check const type TypeId equality
     if (trait_const.type && impl_const.type) {
-        auto trait_type = hir::helper::get_resolved_type(*trait_const.type);
-        auto impl_type = hir::helper::get_resolved_type(*impl_const.type);
+        auto trait_type = resolve_type(*trait_const.type);
+        auto impl_type = resolve_type(*impl_const.type);
         if (trait_type != impl_type) {
             return false;
         }

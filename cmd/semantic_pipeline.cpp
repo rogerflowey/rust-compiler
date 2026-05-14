@@ -13,8 +13,8 @@
 
 // Semantic analysis includes
 #include "src/semantic/hir/converter.hpp"
+#include "src/semantic/query/semantic_context.hpp"
 #include "src/semantic/pass/name_resolution/name_resolution.hpp"
-#include "src/semantic/pass/type&const/visitor.hpp"
 #include "src/semantic/pass/trait_check/trait_check.hpp"
 #include "src/semantic/pass/semantic_check/semantic_check.hpp"
 #include "src/semantic/pass/control_flow_linking/control_flow_linking.hpp"
@@ -123,27 +123,15 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        semantic::SemanticContext semantic_ctx(impl_table);
+
         // Print HIR after name resolution
         std::cout << "\n=== HIR after Name Resolution ===\n" << std::endl;
         std::cout << *hir_program << std::endl;
         std::cout << "\n=== End HIR ===\n" << std::endl;
 
-        // Phase 5: Type & Const Finalization
-        semantic::TypeConstResolver type_const_resolver;
-        try {
-            type_const_resolver.visit_program(*hir_program);
-        } catch (const std::exception& e) {
-            std::cerr << "Error: Type & const resolution failed - " << e.what() << std::endl;
-            return 1;
-        }
-
-        // Print HIR after type & const resolution
-        std::cout << "\n=== HIR after Type & Const Resolution ===\n" << std::endl;
-        std::cout << *hir_program << std::endl;
-        std::cout << "\n=== End HIR ===\n" << std::endl;
-
-        // Phase 6: Trait Validation
-        semantic::TraitValidator trait_validator;
+        // Phase 5: Trait Validation
+        semantic::TraitValidator trait_validator(semantic_ctx);
         try {
             trait_validator.validate(*hir_program);
         } catch (const std::exception& e) {
@@ -171,7 +159,7 @@ int main(int argc, char* argv[]) {
         std::cout << "\n=== End HIR ===\n" << std::endl;
 
         // Phase 8: Semantic Checking
-        semantic::SemanticCheckVisitor semantic_checker(impl_table);
+        semantic::SemanticCheckVisitor semantic_checker(semantic_ctx);
         try {
             // Apply comprehensive expression checking to the entire program
             semantic_checker.check_program(*hir_program);
