@@ -57,6 +57,19 @@ class NameResolver : public hir::HirVisitorBase<NameResolver> {
       throw std::logic_error("TypeStatic node did not resolve its type");
     }
     const auto &target_name = node.name;
+    const auto associated_span = [&]() {
+      if (target_name.span.is_valid()) {
+        return target_name.span;
+      }
+      if (node.span.is_valid()) {
+        return node.span;
+      }
+      return span::Span::invalid();
+    }();
+    auto with_span = [&](auto &&value) {
+      value.span = associated_span;
+      return hir::ExprVariant{std::move(value)};
+    };
     return std::visit(
         Overloaded{
             [&](hir::StructDef *struct_def) -> hir::ExprVariant {
@@ -65,30 +78,23 @@ class NameResolver : public hir::HirVisitorBase<NameResolver> {
               // Use new O(1) lookup API
               if (auto *constant =
                       impl_table.lookup_const(type_id, target_name)) {
-                return hir::ExprVariant{hir::StructConst(
-                    struct_def, constant)};
+                return with_span(hir::StructConst(struct_def, constant));
               }
               if (auto *fn = impl_table.lookup_function(type_id, target_name)) {
-                return hir::ExprVariant{
-                    hir::FuncUse(fn,node.ast_node)};
+                return with_span(hir::FuncUse(fn));
               }
               if (auto *method =
                       impl_table.lookup_method(type_id, target_name)) {
-                std::cerr << "DEBUG: Method resolution attempted for method: "
-                          << target_name.name << std::endl;
                 if (!method) {
-                  std::cerr << "DEBUG: Method pointer is null - AST node "
-                               "corruption detected"
-                            << std::endl;
-                  throw std::runtime_error("Method Ast Node corrupted");
+                  throw_semantic_error("Method AST node corrupted",
+                                       associated_span);
                 }
-                std::cerr << "DEBUG: Method resolution not supported yet"
-                          << std::endl;
-                throw std::runtime_error(
-                    "Method resolution not supported yet");
+                throw_semantic_error("Method resolution not supported yet",
+                                     associated_span);
               }
-              throw std::runtime_error("Unable to resolve struct associated item " +
-                                       target_name.name);
+              throw_semantic_error("Unable to resolve struct associated item " +
+                                       target_name.name,
+                                   associated_span);
             },
             [&](hir::EnumDef *enum_def) -> hir::ExprVariant {
               auto it = std::find_if(enum_def->variants.begin(),
@@ -99,14 +105,16 @@ class NameResolver : public hir::HirVisitorBase<NameResolver> {
               if (it != enum_def->variants.end()) {
                 size_t idx = static_cast<size_t>(
                     std::distance(enum_def->variants.begin(), it));
-                return hir::ExprVariant{hir::EnumVariant(enum_def, idx)};
+                return with_span(hir::EnumVariant(enum_def, idx));
               }
-              throw std::runtime_error("Enum variant " + target_name.name +
-                                       " not found");
+              throw_semantic_error("Enum variant " + target_name.name +
+                                       " not found",
+                                   associated_span);
             },
             [&](hir::Trait *) -> hir::ExprVariant {
-              throw std::runtime_error(
-                  "Trait associated items are not supported yet");
+              throw_semantic_error(
+                  "Trait associated items are not supported yet",
+                  associated_span);
             }},
         *resolved_type);
   }
@@ -117,7 +125,9 @@ class NameResolver : public hir::HirVisitorBase<NameResolver> {
         throw std::logic_error(
             "Encountered null pending static during finalization");
       }
+      auto original_span = hir::helper::get_span(*pending.first);
       pending.first->value = resolve_type_static(*pending.second);
+      hir::helper::set_span(*pending.first, original_span);
     }
     unresolved_statics.clear();
   }
@@ -213,10 +223,9 @@ public:
 
     // create Local for self
     auto self_local = std::make_unique<hir::Local>(hir::Local{
-        ast::Identifier{"self"},
-        method.self_param.is_mutable,
-        get_typeID(Type{StructType{.symbol = *self_struct}}),
-        nullptr
+      ast::Identifier{"self"},
+      method.self_param.is_mutable,
+      get_typeID(Type{StructType{.symbol = *self_struct}})
     });
     self_local->span = method.self_param.span.is_valid() ? method.self_param.span : method.span;
     
@@ -238,7 +247,6 @@ public:
     scopes.pop();
   }
   void visit(hir::Impl &impl) {
-    std::cerr << "DEBUG: visit(Impl) called" << std::endl;
 
     // resolve the type being implemented
     auto *type_node_ptr =
@@ -255,7 +263,6 @@ public:
 
     auto &def_type = **def_type_ptr;
     if (auto *ident = std::get_if<ast::Identifier>(&def_type.def)) {
-      std::cerr << "DEBUG: Resolving impl type: " << ident->name << std::endl;
       auto type_def = scopes.top().lookup_type(*ident);
       if (!type_def) {
         throw_semantic_error("Undefined type " + ident->name, ident->span);
@@ -274,9 +281,7 @@ public:
   impl.for_type = resolved_type_id;
 
     // register itself
-    std::cerr << "DEBUG: Adding impl to impl_table, items count: " << impl.items.size() << std::endl;
     impl_table.add_impl(resolved_type_id, impl);
-    std::cerr << "DEBUG: Impl added to table successfully" << std::endl;
 
     if (impl.trait) {
       auto &trait_variant = *impl.trait;
@@ -311,9 +316,9 @@ public:
         throw std::logic_error("Binding resolved outside of function or method "
                                "context is not supported yet");
       }
-      auto local = std::make_unique<hir::Local>(
-          hir::Local(unresolved->name, unresolved->is_mutable, std::nullopt, binding.ast_node));
-      local->span = binding.span.is_valid() ? binding.span : binding.ast_node ? binding.ast_node->span : span::Span::invalid();
+        auto local = std::make_unique<hir::Local>(
+          hir::Local(unresolved->name, unresolved->is_mutable, std::nullopt));
+        local->span = binding.span.is_valid() ? binding.span : span::Span::invalid();
       local_ptr = local.get();
       locals->push_back(std::move(local));
       binding.local = local_ptr;
@@ -383,6 +388,7 @@ public:
     base().visit(ts);
   }
   void visit(hir::UnresolvedIdentifier &ident, hir::Expr &container) {
+    auto original_span = hir::helper::get_span(container);
     auto def = scopes.top().lookup_value(ident.name);
     if (!def) {
       throw_semantic_error("Undefined identifier " + ident.name.name,
@@ -393,13 +399,13 @@ public:
                      if (!local) {
                        throw std::logic_error("Resolved local pointer is null");
                      }
-                     return hir::ExprVariant{hir::Variable(local, ident.ast_node)};
+                     return hir::ExprVariant{hir::Variable(local)};
                    },
                    [&](hir::ConstDef *constant) -> hir::ExprVariant {
-                     return hir::ExprVariant{hir::ConstUse(constant, ident.ast_node)};
+                     return hir::ExprVariant{hir::ConstUse(constant)};
                    },
                    [&](hir::Function *function) -> hir::ExprVariant {
-                     return hir::ExprVariant{hir::FuncUse(function, ident.ast_node)};
+                     return hir::ExprVariant{hir::FuncUse(function)};
                    },
                    [&](hir::Method *method) -> hir::ExprVariant {
                      (void)method; // Suppress unused parameter warning
@@ -410,6 +416,7 @@ public:
                    }},
         *def);
     container.value = std::move(resolved);
+    hir::helper::set_span(container, original_span);
   }
   void visit(hir::StructLiteral &sl) {
     auto *name_ptr = std::get_if<ast::Identifier>(&sl.struct_path);

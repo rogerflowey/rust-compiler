@@ -44,6 +44,9 @@ inline bool is_inference_type(TypeId type) {
 }
 
 inline std::string describe_type(TypeId type) {
+    if (!type) {
+        return "<invalid type>";
+    }
     return std::visit(
         Overloaded{
             [](PrimitiveKind kind) -> std::string {

@@ -35,7 +35,7 @@ private:
 
     
 
-    friend struct detail::ItemConverter;
-    friend struct detail::StmtConverter;
-    friend struct detail::ExprConverter;
+    friend struct ::detail::ItemConverter;
+    friend struct ::detail::StmtConverter;
+    friend struct ::detail::ExprConverter;
 };

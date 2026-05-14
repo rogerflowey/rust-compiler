@@ -1110,6 +1110,7 @@ inline void HirItemVisitor::operator()(const Function& i) const {
     p.out_ << " {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
+        p.print_field("name", i.name.name);
         if (!i.params.empty()) {
             p.print_list_field("params", i.params);
             p.prefix();
@@ -1171,10 +1172,6 @@ inline void HirItemVisitor::operator()(const Function& i) const {
             p.prefix();
             p.out_ << "]\n";
         }
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(i.ast_node, "FunctionItem");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1187,6 +1184,7 @@ inline void HirItemVisitor::operator()(const Method& i) const {
     p.out_ << " {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
+        p.print_field("name", i.name.name);
         p.prefix();
         p.out_ << "self_param: SelfParam { is_reference: "
                << (i.self_param.is_reference ? "true" : "false")
@@ -1252,10 +1250,6 @@ inline void HirItemVisitor::operator()(const Method& i) const {
             p.prefix();
             p.out_ << "]\n";
         }
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(i.ast_node, "FunctionItem");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1268,6 +1262,7 @@ inline void HirItemVisitor::operator()(const StructDef& i) const {
     p.out_ << " {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
+        p.print_field("name", i.name.name);
         if (!i.fields.empty()) {
             p.prefix();
             p.out_ << "fields: [\n";
@@ -1299,10 +1294,6 @@ inline void HirItemVisitor::operator()(const StructDef& i) const {
             p.prefix();
             p.out_ << "]\n";
         }
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(i.ast_node, "StructItem");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1315,6 +1306,7 @@ inline void HirItemVisitor::operator()(const EnumDef& i) const {
     p.out_ << " {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
+        p.print_field("name", i.name.name);
         if (!i.variants.empty()) {
             p.prefix();
             p.out_ << "variants: [\n";
@@ -1328,10 +1320,6 @@ inline void HirItemVisitor::operator()(const EnumDef& i) const {
             p.prefix();
             p.out_ << "]\n";
         }
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(i.ast_node, "EnumItem");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1344,6 +1332,7 @@ inline void HirItemVisitor::operator()(const ConstDef& i) const {
     p.out_ << " {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
+        p.print_field("name", i.name.name);
         p.print_ptr_field("expr", i.expr);
         p.prefix();
         p.out_ << "const_value: " << (i.const_value ? "some_const_value" : "nullopt") << "\n";
@@ -1358,10 +1347,6 @@ inline void HirItemVisitor::operator()(const ConstDef& i) const {
         } else {
             p.out_ << "nullopt\n";
         }
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(i.ast_node, "ConstItem");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1374,11 +1359,8 @@ inline void HirItemVisitor::operator()(const Trait& i) const {
     p.out_ << " {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
+        p.print_field("name", i.name.name);
         p.print_list_field("items", i.items);
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(i.ast_node, "TraitItem");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1409,12 +1391,6 @@ inline void HirItemVisitor::operator()(const Impl& i) const {
         p.out_ << "\n";
         p.print_type_annotation(i.for_type);
         p.print_list_field("items", i.items);
-        p.prefix();
-        p.out_ << "ast_node: ";
-        std::visit([&](const auto* node) {
-            p.print_pointer(node, typeid(*node).name());
-        }, i.ast_node);
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1438,10 +1414,6 @@ inline void HirTypeVisitor::operator()(const DefType& t) const {
             }
         }, t.def);
         p.out_ << "\n";
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(t.ast_node, "PathType");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1453,10 +1425,6 @@ inline void HirTypeVisitor::operator()(const PrimitiveType& t) const {
     {
         HirPrettyPrinter::IndentGuard guard(p);
         p.print_field("kind", std::string_view(to_string(t.kind)));
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(t.ast_node, "PrimitiveType");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1469,10 +1437,6 @@ inline void HirTypeVisitor::operator()(const ArrayType& t) const {
         HirPrettyPrinter::IndentGuard guard(p);
         p.print_type_annotation(t.element_type);
         p.print_ptr_field("size", t.size);
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(t.ast_node, "ArrayType");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1485,24 +1449,16 @@ inline void HirTypeVisitor::operator()(const ReferenceType& t) const {
         HirPrettyPrinter::IndentGuard guard(p);
         p.print_field("is_mutable", t.is_mutable);
         p.print_type_annotation(t.referenced_type);
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(t.ast_node, "ReferenceType");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
 }
 
-inline void HirTypeVisitor::operator()(const UnitType& t) const {
+inline void HirTypeVisitor::operator()(const UnitType&) const {
     p.prefix();
     p.out_ << "UnitType {\n";
     {
         HirPrettyPrinter::IndentGuard guard(p);
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(t.ast_node, "UnitType");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";
@@ -1541,10 +1497,6 @@ inline void HirPatternVisitor::operator()(const ReferencePattern& pat) const {
         HirPrettyPrinter::IndentGuard guard(p);
         p.print_field("is_mutable", pat.is_mutable);
         p.print_ptr_field("subpattern", pat.subpattern);
-        p.prefix();
-        p.out_ << "ast_node: ";
-        p.print_pointer(pat.ast_node, "ReferencePattern");
-        p.out_ << "\n";
     }
     p.prefix();
     p.out_ << "}\n";

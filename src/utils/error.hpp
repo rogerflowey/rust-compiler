@@ -1,27 +1,43 @@
 #pragma once
 
-#include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <sstream>
 #include <vector>
 
 #include "../span/span.hpp"
 
-class LexerError : public std::runtime_error {
+class CompilerError : public std::runtime_error {
 public:
-    explicit LexerError(const std::string& message) : std::runtime_error(message) {}
-};
-
-class SemanticError : public std::runtime_error {
-public:
-    explicit SemanticError(const std::string& message, span::Span span = span::Span::invalid())
+    explicit CompilerError(const std::string& message,
+                           span::Span span = span::Span::invalid())
         : std::runtime_error(message), span_(span) {}
 
     span::Span span() const { return span_; }
 
-private:
+protected:
     span::Span span_ = span::Span::invalid();
+};
+
+class LexerError : public CompilerError {
+public:
+    explicit LexerError(const std::string& message,
+                        span::Span span = span::Span::invalid())
+        : CompilerError(message, span) {}
+};
+
+class SemanticError : public CompilerError {
+public:
+    explicit SemanticError(const std::string& message,
+                           span::Span span = span::Span::invalid())
+        : CompilerError(message, span) {}
+};
+
+class ParserError : public CompilerError {
+public:
+    explicit ParserError(const std::string& message,
+                         span::Span span = span::Span::invalid())
+        : CompilerError(message, span) {}
 };
 
 struct Diagnostic {

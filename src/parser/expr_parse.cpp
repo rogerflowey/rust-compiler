@@ -272,37 +272,88 @@ ExprParser ExprParserBuilder::buildBlockParser(const StmtParser& stmtParser, con
 std::tuple<ExprParser, ExprParser, ExprParser> ExprParserBuilder::buildControlFlowParsers(const ExprParser& self, const ExprParser& blockParser) const {
     auto [p_if_lazy, set_if_lazy] = lazy<ExprPtr, Token>();
     auto p_else_branch = (equal({TOKEN_KEYWORD, "else"}) > (blockParser | p_if_lazy)).optional();
-    auto p_if_core = (equal({TOKEN_KEYWORD, "if"}) > equal({TOKEN_DELIMITER, "("}) > self < equal({TOKEN_DELIMITER, ")"}) ).andThen(blockParser).andThen(p_else_branch)
+    auto p_if_core = (equal({TOKEN_KEYWORD, "if"}) > equal({TOKEN_DELIMITER, "("}) > self < equal({TOKEN_DELIMITER, ")"})).andThen(blockParser).andThen(p_else_branch)
         .map([](auto&& t) -> ExprPtr {
-            auto& [cond, then_b, else_b] = t;
+            auto cond = std::move(std::get<0>(t));
+            auto then_b = std::move(std::get<1>(t));
+            auto else_b = std::move(std::get<2>(t));
+
+            span::Span cond_span = cond ? cond->span : span::Span::invalid();
+            span::Span then_span = then_b ? then_b->span : span::Span::invalid();
+            span::Span else_span = span::Span::invalid();
+            if (else_b && *else_b) {
+                else_span = (*else_b)->span;
+            }
+
             auto then_ptr = std::make_unique<BlockExpr>(std::get<BlockExpr>(std::move(then_b->value)));
-            return make_expr<IfExpr>(std::move(cond), std::move(then_ptr), std::move(else_b));
+            auto expr = make_expr<IfExpr>(std::move(cond), std::move(then_ptr), std::move(else_b));
+            std::vector<span::Span> spans{cond_span, then_span, else_span};
+            return annotate_expr<IfExpr>(std::move(expr), merge_span_list(spans));
         }).label("an if expression");
     set_if_lazy(p_if_core);
 
     auto whileExprParser = (equal({TOKEN_KEYWORD, "while"}) > self).andThen(blockParser)
         .map([](auto&& t) -> ExprPtr {
-            auto& [cond, body] = t;
+            auto cond = std::move(std::get<0>(t));
+            auto body = std::move(std::get<1>(t));
+            span::Span cond_span = cond ? cond->span : span::Span::invalid();
+            span::Span body_span = body ? body->span : span::Span::invalid();
             auto body_ptr = std::make_unique<BlockExpr>(std::get<BlockExpr>(std::move(body->value)));
-            return make_expr<WhileExpr>(std::move(cond), std::move(body_ptr));
+            auto expr = make_expr<WhileExpr>(std::move(cond), std::move(body_ptr));
+            return annotate_expr<WhileExpr>(std::move(expr), merge_span_pair(cond_span, body_span));
         }).label("a while expression");
 
     auto loopExprParser = (equal({TOKEN_KEYWORD, "loop"}) > blockParser)
         .map([](ExprPtr&& body) -> ExprPtr {
+            span::Span body_span = body ? body->span : span::Span::invalid();
             auto body_ptr = std::make_unique<BlockExpr>(std::get<BlockExpr>(std::move(body->value)));
-            return make_expr<LoopExpr>(std::move(body_ptr));
+            auto expr = make_expr<LoopExpr>(std::move(body_ptr));
+            return annotate_expr<LoopExpr>(std::move(expr), body_span);
         }).label("a loop expression");
     return { p_if_lazy, whileExprParser, loopExprParser };
 }
 
 std::tuple<ExprParser, ExprParser, ExprParser> ExprParserBuilder::buildFlowTerminators(const ExprParser& self) const {
     auto p_label = (equal({TOKEN_OPERATOR, "'"}) > p_identifier).label("a label");
-    auto returnExprParser = (equal({TOKEN_KEYWORD, "return"}) > self.optional())
-        .map([](auto&& v) -> ExprPtr { return make_expr<ReturnExpr>(std::move(v)); }).label("a return expression");
-    auto breakExprParser = (equal({TOKEN_KEYWORD, "break"}) > p_label.optional().andThen(self.optional()))
-        .map([](auto&& t) -> ExprPtr { return make_expr<BreakExpr>(std::move(std::get<0>(t)), std::move(std::get<1>(t))); }).label("a break expression");
-    auto continueExprParser = (equal({TOKEN_KEYWORD, "continue"}) > p_label.optional())
-        .map([](auto&& label) -> ExprPtr { return make_expr<ContinueExpr>(std::move(label)); }).label("a continue expression");
+    auto returnExprParser = equal({TOKEN_KEYWORD, "return"}).andThen(self.optional())
+        .map([](auto&& pair) -> ExprPtr {
+            auto keyword = std::get<0>(pair);
+            auto value = std::move(std::get<1>(pair));
+            span::Span value_span = span::Span::invalid();
+            if (value && *value) {
+                value_span = (*value)->span;
+            }
+            auto expr = make_expr<ReturnExpr>(std::move(value));
+            return annotate_expr<ReturnExpr>(std::move(expr), merge_span_pair(keyword.span, value_span));
+        }).label("a return expression");
+    auto breakExprParser = equal({TOKEN_KEYWORD, "break"}).andThen(p_label.optional().andThen(self.optional()))
+        .map([](auto&& t) -> ExprPtr {
+            auto keyword = std::get<0>(t);
+            auto label = std::move(std::get<1>(t));
+            auto value = std::move(std::get<2>(t));
+            span::Span label_span = span::Span::invalid();
+            if (label && *label) {
+                label_span = (*label)->span;
+            }
+            span::Span value_span = span::Span::invalid();
+            if (value && *value) {
+                value_span = (*value)->span;
+            }
+            auto expr = make_expr<BreakExpr>(std::move(label), std::move(value));
+            std::vector<span::Span> spans{keyword.span, label_span, value_span};
+            return annotate_expr<BreakExpr>(std::move(expr), merge_span_list(spans));
+        }).label("a break expression");
+    auto continueExprParser = equal({TOKEN_KEYWORD, "continue"}).andThen(p_label.optional())
+        .map([](auto&& pair) -> ExprPtr {
+            auto keyword = std::get<0>(pair);
+            auto label = std::move(std::get<1>(pair));
+            span::Span label_span = span::Span::invalid();
+            if (label && *label) {
+                label_span = (*label)->span;
+            }
+            auto expr = make_expr<ContinueExpr>(std::move(label));
+            return annotate_expr<ContinueExpr>(std::move(expr), merge_span_pair(keyword.span, label_span));
+        }).label("a continue expression");
     return { returnExprParser, breakExprParser, continueExprParser };
 }
 
@@ -324,13 +375,40 @@ ExprParser ExprParserBuilder::buildPostfixChainParser(const ExprParser& base, co
             for (size_t i = 0; i < ops.size(); ++i) {
                 auto& op = ops[i];
                 if (op.kind == PostfixOp::Field && i + 1 < ops.size() && ops[i + 1].kind == PostfixOp::Call) {
-                    expr = make_expr<MethodCallExpr>(std::move(expr), std::move(op.ident), std::move(ops[++i].args));
+                    auto receiver = std::move(expr);
+                    span::Span receiver_span = receiver ? receiver->span : span::Span::invalid();
+                    span::Span ident_span = op.ident ? op.ident->span : span::Span::invalid();
+                    std::vector<span::Span> spans{receiver_span, ident_span};
+                    for (const auto& arg : ops[i + 1].args) {
+                        if (arg) {
+                            spans.push_back(arg->span);
+                        }
+                    }
+                    auto new_expr = make_expr<MethodCallExpr>(std::move(receiver), std::move(op.ident), std::move(ops[++i].args));
+                    expr = annotate_expr<MethodCallExpr>(std::move(new_expr), merge_span_list(spans));
                 } else if (op.kind == PostfixOp::Call) {
-                    expr = make_expr<CallExpr>(std::move(expr), std::move(op.args));
+                    auto callee = std::move(expr);
+                    span::Span callee_span = callee ? callee->span : span::Span::invalid();
+                    std::vector<span::Span> spans{callee_span};
+                    for (const auto& arg : op.args) {
+                        if (arg) {
+                            spans.push_back(arg->span);
+                        }
+                    }
+                    auto new_expr = make_expr<CallExpr>(std::move(callee), std::move(op.args));
+                    expr = annotate_expr<CallExpr>(std::move(new_expr), merge_span_list(spans));
                 } else if (op.kind == PostfixOp::Index) {
-                    expr = make_expr<IndexExpr>(std::move(expr), std::move(op.index));
+                    auto base_expr = std::move(expr);
+                    span::Span base_span = base_expr ? base_expr->span : span::Span::invalid();
+                    span::Span index_span = op.index ? op.index->span : span::Span::invalid();
+                    auto new_expr = make_expr<IndexExpr>(std::move(base_expr), std::move(op.index));
+                    expr = annotate_expr<IndexExpr>(std::move(new_expr), merge_span_pair(base_span, index_span));
                 } else if (op.kind == PostfixOp::Field) {
-                    expr = make_expr<FieldAccessExpr>(std::move(expr), std::move(op.ident));
+                    auto base_expr = std::move(expr);
+                    span::Span base_span = base_expr ? base_expr->span : span::Span::invalid();
+                    span::Span ident_span = op.ident ? op.ident->span : span::Span::invalid();
+                    auto new_expr = make_expr<FieldAccessExpr>(std::move(base_expr), std::move(op.ident));
+                    expr = annotate_expr<FieldAccessExpr>(std::move(new_expr), merge_span_pair(base_span, ident_span));
                 }
             }
             return expr;
@@ -345,13 +423,44 @@ ExprParser ExprParserBuilder::buildPrefixAndCastChain(
     auto p_base_atoms = (literal | grouped | array | structExpr | path | withBlock | ret | brk | cont).label("an atomic expression");
     auto p_postfix = buildPostfixChainParser(p_base_atoms, self);
     using Wrap = std::function<ExprPtr(ExprPtr)>;
-    auto p_not = equal({TOKEN_OPERATOR, "!"}).map([](Token) -> Wrap { return [](ExprPtr e) { return make_expr<UnaryExpr>(UnaryExpr::NOT, std::move(e)); }; });
-    auto p_neg = equal({TOKEN_OPERATOR, "-"}).map([](Token) -> Wrap { return [](ExprPtr e) { return make_expr<UnaryExpr>(UnaryExpr::NEGATE, std::move(e)); }; });
-    auto p_deref = equal({TOKEN_OPERATOR, "*"}).map([](Token) -> Wrap { return [](ExprPtr e) { return make_expr<UnaryExpr>(UnaryExpr::DEREFERENCE, std::move(e)); }; });
-    auto p_ref = (equal({TOKEN_OPERATOR, "&"}) >> equal({TOKEN_KEYWORD, "mut"}).optional())
+    auto p_not = equal({TOKEN_OPERATOR, "!"}).map([](Token tok) -> Wrap {
+        span::Span op_span = tok.span;
+        return [op_span](ExprPtr e) {
+            span::Span operand_span = e ? e->span : span::Span::invalid();
+            auto expr = make_expr<UnaryExpr>(UnaryExpr::NOT, std::move(e));
+            return annotate_expr<UnaryExpr>(std::move(expr), merge_span_pair(op_span, operand_span));
+        };
+    });
+    auto p_neg = equal({TOKEN_OPERATOR, "-"}).map([](Token tok) -> Wrap {
+        span::Span op_span = tok.span;
+        return [op_span](ExprPtr e) {
+            span::Span operand_span = e ? e->span : span::Span::invalid();
+            auto expr = make_expr<UnaryExpr>(UnaryExpr::NEGATE, std::move(e));
+            return annotate_expr<UnaryExpr>(std::move(expr), merge_span_pair(op_span, operand_span));
+        };
+    });
+    auto p_deref = equal({TOKEN_OPERATOR, "*"}).map([](Token tok) -> Wrap {
+        span::Span op_span = tok.span;
+        return [op_span](ExprPtr e) {
+            span::Span operand_span = e ? e->span : span::Span::invalid();
+            auto expr = make_expr<UnaryExpr>(UnaryExpr::DEREFERENCE, std::move(e));
+            return annotate_expr<UnaryExpr>(std::move(expr), merge_span_pair(op_span, operand_span));
+        };
+    });
+    auto p_ref = (equal({TOKEN_OPERATOR, "&"}).andThen(equal({TOKEN_KEYWORD, "mut"}).optional()))
         .map([](auto&& t) -> Wrap {
-            bool is_mut = std::get<1>(t).has_value();
-            return [is_mut](ExprPtr e) { return make_expr<UnaryExpr>(is_mut ? UnaryExpr::MUTABLE_REFERENCE : UnaryExpr::REFERENCE, std::move(e)); };
+            auto amp = std::get<0>(t);
+            auto mut = std::move(std::get<1>(t));
+            bool is_mut = mut.has_value();
+            span::Span op_span = amp.span;
+            if (mut) {
+                op_span = merge_span_pair(op_span, mut->span);
+            }
+            return [is_mut, op_span](ExprPtr e) {
+                span::Span operand_span = e ? e->span : span::Span::invalid();
+                auto expr = make_expr<UnaryExpr>(is_mut ? UnaryExpr::MUTABLE_REFERENCE : UnaryExpr::REFERENCE, std::move(e));
+                return annotate_expr<UnaryExpr>(std::move(expr), merge_span_pair(op_span, operand_span));
+            };
         });
     auto p_unary_op = (p_not | p_neg | p_deref | p_ref).label("a unary operator");
     auto p_unary = p_unary_op.many().andThen(p_postfix)
@@ -364,7 +473,13 @@ ExprParser ExprParserBuilder::buildPrefixAndCastChain(
     return p_unary.andThen((equal({TOKEN_KEYWORD, "as"}) > typeParser).many())
         .map([](auto&& t) -> ExprPtr {
             auto expr = std::move(std::get<0>(t));
-            for (auto& ty : std::get<1>(t)) { expr = make_expr<CastExpr>(std::move(expr), std::move(ty)); }
+            auto& casts = std::get<1>(t);
+            for (auto& ty : casts) {
+                span::Span expr_span = expr ? expr->span : span::Span::invalid();
+                span::Span type_span = ty ? ty->span : span::Span::invalid();
+                auto new_expr = make_expr<CastExpr>(std::move(expr), std::move(ty));
+                expr = annotate_expr<CastExpr>(std::move(new_expr), merge_span_pair(expr_span, type_span));
+            }
             return expr;
         }).label("a cast expression");
 }
@@ -372,12 +487,18 @@ ExprParser ExprParserBuilder::buildPrefixAndCastChain(
 void ExprParserBuilder::addInfixOperators(parsec::PrattParserBuilder<ExprPtr, Token>& builder) const {
     auto bin = [](BinaryExpr::Op op) {
         return [op](ExprPtr lhs, ExprPtr rhs) -> ExprPtr {
-            return make_expr<BinaryExpr>(op, std::move(lhs), std::move(rhs));
+            span::Span lhs_span = lhs ? lhs->span : span::Span::invalid();
+            span::Span rhs_span = rhs ? rhs->span : span::Span::invalid();
+            auto expr = make_expr<BinaryExpr>(op, std::move(lhs), std::move(rhs));
+            return annotate_expr<BinaryExpr>(std::move(expr), merge_span_pair(lhs_span, rhs_span));
         };
     };
     auto assign = [](AssignExpr::Op op) {
         return [op](ExprPtr lhs, ExprPtr rhs) -> ExprPtr {
-            return make_expr<AssignExpr>(op, std::move(lhs), std::move(rhs));
+            span::Span lhs_span = lhs ? lhs->span : span::Span::invalid();
+            span::Span rhs_span = rhs ? rhs->span : span::Span::invalid();
+            auto expr = make_expr<AssignExpr>(op, std::move(lhs), std::move(rhs));
+            return annotate_expr<AssignExpr>(std::move(expr), merge_span_pair(lhs_span, rhs_span));
         };
     };
 

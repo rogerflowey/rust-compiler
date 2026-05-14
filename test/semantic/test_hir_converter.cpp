@@ -246,7 +246,7 @@ TEST_F(HirConverterTest, ConvertsIntegerLiterals) {
     
     auto* literal = std::get_if<hir::Literal>(&hir_expr->value);
     ASSERT_NE(literal, nullptr);
-    EXPECT_EQ(std::get<const ast::IntegerLiteralExpr*>(literal->ast_node), original_ast_node);
+    EXPECT_EQ(literal->span, original_ast_node->span);
     
     auto* integer = std::get_if<hir::Literal::Integer>(&literal->value);
     ASSERT_NE(integer, nullptr);
@@ -263,7 +263,7 @@ TEST_F(HirConverterTest, ConvertsBoolLiterals) {
     
     auto* literal = std::get_if<hir::Literal>(&hir_expr->value);
     ASSERT_NE(literal, nullptr);
-    EXPECT_EQ(std::get<const ast::BoolLiteralExpr*>(literal->ast_node), original_ast_node);
+    EXPECT_EQ(literal->span, original_ast_node->span);
     
     auto* bool_val = std::get_if<bool>(&literal->value);
     ASSERT_NE(bool_val, nullptr);
@@ -279,7 +279,7 @@ TEST_F(HirConverterTest, ConvertsCharLiterals) {
     
     auto* literal = std::get_if<hir::Literal>(&hir_expr->value);
     ASSERT_NE(literal, nullptr);
-    EXPECT_EQ(std::get<const ast::CharLiteralExpr*>(literal->ast_node), original_ast_node);
+    EXPECT_EQ(literal->span, original_ast_node->span);
     
     auto* char_val = std::get_if<char>(&literal->value);
     ASSERT_NE(char_val, nullptr);
@@ -295,7 +295,7 @@ TEST_F(HirConverterTest, ConvertsStringLiterals) {
     
     auto* literal = std::get_if<hir::Literal>(&hir_expr->value);
     ASSERT_NE(literal, nullptr);
-    EXPECT_EQ(std::get<const ast::StringLiteralExpr*>(literal->ast_node), original_ast_node);
+    EXPECT_EQ(literal->span, original_ast_node->span);
     
     auto* string_val = std::get_if<hir::Literal::String>(&literal->value);
     ASSERT_NE(string_val, nullptr);
@@ -315,7 +315,7 @@ TEST_F(HirConverterTest, ConvertsPathExpressions) {
     ASSERT_NE(unresolved, nullptr);
     
     EXPECT_EQ(unresolved->name.name, "x");
-    EXPECT_EQ(unresolved->ast_node, original_ast_node);
+    EXPECT_EQ(unresolved->span, original_ast_node->span);
 }
 
 TEST_F(HirConverterTest, ConvertsStaticPathExpressions) {
@@ -329,7 +329,7 @@ TEST_F(HirConverterTest, ConvertsStaticPathExpressions) {
     ASSERT_NE(type_static, nullptr);
     EXPECT_TRUE(std::holds_alternative<ast::Identifier>(type_static->type));
     EXPECT_EQ(type_static->name.name, "my_static");
-    EXPECT_EQ(type_static->ast_node, original_ast_node);
+    EXPECT_EQ(type_static->span, original_ast_node->span);
 }
 
 TEST_F(HirConverterTest, ThrowsOnLongPathExpressions) {
@@ -346,19 +346,18 @@ TEST_F(HirConverterTest, ConvertsUnaryExpressions) {
     auto ast_expr = test_helpers::make_unary_expr(ast::UnaryExpr::NEGATE, std::move(operand));
     const auto* ast_unary_op = get_node<ast::UnaryExpr>(ast_expr);
     ASSERT_NE(ast_unary_op, nullptr);
+    const auto* ast_integer = get_node<ast::IntegerLiteralExpr>(ast_unary_op->operand);
+    ASSERT_NE(ast_integer, nullptr);
 
     auto hir_expr = converter.convert_expr(*ast_expr);
     
-    auto* unary_op = std::get_if<hir::UnaryOp>(&hir_expr->value);
-    ASSERT_NE(unary_op, nullptr);
-    EXPECT_EQ(unary_op->op, hir::UnaryOp::NEGATE);
-    EXPECT_EQ(unary_op->ast_node, ast_unary_op);
-    
-    auto* rhs_literal = std::get_if<hir::Literal>(&unary_op->rhs->value);
-    ASSERT_NE(rhs_literal, nullptr);
-    auto* integer = std::get_if<hir::Literal::Integer>(&rhs_literal->value);
+    auto* literal = std::get_if<hir::Literal>(&hir_expr->value);
+    ASSERT_NE(literal, nullptr);
+    auto* integer = std::get_if<hir::Literal::Integer>(&literal->value);
     ASSERT_NE(integer, nullptr);
     EXPECT_EQ(integer->value, 5u);
+    EXPECT_TRUE(integer->is_negative);
+    EXPECT_EQ(literal->span, ast_integer->span);
 }
 
 TEST_F(HirConverterTest, ConvertsBinaryExpressions) {
@@ -375,7 +374,7 @@ TEST_F(HirConverterTest, ConvertsBinaryExpressions) {
     auto* binary_op = std::get_if<hir::BinaryOp>(&hir_expr->value);
     ASSERT_NE(binary_op, nullptr);
     EXPECT_EQ(binary_op->op, hir::BinaryOp::ADD);
-    EXPECT_EQ(std::get<const ast::BinaryExpr*>(binary_op->ast_node), ast_binary_op);
+    EXPECT_EQ(binary_op->span, ast_binary_op->span);
     
     auto* lhs_literal = std::get_if<hir::Literal>(&binary_op->lhs->value);
     ASSERT_NE(lhs_literal, nullptr);
@@ -403,7 +402,7 @@ TEST_F(HirConverterTest, ConvertsSimpleAssignment) {
     
     auto* assignment = std::get_if<hir::Assignment>(&hir_expr->value);
     ASSERT_NE(assignment, nullptr);
-    EXPECT_EQ(assignment->ast_node, ast_assign_expr);
+    EXPECT_EQ(assignment->span, ast_assign_expr->span);
     
     auto* lhs_var = std::get_if<hir::UnresolvedIdentifier>(&assignment->lhs->value);
     ASSERT_NE(lhs_var, nullptr);
@@ -425,7 +424,7 @@ TEST_F(HirConverterTest, ConvertsCompoundAssignment) {
     
     auto* assignment = std::get_if<hir::Assignment>(&hir_expr->value);
     ASSERT_NE(assignment, nullptr);
-    EXPECT_EQ(assignment->ast_node, ast_assign_expr);
+    EXPECT_EQ(assignment->span, ast_assign_expr->span);
     
     auto* lhs_var = std::get_if<hir::UnresolvedIdentifier>(&assignment->lhs->value);
     ASSERT_NE(lhs_var, nullptr);
@@ -434,7 +433,7 @@ TEST_F(HirConverterTest, ConvertsCompoundAssignment) {
     ASSERT_NE(rhs_binary, nullptr);
     EXPECT_EQ(rhs_binary->op, hir::BinaryOp::ADD);
     
-    EXPECT_EQ(std::get<const ast::AssignExpr*>(rhs_binary->ast_node), ast_assign_expr);
+    EXPECT_EQ(rhs_binary->span, ast_assign_expr->span);
 }
 
 
@@ -452,7 +451,7 @@ TEST_F(HirConverterTest, ConvertsCallExpressions) {
     auto hir_expr = converter.convert_expr(*ast_expr);
     auto* call = std::get_if<hir::Call>(&hir_expr->value);
     ASSERT_NE(call, nullptr);
-    EXPECT_EQ(call->ast_node, ast_call_expr);
+    EXPECT_EQ(call->span, ast_call_expr->span);
 
     auto* hir_callee = std::get_if<hir::UnresolvedIdentifier>(&call->callee->value);
     ASSERT_NE(hir_callee, nullptr);
@@ -476,7 +475,7 @@ TEST_F(HirConverterTest, ConvertsMethodCallExpressions) {
     auto hir_expr = converter.convert_expr(*ast_expr);
     auto* method_call = std::get_if<hir::MethodCall>(&hir_expr->value);
     ASSERT_NE(method_call, nullptr);
-    EXPECT_EQ(method_call->ast_node, ast_method_call_expr);
+    EXPECT_EQ(method_call->span, ast_method_call_expr->span);
     
     auto* method_ident = std::get_if<ast::Identifier>(&method_call->method);
     ASSERT_NE(method_ident, nullptr);
@@ -520,7 +519,7 @@ TEST_F(HirConverterTest, ConvertsEmptyBlocks) {
     
     auto* block = std::get_if<hir::Block>(&hir_expr->value);
     ASSERT_NE(block, nullptr);
-    EXPECT_EQ(block->ast_node, ast_block_raw_ptr);
+        EXPECT_EQ(block->span, ast_block_raw_ptr->span);
     EXPECT_TRUE(block->stmts.empty());
     EXPECT_FALSE(block->final_expr.has_value());
 }
@@ -541,7 +540,7 @@ TEST_F(HirConverterTest, ConvertsBlocksWithStatements) {
     
     auto* block = std::get_if<hir::Block>(&hir_expr->value);
     ASSERT_NE(block, nullptr);
-    EXPECT_EQ(block->ast_node, ast_block_raw_ptr);
+        EXPECT_EQ(block->span, ast_block_raw_ptr->span);
     EXPECT_EQ(block->stmts.size(), 1u);
     EXPECT_TRUE(block->final_expr.has_value());
     
@@ -565,9 +564,7 @@ TEST_F(HirConverterTest, ConvertsBlocksWithItemStatements) {
     ASSERT_EQ(hir_block.items.size(), 1u);
     auto* hir_function = std::get_if<hir::Function>(&hir_block.items.front()->value);
     ASSERT_NE(hir_function, nullptr);
-    ASSERT_NE(hir_function->ast_node, nullptr);
-    ASSERT_NE(hir_function->ast_node->name, nullptr);
-    EXPECT_EQ(hir_function->ast_node->name->name, "nested");
+    EXPECT_EQ(hir_function->name.name, "nested");
 
     ASSERT_EQ(hir_block.stmts.size(), 1u);
     auto* expr_stmt = std::get_if<hir::ExprStmt>(&hir_block.stmts.front()->value);
@@ -590,7 +587,7 @@ TEST_F(HirConverterTest, ConvertsLetStatements) {
     
     auto* let_stmt = std::get_if<hir::LetStmt>(&hir_stmt->value);
     ASSERT_NE(let_stmt, nullptr);
-    EXPECT_EQ(let_stmt->ast_node, ast_let_stmt);
+    EXPECT_EQ(let_stmt->span, ast_let_stmt->span);
     
     ASSERT_NE(let_stmt->pattern, nullptr);
     auto* binding = std::get_if<hir::BindingDef>(&let_stmt->pattern->value);
@@ -601,10 +598,6 @@ TEST_F(HirConverterTest, ConvertsLetStatements) {
     EXPECT_EQ(unresolved->name.name, "x");
     EXPECT_FALSE(unresolved->is_mutable);
     EXPECT_FALSE(unresolved->is_ref);
-
-    ASSERT_NE(binding->ast_node, nullptr);
-    ASSERT_NE(binding->ast_node->name, nullptr);
-    EXPECT_EQ(binding->ast_node->name->name, "x");
 
     ASSERT_NE(let_stmt->initializer, nullptr);
     auto* literal = std::get_if<hir::Literal>(&let_stmt->initializer->value);
@@ -650,7 +643,7 @@ TEST_F(HirConverterTest, ConvertsExpressionStatements) {
     
     auto* expr_stmt = std::get_if<hir::ExprStmt>(&hir_stmt->value);
     ASSERT_NE(expr_stmt, nullptr);
-    EXPECT_EQ(expr_stmt->ast_node, ast_expr_stmt);
+    EXPECT_EQ(expr_stmt->span, ast_expr_stmt->span);
     ASSERT_NE(expr_stmt->expr, nullptr);
     
     auto* literal = std::get_if<hir::Literal>(&expr_stmt->expr->value);
@@ -675,10 +668,7 @@ TEST_F(HirConverterTest, ConvertsFunctionItems) {
     
     auto* function = std::get_if<hir::Function>(&hir_item->value);
     ASSERT_NE(function, nullptr);
-    EXPECT_EQ(function->ast_node, ast_fn_item);
-    ASSERT_NE(function->ast_node, nullptr);
-    ASSERT_NE(function->ast_node->name, nullptr);
-    EXPECT_EQ(function->ast_node->name->name, "test_fn");
+    EXPECT_EQ(function->name.name, ast_fn_item->name->name);
     ASSERT_NE(function->body, nullptr);
 }
 
@@ -694,10 +684,7 @@ TEST_F(HirConverterTest, ConvertsStructItems) {
 
     auto* struct_def = std::get_if<hir::StructDef>(&hir_item->value);
     ASSERT_NE(struct_def, nullptr);
-    ASSERT_NE(struct_def->ast_node, nullptr);
-    ASSERT_NE(struct_def->ast_node->name, nullptr);
-    EXPECT_EQ(struct_def->ast_node->name->name, "MyStruct");
-    EXPECT_EQ(struct_def->ast_node, ast_struct_item);
+    EXPECT_EQ(struct_def->name.name, ast_struct_item->name->name);
 }
 
 TEST_F(HirConverterTest, ConvertsStructLiteralExpressions) {
@@ -720,7 +707,7 @@ TEST_F(HirConverterTest, ConvertsStructLiteralExpressions) {
     auto hir_expr = converter.convert_expr(*ast_expr);
     auto* struct_literal = std::get_if<hir::StructLiteral>(&hir_expr->value);
     ASSERT_NE(struct_literal, nullptr);
-    EXPECT_EQ(struct_literal->ast_node, ast_struct_expr);
+    EXPECT_EQ(struct_literal->span, ast_struct_expr->span);
     auto* ident = std::get_if<ast::Identifier>(&struct_literal->struct_path);
     ASSERT_NE(ident, nullptr);
     EXPECT_EQ(ident->name, "MyStruct");
@@ -762,17 +749,12 @@ TEST_F(HirConverterTest, ConvertsTraitItems) {
 
     auto* trait_def = std::get_if<hir::Trait>(&hir_item->value);
     ASSERT_NE(trait_def, nullptr);
-    ASSERT_NE(trait_def->ast_node, nullptr);
-    ASSERT_NE(trait_def->ast_node->name, nullptr);
-    EXPECT_EQ(trait_def->ast_node->name->name, "MyTrait");
-    EXPECT_EQ(trait_def->ast_node, ast_trait_node);
+    EXPECT_EQ(trait_def->name.name, ast_trait_node->name->name);
     ASSERT_EQ(trait_def->items.size(), 1);
 
     auto* func = std::get_if<hir::Function>(&trait_def->items[0]->value);
     ASSERT_NE(func, nullptr);
-    ASSERT_NE(func->ast_node, nullptr);
-    ASSERT_NE(func->ast_node->name, nullptr);
-    EXPECT_EQ(func->ast_node->name->name, "my_fn");
+    EXPECT_EQ(func->name.name, "my_fn");
 }
 
 TEST_F(HirConverterTest, ConvertsTraitImplItems) {
@@ -810,9 +792,7 @@ TEST_F(HirConverterTest, ConvertsTraitImplItems) {
     ASSERT_EQ(impl->items.size(), 1);
     auto* func = std::get_if<hir::Function>(&impl->items[0]->value);
     ASSERT_NE(func, nullptr);
-    ASSERT_NE(func->ast_node, nullptr);
-    ASSERT_NE(func->ast_node->name, nullptr);
-    EXPECT_EQ(func->ast_node->name->name, "my_fn");
+    EXPECT_EQ(func->name.name, "my_fn");
 }
 
 TEST_F(HirConverterTest, ConvertsInherentImplItems) {
@@ -844,14 +824,12 @@ TEST_F(HirConverterTest, ConvertsInherentImplItems) {
     ASSERT_NE(ident, nullptr);
     EXPECT_EQ(ident->name, "MyType");
 
-    EXPECT_EQ(std::get<const ast::InherentImplItem*>(impl->ast_node), ast_inherent_impl_node);
+    EXPECT_EQ(impl->span, ast_inherent_impl_node->span);
     ASSERT_EQ(impl->items.size(), 1);
 
     auto* func = std::get_if<hir::Function>(&impl->items[0]->value);
     ASSERT_NE(func, nullptr);
-    ASSERT_NE(func->ast_node, nullptr);
-    ASSERT_NE(func->ast_node->name, nullptr);
-    EXPECT_EQ(func->ast_node->name->name, "my_fn");
+    EXPECT_EQ(func->name.name, "my_fn");
 }
 
 TEST_F(HirConverterTest, ConvertsInherentImplWithConstItem) {
@@ -875,9 +853,7 @@ TEST_F(HirConverterTest, ConvertsInherentImplWithConstItem) {
 
     auto* assoc_const = std::get_if<hir::ConstDef>(&impl->items[0]->value);
     ASSERT_NE(assoc_const, nullptr);
-    ASSERT_NE(assoc_const->ast_node, nullptr);
-    ASSERT_NE(assoc_const->ast_node->name, nullptr);
-    EXPECT_EQ(assoc_const->ast_node->name->name, "MY_CONST");
+    EXPECT_EQ(assoc_const->name.name, "MY_CONST");
 }
 
 TEST_F(HirConverterTest, ConvertsInherentImplWithMethod) {
@@ -899,9 +875,7 @@ TEST_F(HirConverterTest, ConvertsInherentImplWithMethod) {
 
     auto* assoc_method = std::get_if<hir::Method>(&impl->items[0]->value);
     ASSERT_NE(assoc_method, nullptr);
-    ASSERT_NE(assoc_method->ast_node, nullptr);
-    ASSERT_NE(assoc_method->ast_node->name, nullptr);
-    EXPECT_EQ(assoc_method->ast_node->name->name, "my_method");
+    EXPECT_EQ(assoc_method->name.name, "my_method");
     
     EXPECT_TRUE(assoc_method->self_param.is_reference);
     EXPECT_FALSE(assoc_method->self_param.is_mutable);
@@ -939,15 +913,11 @@ TEST_F(HirConverterTest, ConvertsPrograms) {
     
     auto* function = std::get_if<hir::Function>(&hir_program->items[0]->value);
     ASSERT_NE(function, nullptr);
-    ASSERT_NE(function->ast_node, nullptr);
-    ASSERT_NE(function->ast_node->name, nullptr);
-    EXPECT_EQ(function->ast_node->name->name, "my_func");
+    EXPECT_EQ(function->name.name, "my_func");
     
     auto* struct_def = std::get_if<hir::StructDef>(&hir_program->items[1]->value);
     ASSERT_NE(struct_def, nullptr);
-    ASSERT_NE(struct_def->ast_node, nullptr);
-    ASSERT_NE(struct_def->ast_node->name, nullptr);
-    EXPECT_EQ(struct_def->ast_node->name->name, "MyStruct");
+    EXPECT_EQ(struct_def->name.name, "MyStruct");
 }
 
 // ============================================================================
@@ -974,7 +944,7 @@ TEST_F(HirConverterTest, PreservesBackPointers) {
     
     auto* literal = std::get_if<hir::Literal>(&hir_expr->value);
     ASSERT_NE(literal, nullptr);
-    EXPECT_EQ(std::get<const ast::IntegerLiteralExpr*>(literal->ast_node), original_ast_ptr);
+    EXPECT_EQ(literal->span, original_ast_ptr->span);
 }
 
 // ============================================================================

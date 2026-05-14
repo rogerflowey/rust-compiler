@@ -16,27 +16,27 @@ protected:
 TEST_F(ControlFlowLinkingTest, BasicFunctionWithReturn) {
     // Create a simple HIR function with a return statement directly
     hir::Function hir_func;
-    hir_func.ast_node = nullptr;
+    hir_func.name = ast::Identifier{"test_fn"};
     
     // Create a return expression
     auto return_expr_inner = hir::Return();
     return_expr_inner.value = std::make_unique<hir::Expr>(hir::Literal{
         .value = true,
-        .ast_node = static_cast<const ast::BoolLiteralExpr*>(nullptr)
+        
     });
     return_expr_inner.target = std::nullopt; // Initially not linked
-    return_expr_inner.ast_node = nullptr;
+    
     auto return_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(return_expr_inner)});
     
     // Create an expression statement
     auto expr_stmt = std::make_unique<hir::Stmt>(hir::ExprStmt{
         .expr = std::move(return_expr),
-        .ast_node = nullptr
+        
     });
     
     // Create function body
     auto block = std::make_unique<hir::Block>();
-    block->ast_node = nullptr;
+    
     block->stmts.push_back(std::move(expr_stmt));
     hir_func.body = std::move(block);
     
@@ -69,52 +69,52 @@ TEST_F(ControlFlowLinkingTest, BasicFunctionWithReturn) {
 TEST_F(ControlFlowLinkingTest, BasicLoopWithBreakAndContinue) {
     // Create a simple HIR function with a loop containing break and continue
     hir::Function hir_func;
-    hir_func.ast_node = nullptr;
+    hir_func.name = ast::Identifier{"test_fn"};
     
     // Create break expression
     auto break_expr_inner = hir::Break();
     break_expr_inner.value = std::nullopt;
     break_expr_inner.target = std::nullopt; // Initially not linked
-    break_expr_inner.ast_node = nullptr;
+    
     auto break_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(break_expr_inner)});
     
     // Create continue expression
     auto continue_expr_inner = hir::Continue();
     continue_expr_inner.target = std::nullopt; // Initially not linked
-    continue_expr_inner.ast_node = nullptr;
+    
     auto continue_expr = std::make_unique<hir::Expr>(hir::ExprVariant{std::move(continue_expr_inner)});
     
     // Create expression statements
     auto break_stmt = std::make_unique<hir::Stmt>(hir::ExprStmt{
         .expr = std::move(break_expr),
-        .ast_node = nullptr
+        
     });
     
     auto continue_stmt = std::make_unique<hir::Stmt>(hir::ExprStmt{
         .expr = std::move(continue_expr),
-        .ast_node = nullptr
+        
     });
     
     // Create loop body
     auto loop_body = std::make_unique<hir::Block>();
-    loop_body->ast_node = nullptr;
+    
     loop_body->stmts.push_back(std::move(break_stmt));
     loop_body->stmts.push_back(std::move(continue_stmt));
     
     // Create loop expression
     auto loop_expr = std::make_unique<hir::Expr>(hir::Loop{
         .body = std::move(loop_body),
-        .ast_node = nullptr
+        
     });
     
     auto loop_stmt = std::make_unique<hir::Stmt>(hir::ExprStmt{
         .expr = std::move(loop_expr),
-        .ast_node = nullptr
+        
     });
     
     // Create function body
     auto block = std::make_unique<hir::Block>();
-    block->ast_node = nullptr;
+    
     block->stmts.push_back(std::move(loop_stmt));
     hir_func.body = std::move(block);
     
