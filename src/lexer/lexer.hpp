@@ -8,6 +8,7 @@
 #include <tuple> // For Token::operator<
 
 #include "../utils/error.hpp"
+#include "../span/span.hpp"
 #include "stream.hpp"
 
 enum TokenType {
@@ -27,6 +28,7 @@ enum TokenType {
 struct Token {
   TokenType type;
   std::string value;
+  span::Span span{};
 
   bool operator==(const Token &other) const {
     return type == other.type && value == other.value;
@@ -36,13 +38,14 @@ struct Token {
   }
 };
 
-const Token T_EOF = {TOKEN_EOF, "EOF"};
+const Token T_EOF = {TOKEN_EOF, "EOF", span::Span::invalid()};
 
 
 class Lexer {
   std::vector<Token> tokens;
-  std::vector<Position> token_positions; // MODIFIED: Added parallel vector for positions
+  std::vector<span::Span> token_spans;
   PositionedStream input;
+  span::FileId file_id = span::kInvalidFileId;
 
   static const std::unordered_set<std::string> keywords;
   static const std::unordered_set<char> delimiters;
@@ -50,15 +53,16 @@ class Lexer {
   static const std::unordered_set<std::string> operators;
 
 public:
-  Lexer(std::istream &inputStream) : input(inputStream) {}
+  Lexer(std::istream &inputStream, span::FileId file = span::kInvalidFileId)
+      : input(inputStream), file_id(file) {}
 
   const std::vector<Token> &tokenize();
   const std::vector<Token> &getTokens() const { return tokens; }
-  const std::vector<Position> &getTokenPositions() const { return token_positions; } // MODIFIED: Added getter for positions
+  const std::vector<span::Span> &getTokenSpans() const { return token_spans; }
 
   void clearTokens() {
     tokens.clear();
-    token_positions.clear(); // MODIFIED: Also clear positions
+    token_spans.clear();
   }
 
 private:
@@ -104,7 +108,7 @@ inline const std::vector<Token> &Lexer::tokenize() {
     parseNext();
   }
   tokens.push_back(T_EOF);
-  token_positions.push_back(input.getPosition()); // Add final position for EOF
+  token_spans.push_back({file_id, static_cast<uint32_t>(input.getPosition().offset), static_cast<uint32_t>(input.getPosition().offset)});
   return tokens;
 }
 
@@ -146,8 +150,10 @@ inline void Lexer::parseNext() {
   }
 
   // Push the token and its corresponding position into their vectors
+  Position end_pos = input.getPosition();
+  token.span = {file_id, static_cast<uint32_t>(start_pos.offset), static_cast<uint32_t>(end_pos.offset)};
   tokens.push_back(token);
-  token_positions.push_back(start_pos);
+  token_spans.push_back(token.span);
 }
 
 // --- ALL INDIVIDUAL PARSERS AND HELPERS BELOW ARE UNCHANGED ---

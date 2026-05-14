@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -21,37 +22,40 @@
 #include "src/semantic/pass/exit_check/exit_check.hpp"
 #include "src/semantic/type/impl_table.hpp"
 #include "src/semantic/symbol/predefined.hpp"
+#include "src/span/source_manager.hpp"
+#include "src/utils/error.hpp"
 
 // HIR pretty printer
 #include "src/semantic/hir/pretty_print/pretty_print.hpp"
 
 void print_error_context(const parsec::ParseError& error,
                          const std::vector<Token>& tokens,
-                         const std::vector<Position>& positions, 
-                         const std::string& code) {
+                         const span::SourceManager& sources) {
     std::cerr << "--> Parsing failed" << std::endl;
 
     if (error.position >= tokens.size()) {
         std::cerr << "Unexpected end of input." << std::endl;
     } else {
         const Token& error_token = tokens[error.position];
-        const Position& pos = positions[error.position];
+        if (error_token.span.is_valid()) {
+            auto loc = sources.to_line_col(error_token.span.file, error_token.span.start);
+            std::cerr << "Unexpected token: '" << error_token.value << "' at "
+                      << sources.get_filename(error_token.span.file) << ":" << loc.line << ":" << loc.column << std::endl;
 
-        std::cerr << "Unexpected token: '" << error_token.value << "' at " << pos.toString() << std::endl;
-
-        // Find the specific line in the source code
-        std::string line_content;
-        std::istringstream code_stream(code);
-        for (int i = 0; i < pos.row; ++i) {
-            std::getline(code_stream, line_content);
+            auto line_view = sources.line_view(error_token.span.file, loc.line);
+            std::cerr << std::endl;
+            std::cerr << " " << loc.line << " | " << line_view << std::endl;
+            std::cerr << " " << std::string(std::to_string(loc.line).length(), ' ') << " | ";
+            std::cerr << std::string(loc.column > 0 ? loc.column - 1 : 0, ' ');
+            size_t caret_len = error_token.span.length();
+            std::cerr << "^";
+            if (caret_len > 1) {
+                std::cerr << std::string(caret_len - 1, '^');
+            }
+            std::cerr << std::endl;
+        } else {
+            std::cerr << "Unexpected token: '" << error_token.value << "'" << std::endl;
         }
-
-        // Print the context
-        std::cerr << std::endl;
-        std::cerr << " " << pos.row << " | " << line_content << std::endl;
-        std::cerr << " " << std::string(std::to_string(pos.row).length(), ' ') << " | ";
-        std::cerr << std::string(pos.col - 1, ' ') << "^";
-        std::cerr << std::string(error_token.value.length() > 1 ? error_token.value.length() - 1 : 0, '^') << std::endl;
     }
 
     std::cerr << std::endl << "Expected one of: ";
@@ -61,6 +65,25 @@ void print_error_context(const parsec::ParseError& error,
     std::cerr << std::endl;
 }
 
+void print_semantic_error(const SemanticError& error,
+                          const span::SourceManager& sources) {
+    std::cerr << "Error: " << error.what() << std::endl;
+    auto error_span = error.span();
+    if (!error_span.is_valid()) {
+        return;
+    }
+
+    auto loc = sources.to_line_col(error_span.file, error_span.start);
+    auto line_view = sources.line_view(error_span.file, loc.line);
+    std::cerr << "--> " << sources.get_filename(error_span.file) << ":" << loc.line << ":" << loc.column << std::endl;
+    std::cerr << " " << loc.line << " | " << line_view << std::endl;
+    std::cerr << " " << std::string(std::to_string(loc.line).length(), ' ') << " | ";
+    size_t caret_start = loc.column > 0 ? loc.column - 1 : 0;
+    std::cerr << std::string(caret_start, ' ');
+    size_t caret_len = std::max<size_t>(1, error_span.length());
+    std::cerr << std::string(caret_len, '^') << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     if (argc != 2) {
         std::cerr << "Usage: " << argv[0] << " <file>" << std::endl;
@@ -68,6 +91,8 @@ int main(int argc, char* argv[]) {
     }
 
     std::string filename = argv[1];
+
+    span::SourceManager sources;
 
     try {
         // Read input file
@@ -82,9 +107,10 @@ int main(int argc, char* argv[]) {
         std::string code = code_stream.str();
 
         // Phase 1: Lexical analysis
-        Lexer lexer(code_stream);
+        auto file_id = sources.add_file(filename, code);
+
+        Lexer lexer(code_stream, file_id);
         const auto& tokens = lexer.tokenize();
-        const auto& positions = lexer.getTokenPositions();
 
         // Phase 2: Parsing
         const auto &registry = getParserRegistry();
@@ -93,7 +119,7 @@ int main(int argc, char* argv[]) {
 
         if (!std::holds_alternative<std::vector<ast::ItemPtr>>(result)) {
             auto error = std::get<parsec::ParseError>(result);
-            print_error_context(error, tokens, positions, code);
+            print_error_context(error, tokens, sources);
             return 1;
         }
 
@@ -185,6 +211,9 @@ int main(int argc, char* argv[]) {
         std::cout << "Success: Semantic analysis completed successfully" << std::endl;
         return 0;
 
+    } catch (const SemanticError& e) {
+        print_semantic_error(e, sources);
+        return 1;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;

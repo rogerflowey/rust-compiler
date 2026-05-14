@@ -201,10 +201,13 @@ inline std::unique_ptr<Expr> apply_dereference(std::unique_ptr<Expr> expr) {
     deref_expr->op = UnaryOp::DEREFERENCE;
     deref_expr->rhs = std::move(expr);
     deref_expr->ast_node = nullptr; // No AST node for generated expression
-    
+    deref_expr->span = deref_expr->rhs ? deref_expr->rhs->span : span::Span::invalid();
+
     // Move the UnaryOp value into ExprVariant and then into Expr
     ExprVariant expr_variant = std::move(*deref_expr);
-    return std::make_unique<Expr>(std::move(expr_variant));
+    auto result = std::make_unique<Expr>(std::move(expr_variant));
+    result->span = deref_expr->span;
+    return result;
 }
 
 /**
@@ -219,10 +222,13 @@ inline std::unique_ptr<Expr> apply_reference(std::unique_ptr<Expr> expr, bool is
     ref_expr->op = is_mutable ? UnaryOp::MUTABLE_REFERENCE : UnaryOp::REFERENCE;
     ref_expr->rhs = std::move(expr);
     ref_expr->ast_node = nullptr; // No AST node for generated expression
-    
+    ref_expr->span = ref_expr->rhs ? ref_expr->rhs->span : span::Span::invalid();
+
     // Move the UnaryOp value into ExprVariant and then into Expr
     ExprVariant expr_variant = std::move(*ref_expr);
-    return std::make_unique<Expr>(std::move(expr_variant));
+    auto result = std::make_unique<Expr>(std::move(expr_variant));
+    result->span = ref_expr->span;
+    return result;
 }
 
 } // namespace transform_helper

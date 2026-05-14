@@ -6,6 +6,7 @@
 struct Position {
     int row = 1; // 1-based index
     int col = 1; // 1-based index
+    size_t offset = 0; // 0-based byte offset
 
     std::string toString() const {
         return "Line " + std::to_string(row) + ", Column " + std::to_string(col);
@@ -63,6 +64,7 @@ public:
             } else {
                 currentPos.col++;
             }
+            currentPos.offset++;
             buffer_pos++;
         }
     }
@@ -74,7 +76,5 @@ public:
     bool eof(size_t n = 0) const {
         return peek(n) == EOF;
     }
-    const Position& getPosition() const {
-        return currentPos;
-    }
+    const Position& getPosition() const { return currentPos; }
 };

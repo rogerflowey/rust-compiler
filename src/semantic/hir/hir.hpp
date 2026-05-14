@@ -5,6 +5,7 @@
 #include "semantic/const/const.hpp"
 #include "semantic/type/type.hpp"
 #include "ast/ast.hpp"
+#include "span/span.hpp"
 
 #include "semantic/pass/semantic_check/expr_info.hpp"
 
@@ -20,10 +21,12 @@ namespace semantic {
 struct Field {
     ast::Identifier name;
     std::optional<TypeId> type;
+    span::Span span = span::Span::invalid();
 };
 
 struct EnumVariant {
     ast::Identifier name;
+    span::Span span = span::Span::invalid();
 };
 
 }
@@ -64,33 +67,39 @@ using TypeNodeVariant = std::variant<
 
 struct TypeNode {
     TypeNodeVariant value;
+    span::Span span = span::Span::invalid();
 };
 using TypeAnnotation = std::variant<std::unique_ptr<TypeNode>, semantic::TypeId>;
 
 struct DefType {
     std::variant<ast::Identifier, TypeDef> def;
     const ast::PathType* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct PrimitiveType {
     ast::PrimitiveType::Kind kind;
     const ast::PrimitiveType* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct ArrayType {
     TypeAnnotation element_type;
     std::unique_ptr<Expr> size;
     const ast::ArrayType* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct ReferenceType {
     TypeAnnotation referenced_type;
     bool is_mutable;
     const ast::ReferenceType* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct UnitType {
     const ast::UnitType* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 // --- HIR Local Variable Abstraction ---
@@ -99,6 +108,7 @@ struct Local {
     bool is_mutable;
     std::optional<TypeAnnotation> type_annotation;
     const ast::IdentifierPattern* def_site = nullptr;// not too
+    span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
     Local(const Local&) = delete;
@@ -120,6 +130,7 @@ struct BindingDef {
     };
     std::variant<Unresolved,Local*> local;
     const ast::IdentifierPattern* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
     BindingDef(const BindingDef&) = delete;
@@ -135,11 +146,13 @@ struct ReferencePattern {
     std::unique_ptr<Pattern> subpattern;
     bool is_mutable;
     const ast::ReferencePattern* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 using PatternVariant = std::variant<BindingDef, ReferencePattern>;
 struct Pattern {
     PatternVariant value;
+    span::Span span = span::Span::invalid();
     Pattern(PatternVariant&& val)
         : value(std::move(val)) {}
     
@@ -177,18 +190,21 @@ struct Literal {
         const ast::StringLiteralExpr*
     >;
     AstNode ast_node;
+    span::Span span = span::Span::invalid();
 };
 
 // NEW: Temporary node for an unresolved identifier in an expression.
 struct UnresolvedIdentifier {
     ast::Identifier name;
     const ast::PathExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 // REDEFINED: A resolved reference to a local variable.
 struct Variable {
     Local* local_id;
     const ast::PathExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
     Variable(const Variable&) = delete;
@@ -204,6 +220,7 @@ struct Variable {
 struct ConstUse {
     const hir::ConstDef* def = nullptr;
     const ast::PathExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
     ConstUse(const ConstUse&) = delete;
@@ -219,6 +236,7 @@ struct ConstUse {
 struct FuncUse {
     const hir::Function* def = nullptr;
     const ast::PathExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
     FuncUse(const FuncUse&) = delete;
@@ -235,16 +253,19 @@ struct TypeStatic {
     std::variant<ast::Identifier, TypeDef> type; // The first segment of the path, e.g., `MyType`
     ast::Identifier name;
     const ast::PathExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Underscore {
     const ast::UnderscoreExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct FieldAccess {
     std::unique_ptr<Expr> base;
     std::variant<ast::Identifier, size_t> field;
     const ast::FieldAccessExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct StructLiteral {
@@ -260,6 +281,7 @@ struct StructLiteral {
     std::variant<SyntacticFields, CanonicalFields> fields;
 
     const ast::StructExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct StructConst {
@@ -274,6 +296,7 @@ struct StructConst {
     StructConst() = default;
     StructConst(hir::StructDef* struct_def_, hir::ConstDef* assoc_const_)
         : struct_def(struct_def_), assoc_const(assoc_const_) {}
+    span::Span span = span::Span::invalid();
 };
 
 struct EnumVariant {
@@ -288,29 +311,34 @@ struct EnumVariant {
     EnumVariant() = default;
     EnumVariant(hir::EnumDef* enum_def_, size_t variant_index_)
         : enum_def(enum_def_), variant_index(variant_index_) {}
+    span::Span span = span::Span::invalid();
 };
 
 struct ArrayLiteral {
     std::vector<std::unique_ptr<Expr>> elements;
     const ast::ArrayInitExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct ArrayRepeat {
     std::unique_ptr<Expr> value;
     std::variant<std::unique_ptr<Expr>, size_t> count;
     const ast::ArrayRepeatExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Index {
     std::unique_ptr<Expr> base;
     std::unique_ptr<Expr> index;
     const ast::IndexExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Assignment {
     std::unique_ptr<Expr> lhs;
     std::unique_ptr<Expr> rhs;
     const ast::AssignExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct UnaryOp {
@@ -318,6 +346,7 @@ struct UnaryOp {
     Op op;
     std::unique_ptr<Expr> rhs;
     const ast::UnaryExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct BinaryOp {
@@ -327,18 +356,21 @@ struct BinaryOp {
     std::unique_ptr<Expr> rhs;
     using AstNode = std::variant<const ast::BinaryExpr*, const ast::AssignExpr*>;
     AstNode ast_node;
+    span::Span span = span::Span::invalid();
 };
 
 struct Cast {
     std::unique_ptr<Expr> expr;
     TypeAnnotation target_type;
     const ast::CastExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Call {
     std::unique_ptr<Expr> callee;
     std::vector<std::unique_ptr<Expr>> args;
     const ast::CallExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct MethodCall {
@@ -346,6 +378,7 @@ struct MethodCall {
     std::variant<ast::Identifier, const Method*> method;
     std::vector<std::unique_ptr<Expr>> args;
     const ast::MethodCallExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct If {
@@ -353,12 +386,14 @@ struct If {
     std::unique_ptr<Block> then_block;
     std::optional<std::unique_ptr<Expr>> else_expr;
     const ast::IfExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Loop {
     std::unique_ptr<Block> body;
     std::optional<semantic::TypeId> break_type = std::nullopt;
     const ast::LoopExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct While {
@@ -366,23 +401,27 @@ struct While {
     std::unique_ptr<Block> body;
     std::optional<semantic::TypeId> break_type = std::nullopt;
     const ast::WhileExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Break {
     std::optional<std::unique_ptr<Expr>> value;
     std::optional<std::variant<Loop*, While*>> target = std::nullopt;
     const ast::BreakExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Continue {
     std::optional<std::variant<Loop*, While*>> target = std::nullopt;
     const ast::ContinueExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Return {
     std::optional<std::unique_ptr<Expr>> value;
     std::optional<std::variant<Function*, Method*>> target = std::nullopt;
     const ast::ReturnExpr* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Block {
@@ -390,6 +429,7 @@ struct Block {
     std::vector<std::unique_ptr<Item>> items;
     std::vector<std::unique_ptr<Stmt>> stmts;
     std::optional<std::unique_ptr<Expr>> final_expr;
+    span::Span span = span::Span::invalid();
 
     ~Block();
     Block(Block&&) noexcept;
@@ -413,6 +453,7 @@ using ExprVariant = std::variant<
 struct Expr {
     std::optional<semantic::ExprInfo> expr_info;
     ExprVariant value;
+    span::Span span = span::Span::invalid();
 
     Expr(ExprVariant&& val)
         : expr_info(std::nullopt), value(std::move(val)) {}
@@ -431,17 +472,20 @@ struct LetStmt {
     std::optional<TypeAnnotation> type_annotation;
     std::unique_ptr<Expr> initializer;
     const ast::LetStmt* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct ExprStmt {
     std::unique_ptr<Expr> expr;
     const ast::ExprStmt* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 using StmtVariant = std::variant<LetStmt, ExprStmt>;
 
 struct Stmt {
     StmtVariant value;
+    span::Span span = span::Span::invalid();
     Stmt(StmtVariant&& val)
         : value(std::move(val)) {}
 
@@ -458,6 +502,7 @@ struct Function {
     std::unique_ptr<Block> body;
     std::vector<std::unique_ptr<Local>> locals; // NEW: Owning list of all locals
     const ast::FunctionItem* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
     Function(const Function&) = delete;
@@ -484,6 +529,7 @@ struct Method {
         bool is_reference;
         bool is_mutable;
         const ast::FunctionItem::SelfParam* ast_node = nullptr;
+        span::Span span = span::Span::invalid();
         
         // Disable copy to prevent dangling pointers
         SelfParam(const SelfParam&) = delete;
@@ -501,6 +547,7 @@ struct Method {
     std::unique_ptr<Local> self_local;
     std::vector<std::unique_ptr<Local>> locals;
     const ast::FunctionItem* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
     Method(const Method&) = delete;
@@ -529,6 +576,7 @@ struct StructDef {
     std::vector<semantic::Field> fields;
     std::vector<TypeAnnotation> field_type_annotations;
     const ast::StructItem* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 
     std::optional<size_t> find_field(const ast::Identifier& name) const {
         for (size_t i = 0; i < fields.size(); ++i) {
@@ -543,18 +591,21 @@ struct StructDef {
 struct EnumDef {
     std::vector<semantic::EnumVariant> variants;
     const ast::EnumItem* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct ConstDef {
     std::unique_ptr<Expr> expr;
-    std::optional<semantic::ConstVariant> const_value; 
+    std::optional<semantic::ConstVariant> const_value;
     std::optional<TypeAnnotation> type;
     const ast::ConstItem* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 struct Trait {
     std::vector<std::unique_ptr<Item>> items;
     const ast::TraitItem* ast_node = nullptr;
+    span::Span span = span::Span::invalid();
 };
 
 using AssociatedItemVariant = std::variant<Function, Method, ConstDef>;
@@ -569,6 +620,7 @@ struct Impl {
     std::vector<std::unique_ptr<AssociatedItem>> items;
     using AstNode = std::variant<const ast::TraitImplItem*, const ast::InherentImplItem*>;
     AstNode ast_node;
+    span::Span span = span::Span::invalid();
     
     // Disable copy to prevent dangling pointers
     Impl(const Impl&) = delete;
@@ -592,10 +644,12 @@ struct Item {
     ItemVariant value;
     Item(ItemVariant&& val)
         : value(std::move(val)) {}
+    span::Span span = span::Span::invalid();
 };
 
 struct Program {
     std::vector<std::unique_ptr<Item>> items;
+    span::Span span = span::Span::invalid();
 };
 
 

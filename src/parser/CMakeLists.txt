@@ -7,4 +7,4 @@ target_include_directories(parser
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(parser PUBLIC parsecpp)
+target_link_libraries(parser PUBLIC parsecpp span)

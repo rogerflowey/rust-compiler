@@ -40,5 +40,9 @@ struct ParserRegistry {
 inline const parsec::Parser<IdPtr, Token> p_identifier =
     parsec::satisfy<Token>([](const Token &t) -> bool {
       return t.type == TokenType::TOKEN_IDENTIFIER;
-    },"an identifier").map([](Token t)->IdPtr { return std::make_unique<Identifier>(t.value); });
+    },"an identifier").map([](Token t)->IdPtr {
+        auto id = std::make_unique<Identifier>(t.value);
+        id->span = t.span;
+        return id;
+    });
 

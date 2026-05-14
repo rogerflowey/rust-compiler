@@ -41,6 +41,7 @@ endif()
 # --- Dependencies ---
 # Add the parsecpp library from the subdirectory.
 add_subdirectory(lib/parsecpp)
+add_subdirectory(src/span)
 
 # --- Project Modules ---
 # Add our new parser library. This will execute src/parser/CMakeLists.txt
