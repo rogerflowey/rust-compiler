@@ -14,7 +14,6 @@ namespace {
 hir::PatternVariant create_temporary_binding_variant(hir::Local *local) {
   hir::BindingDef binding;
   binding.local = local;
-  binding.ast_node = nullptr;
   return hir::PatternVariant{std::in_place_type<hir::BindingDef>,
                              std::move(binding)};
 }
@@ -29,7 +28,6 @@ create_temporary_let_stmt(hir::PatternVariant pattern_variant,
   let_stmt.pattern = std::move(pattern);
   let_stmt.type_annotation = initializer_type;
   let_stmt.initializer = std::move(initializer);
-  let_stmt.ast_node = nullptr;
 
   return std::make_unique<hir::Stmt>(
       hir::StmtVariant{std::in_place_type<hir::LetStmt>, std::move(let_stmt)});
@@ -38,15 +36,17 @@ create_temporary_let_stmt(hir::PatternVariant pattern_variant,
 std::unique_ptr<hir::Expr> create_reference_expression(hir::Local *local,
                                                        bool is_mutable,
                                                        const hir::UnaryOp &src) {
-  auto variable_expr = std::make_unique<hir::Expr>(hir::ExprVariant{
-      hir::Variable{local, static_cast<const ast::PathExpr *>(nullptr)}});
+  auto variable = hir::Variable{local};
+  variable.span = src.span;
+  auto variable_expr =
+      std::make_unique<hir::Expr>(hir::ExprVariant{std::move(variable)});
 
   auto reference_expr =
       hir::helper::transform_helper::apply_reference(std::move(variable_expr),
                                                       is_mutable);
 
   if (auto *unary = std::get_if<hir::UnaryOp>(&reference_expr->value)) {
-    unary->ast_node = src.ast_node;
+    unary->span = src.span;
   }
 
   return reference_expr;
@@ -71,7 +71,6 @@ ExprInfo TempRefDesugger::desugar_reference_to_temporary(
       create_temporary_binding_variant(temporary_local);
 
   hir::Block block;
-  block.ast_node = nullptr;
   block.stmts.push_back(create_temporary_let_stmt(
       std::move(pattern_variant), std::move(original_operand),
       operand_info.type));

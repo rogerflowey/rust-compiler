@@ -67,6 +67,26 @@ inline bool is_numeric_type(TypeId type) {
     }
 }
 
+inline bool is_integer_type(TypeId type) {
+    if (!type) {
+        return false;
+    }
+    if (auto* primitive = std::get_if<PrimitiveKind>(&type->value)) {
+        switch (*primitive) {
+        case PrimitiveKind::I32:
+        case PrimitiveKind::U32:
+        case PrimitiveKind::ISIZE:
+        case PrimitiveKind::USIZE:
+        case PrimitiveKind::__ANYINT__:
+        case PrimitiveKind::__ANYUINT__:
+            return true;
+        default:
+            return false;
+        }
+    }
+    return false;
+}
+
 /**
  * @brief Check if a type is boolean
  */
