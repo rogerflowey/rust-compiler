@@ -19,6 +19,7 @@ Planned workflow:
 
 See also:
 - [semantic-base.md](./semantic-base.md)
+- [semantic-contract.md](./semantic-contract.md)
 - [design-goals.md](./design-goals.md)
 - [lowering-stages.md](./lowering-stages.md)
 - [pass-boundaries.md](./pass-boundaries.md)
