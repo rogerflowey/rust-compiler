@@ -77,3 +77,5 @@ ctest --test-dir ./ninja-debug
 
 - [Semantic Passes](./semantic/passes/README.md) - Complete semantic analysis pipeline
 - [Component Reference](./component-cross-reference.md) - Detailed component documentation
+- [IR3 Design](./ir3/design.md) - Proposed CFG-based backend IR
+- [HIR to IR3 Lowering](./ir3/hir-to-ir3.md) - How current validated HIR maps into IR3
