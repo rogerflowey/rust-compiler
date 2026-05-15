@@ -17,25 +17,37 @@ using SlotId = std::size_t;
 
 enum class SsaClass { I32, Ptr };
 enum class SlotOrigin { User, Temp };
-enum class UnaryOp { Neg, Not };
+enum class UnaryOp { SNeg, UNeg, BoolNot, BitNot };
 enum class BinaryOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
+    SAdd,
+    UAdd,
+    SSub,
+    USub,
+    SMul,
+    UMul,
+    SDiv,
+    UDiv,
+    SRem,
+    URem,
     BitAnd,
     BitXor,
     BitOr,
-    Shl,
-    Shr,
+    SShl,
+    UShl,
+    AShr,
+    LShr,
     Eq,
     Ne,
-    Lt,
-    Gt,
-    Le,
-    Ge
+    SLt,
+    ULt,
+    SGt,
+    UGt,
+    SLe,
+    ULe,
+    SGe,
+    UGe
 };
+enum class CastOp { I32ToI32, PtrToPtr, I32ToPtr, PtrToI32 };
 
 struct Value {
     ValueId id;
@@ -126,7 +138,6 @@ struct Unary {
     Value result;
     UnaryOp op;
     ValueId operand;
-    semantic::TypeId host_type = semantic::invalid_type_id;
 };
 
 struct Binary {
@@ -134,15 +145,12 @@ struct Binary {
     BinaryOp op;
     ValueId lhs;
     ValueId rhs;
-    semantic::TypeId result_type = semantic::invalid_type_id;
-    semantic::TypeId operand_type = semantic::invalid_type_id;
 };
 
 struct Cast {
     Value result;
     ValueId operand;
-    semantic::TypeId source_type = semantic::invalid_type_id;
-    semantic::TypeId dest_type = semantic::invalid_type_id;
+    CastOp op;
 };
 
 struct Call {

@@ -3,6 +3,7 @@
 #include "semantic/type/helper.hpp"
 
 #include <cctype>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -40,6 +41,41 @@ semantic::TypeId local_type(const hir::Local& local) {
 
 bool is_never(semantic::TypeId type) {
     return classify_host_type(type) == HostClass::Never;
+}
+
+std::optional<semantic::PrimitiveKind> primitive_kind(semantic::TypeId type) {
+    if (!type) {
+        return std::nullopt;
+    }
+    if (auto* primitive = std::get_if<semantic::PrimitiveKind>(&type->value)) {
+        return *primitive;
+    }
+    return std::nullopt;
+}
+
+bool is_bool_type(semantic::TypeId type) {
+    return primitive_kind(type) == semantic::PrimitiveKind::BOOL;
+}
+
+bool is_unsigned_integer_type(semantic::TypeId type) {
+    auto primitive = primitive_kind(type);
+    if (!primitive) {
+        return false;
+    }
+    switch (*primitive) {
+    case semantic::PrimitiveKind::U32:
+    case semantic::PrimitiveKind::USIZE:
+    case semantic::PrimitiveKind::CHAR:
+    case semantic::PrimitiveKind::__ANYUINT__:
+        return true;
+    case semantic::PrimitiveKind::I32:
+    case semantic::PrimitiveKind::ISIZE:
+    case semantic::PrimitiveKind::BOOL:
+    case semantic::PrimitiveKind::STRING:
+    case semantic::PrimitiveKind::__ANYINT__:
+        return false;
+    }
+    return false;
 }
 
 const char* host_class_name(HostClass klass) {
@@ -228,18 +264,19 @@ private:
     }
 };
 
-BinaryOp lower_binary_op(hir::BinaryOp::Op op) {
+BinaryOp lower_binary_op(hir::BinaryOp::Op op, semantic::TypeId operand_type) {
+    const bool is_unsigned = is_unsigned_integer_type(operand_type);
     switch (op) {
     case hir::BinaryOp::ADD:
-        return BinaryOp::Add;
+        return is_unsigned ? BinaryOp::UAdd : BinaryOp::SAdd;
     case hir::BinaryOp::SUB:
-        return BinaryOp::Sub;
+        return is_unsigned ? BinaryOp::USub : BinaryOp::SSub;
     case hir::BinaryOp::MUL:
-        return BinaryOp::Mul;
+        return is_unsigned ? BinaryOp::UMul : BinaryOp::SMul;
     case hir::BinaryOp::DIV:
-        return BinaryOp::Div;
+        return is_unsigned ? BinaryOp::UDiv : BinaryOp::SDiv;
     case hir::BinaryOp::REM:
-        return BinaryOp::Rem;
+        return is_unsigned ? BinaryOp::URem : BinaryOp::SRem;
     case hir::BinaryOp::BIT_AND:
         return BinaryOp::BitAnd;
     case hir::BinaryOp::BIT_XOR:
@@ -247,26 +284,42 @@ BinaryOp lower_binary_op(hir::BinaryOp::Op op) {
     case hir::BinaryOp::BIT_OR:
         return BinaryOp::BitOr;
     case hir::BinaryOp::SHL:
-        return BinaryOp::Shl;
+        return is_unsigned ? BinaryOp::UShl : BinaryOp::SShl;
     case hir::BinaryOp::SHR:
-        return BinaryOp::Shr;
+        return is_unsigned ? BinaryOp::LShr : BinaryOp::AShr;
     case hir::BinaryOp::EQ:
         return BinaryOp::Eq;
     case hir::BinaryOp::NE:
         return BinaryOp::Ne;
     case hir::BinaryOp::LT:
-        return BinaryOp::Lt;
+        return is_unsigned ? BinaryOp::ULt : BinaryOp::SLt;
     case hir::BinaryOp::GT:
-        return BinaryOp::Gt;
+        return is_unsigned ? BinaryOp::UGt : BinaryOp::SGt;
     case hir::BinaryOp::LE:
-        return BinaryOp::Le;
+        return is_unsigned ? BinaryOp::ULe : BinaryOp::SLe;
     case hir::BinaryOp::GE:
-        return BinaryOp::Ge;
+        return is_unsigned ? BinaryOp::UGe : BinaryOp::SGe;
     case hir::BinaryOp::AND:
     case hir::BinaryOp::OR:
         break;
     }
     throw LoweringError("short-circuit operator must be lowered through CFG");
+}
+
+CastOp lower_cast_op(SsaClass source, SsaClass dest) {
+    if (source == SsaClass::I32 && dest == SsaClass::I32) {
+        return CastOp::I32ToI32;
+    }
+    if (source == SsaClass::Ptr && dest == SsaClass::Ptr) {
+        return CastOp::PtrToPtr;
+    }
+    if (source == SsaClass::I32 && dest == SsaClass::Ptr) {
+        return CastOp::I32ToPtr;
+    }
+    if (source == SsaClass::Ptr && dest == SsaClass::I32) {
+        return CastOp::PtrToI32;
+    }
+    throw LoweringError("unsupported IR3 cast class pair");
 }
 
 class FunctionLowerer {
@@ -812,7 +865,7 @@ private:
                     return lower_unary(unary, type);
                 },
                 [&](const hir::BinaryOp& binary) {
-                    return lower_binary(binary, type);
+                    return lower_binary(binary);
                 },
                 [&](const hir::Cast& cast) {
                     auto input = lower_value(*cast.expr);
@@ -820,8 +873,7 @@ private:
                     emit(Cast{
                         .result = result,
                         .operand = input.id,
-                        .source_type = expr_type(*cast.expr),
-                        .dest_type = type,
+                        .op = lower_cast_op(input.klass, result.klass),
                     });
                     return result;
                 },
@@ -915,9 +967,9 @@ private:
             auto result = new_value(SsaClass::I32);
             emit(Unary{
                 .result = result,
-                .op = UnaryOp::Not,
+                .op = is_bool_type(result_type) ? UnaryOp::BoolNot
+                                                : UnaryOp::BitNot,
                 .operand = input.id,
-                .host_type = result_type,
             });
             return result;
         }
@@ -926,9 +978,9 @@ private:
             auto result = new_value(SsaClass::I32);
             emit(Unary{
                 .result = result,
-                .op = UnaryOp::Neg,
+                .op = is_unsigned_integer_type(result_type) ? UnaryOp::UNeg
+                                                            : UnaryOp::SNeg,
                 .operand = input.id,
-                .host_type = result_type,
             });
             return result;
         }
@@ -950,7 +1002,7 @@ private:
         throw LoweringError("unknown unary operator");
     }
 
-    Value lower_binary(const hir::BinaryOp& binary, semantic::TypeId result_type) {
+    Value lower_binary(const hir::BinaryOp& binary) {
         if (binary.op == hir::BinaryOp::AND || binary.op == hir::BinaryOp::OR) {
             return lower_short_circuit(binary);
         }
@@ -959,11 +1011,9 @@ private:
         auto result = new_value(SsaClass::I32);
         emit(Binary{
             .result = result,
-            .op = lower_binary_op(binary.op),
+            .op = lower_binary_op(binary.op, expr_type(*binary.lhs)),
             .lhs = lhs.id,
             .rhs = rhs.id,
-            .result_type = result_type,
-            .operand_type = expr_type(*binary.lhs),
         });
         return result;
     }
@@ -1558,12 +1608,9 @@ private:
         auto should_continue = new_value(SsaClass::I32);
         emit(Binary{
             .result = should_continue,
-            .op = BinaryOp::Lt,
+            .op = BinaryOp::ULt,
             .lhs = index.id,
             .rhs = bound.id,
-            .result_type = semantic::get_typeID(
-                semantic::Type{semantic::PrimitiveKind::BOOL}),
-            .operand_type = index_type,
         });
         terminate(Branch{
             .condition = should_continue.id,
@@ -1585,11 +1632,9 @@ private:
         auto next = new_value(SsaClass::I32);
         emit(Binary{
             .result = next,
-            .op = BinaryOp::Add,
+            .op = BinaryOp::UAdd,
             .lhs = body_index.id,
             .rhs = one.id,
-            .result_type = index_type,
-            .operand_type = index_type,
         });
         store_value(index_slot, next.id);
         terminate(Jump{.target = condition});

@@ -39,11 +39,9 @@ TEST(Ir3LlvmTranscribeTest, EmitsScalarFunction) {
                 .instructions = {
                     ir3::Binary{
                         .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
-                        .op = ir3::BinaryOp::Add,
+                        .op = ir3::BinaryOp::SAdd,
                         .lhs = 0,
                         .rhs = 1,
-                        .result_type = i32_type(),
-                        .operand_type = i32_type(),
                     },
                 },
                 .terminator = ir3::Return{.value = 2},
@@ -94,9 +92,8 @@ TEST(Ir3LlvmTranscribeTest, EmitsSlotsLoadsStoresAndLogicalNot) {
                               .source = slot0},
                     ir3::Unary{
                         .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
-                        .op = ir3::UnaryOp::Not,
+                        .op = ir3::UnaryOp::BoolNot,
                         .operand = 1,
-                        .host_type = bool_type(),
                     },
                 },
                 .terminator = ir3::Return{.value = 2},
@@ -112,4 +109,56 @@ TEST(Ir3LlvmTranscribeTest, EmitsSlotsLoadsStoresAndLogicalNot) {
     EXPECT_NE(text.find("%v1 = load i32, ptr %slot0, align 4"), std::string::npos);
     EXPECT_NE(text.find("icmp eq i32 %v1, 0"), std::string::npos);
     EXPECT_NE(text.find("%v2 = zext i1"), std::string::npos);
+}
+
+TEST(Ir3LlvmTranscribeTest, EmitsUnsignedOpsFromExplicitIr3Opcodes) {
+    ir3::Function function{
+        .symbol = "unsigned_ops",
+        .params = {
+            ir3::Param{.value = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                       .name = "a",
+                       .host_type = i32_type()},
+            ir3::Param{.value = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                       .name = "b",
+                       .host_type = i32_type()},
+        },
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {},
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .phis = {},
+                .instructions = {
+                    ir3::Binary{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .op = ir3::BinaryOp::UDiv,
+                        .lhs = 0,
+                        .rhs = 1,
+                    },
+                    ir3::Binary{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .op = ir3::BinaryOp::ULt,
+                        .lhs = 0,
+                        .rhs = 1,
+                    },
+                    ir3::Binary{
+                        .result = ir3::Value{.id = 4, .klass = ir3::SsaClass::I32},
+                        .op = ir3::BinaryOp::LShr,
+                        .lhs = 0,
+                        .rhs = 1,
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+        },
+        .next_value = 5,
+    };
+
+    const auto text = ir3::to_llvm_string(ir3::Module{.functions = {function}});
+
+    EXPECT_NE(text.find("%v2 = udiv i32 %v0, %v1"), std::string::npos);
+    EXPECT_NE(text.find("icmp ult i32 %v0, %v1"), std::string::npos);
+    EXPECT_NE(text.find("%v4 = lshr i32 %v0, %v1"), std::string::npos);
 }

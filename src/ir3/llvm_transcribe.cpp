@@ -44,22 +44,6 @@ std::uint64_t align_to(std::uint64_t value, std::uint64_t align) {
     return ((value + align - 1) / align) * align;
 }
 
-bool is_bool_type(semantic::TypeId type) {
-    auto* primitive = type ? std::get_if<semantic::PrimitiveKind>(&type->value) : nullptr;
-    return primitive && *primitive == semantic::PrimitiveKind::BOOL;
-}
-
-bool is_unsigned_type(semantic::TypeId type) {
-    auto* primitive = type ? std::get_if<semantic::PrimitiveKind>(&type->value) : nullptr;
-    if (!primitive) {
-        return false;
-    }
-    return *primitive == semantic::PrimitiveKind::U32 ||
-           *primitive == semantic::PrimitiveKind::USIZE ||
-           *primitive == semantic::PrimitiveKind::CHAR ||
-           *primitive == semantic::PrimitiveKind::__ANYUINT__;
-}
-
 std::string llvm_string_literal(const std::string& text) {
     std::string out = "\"";
     for (unsigned char ch : text) {
@@ -522,21 +506,22 @@ private:
 
     void emit_unary(const Unary& value) {
         switch (value.op) {
-        case UnaryOp::Neg:
+        case UnaryOp::SNeg:
+        case UnaryOp::UNeg:
             out_ << "  " << value_name(value.result.id) << " = sub i32 0, "
                  << value_name(value.operand) << "\n";
             return;
-        case UnaryOp::Not:
-            if (is_bool_type(value.host_type)) {
-                auto cmp = temp("not");
-                out_ << "  " << cmp << " = icmp eq i32 "
-                     << value_name(value.operand) << ", 0\n";
-                out_ << "  " << value_name(value.result.id)
-                     << " = zext i1 " << cmp << " to i32\n";
-            } else {
-                out_ << "  " << value_name(value.result.id) << " = xor i32 "
-                     << value_name(value.operand) << ", -1\n";
-            }
+        case UnaryOp::BoolNot: {
+            auto cmp = temp("not");
+            out_ << "  " << cmp << " = icmp eq i32 "
+                 << value_name(value.operand) << ", 0\n";
+            out_ << "  " << value_name(value.result.id)
+                 << " = zext i1 " << cmp << " to i32\n";
+            return;
+        }
+        case UnaryOp::BitNot:
+            out_ << "  " << value_name(value.result.id) << " = xor i32 "
+                 << value_name(value.operand) << ", -1\n";
             return;
         }
         throw TranscriptionError("unknown unary operation");
@@ -546,27 +531,36 @@ private:
         auto lhs = value_name(value.lhs);
         auto rhs = value_name(value.rhs);
         switch (value.op) {
-        case BinaryOp::Add:
+        case BinaryOp::SAdd:
+        case BinaryOp::UAdd:
             out_ << "  " << value_name(value.result.id) << " = add i32 " << lhs
                  << ", " << rhs << "\n";
             return;
-        case BinaryOp::Sub:
+        case BinaryOp::SSub:
+        case BinaryOp::USub:
             out_ << "  " << value_name(value.result.id) << " = sub i32 " << lhs
                  << ", " << rhs << "\n";
             return;
-        case BinaryOp::Mul:
+        case BinaryOp::SMul:
+        case BinaryOp::UMul:
             out_ << "  " << value_name(value.result.id) << " = mul i32 " << lhs
                  << ", " << rhs << "\n";
             return;
-        case BinaryOp::Div:
-            out_ << "  " << value_name(value.result.id) << " = "
-                 << (is_unsigned_type(value.operand_type) ? "udiv" : "sdiv")
-                 << " i32 " << lhs << ", " << rhs << "\n";
+        case BinaryOp::SDiv:
+            out_ << "  " << value_name(value.result.id) << " = sdiv i32 "
+                 << lhs << ", " << rhs << "\n";
             return;
-        case BinaryOp::Rem:
-            out_ << "  " << value_name(value.result.id) << " = "
-                 << (is_unsigned_type(value.operand_type) ? "urem" : "srem")
-                 << " i32 " << lhs << ", " << rhs << "\n";
+        case BinaryOp::UDiv:
+            out_ << "  " << value_name(value.result.id) << " = udiv i32 "
+                 << lhs << ", " << rhs << "\n";
+            return;
+        case BinaryOp::SRem:
+            out_ << "  " << value_name(value.result.id) << " = srem i32 "
+                 << lhs << ", " << rhs << "\n";
+            return;
+        case BinaryOp::URem:
+            out_ << "  " << value_name(value.result.id) << " = urem i32 "
+                 << lhs << ", " << rhs << "\n";
             return;
         case BinaryOp::BitAnd:
             out_ << "  " << value_name(value.result.id) << " = and i32 " << lhs
@@ -580,21 +574,29 @@ private:
             out_ << "  " << value_name(value.result.id) << " = or i32 " << lhs
                  << ", " << rhs << "\n";
             return;
-        case BinaryOp::Shl:
+        case BinaryOp::SShl:
+        case BinaryOp::UShl:
             out_ << "  " << value_name(value.result.id) << " = shl i32 " << lhs
                  << ", " << rhs << "\n";
             return;
-        case BinaryOp::Shr:
-            out_ << "  " << value_name(value.result.id) << " = "
-                 << (is_unsigned_type(value.operand_type) ? "lshr" : "ashr")
-                 << " i32 " << lhs << ", " << rhs << "\n";
+        case BinaryOp::AShr:
+            out_ << "  " << value_name(value.result.id) << " = ashr i32 "
+                 << lhs << ", " << rhs << "\n";
+            return;
+        case BinaryOp::LShr:
+            out_ << "  " << value_name(value.result.id) << " = lshr i32 "
+                 << lhs << ", " << rhs << "\n";
             return;
         case BinaryOp::Eq:
         case BinaryOp::Ne:
-        case BinaryOp::Lt:
-        case BinaryOp::Gt:
-        case BinaryOp::Le:
-        case BinaryOp::Ge:
+        case BinaryOp::SLt:
+        case BinaryOp::ULt:
+        case BinaryOp::SGt:
+        case BinaryOp::UGt:
+        case BinaryOp::SLe:
+        case BinaryOp::ULe:
+        case BinaryOp::SGe:
+        case BinaryOp::UGe:
             emit_compare(value, lhs, rhs);
             return;
         }
@@ -612,17 +614,29 @@ private:
         case BinaryOp::Ne:
             pred = "ne";
             break;
-        case BinaryOp::Lt:
-            pred = is_unsigned_type(value.operand_type) ? "ult" : "slt";
+        case BinaryOp::SLt:
+            pred = "slt";
             break;
-        case BinaryOp::Gt:
-            pred = is_unsigned_type(value.operand_type) ? "ugt" : "sgt";
+        case BinaryOp::ULt:
+            pred = "ult";
             break;
-        case BinaryOp::Le:
-            pred = is_unsigned_type(value.operand_type) ? "ule" : "sle";
+        case BinaryOp::SGt:
+            pred = "sgt";
             break;
-        case BinaryOp::Ge:
-            pred = is_unsigned_type(value.operand_type) ? "uge" : "sge";
+        case BinaryOp::UGt:
+            pred = "ugt";
+            break;
+        case BinaryOp::SLe:
+            pred = "sle";
+            break;
+        case BinaryOp::ULe:
+            pred = "ule";
+            break;
+        case BinaryOp::SGe:
+            pred = "sge";
+            break;
+        case BinaryOp::UGe:
+            pred = "uge";
             break;
         default:
             throw TranscriptionError("non-comparison operation reached comparison emitter");
@@ -635,25 +649,21 @@ private:
     }
 
     void emit_cast(const Cast& value) {
-        auto source_class = value_class(value.operand);
-        auto dest = value.result.klass;
-        if (source_class == SsaClass::I32 && dest == SsaClass::I32) {
+        switch (value.op) {
+        case CastOp::I32ToI32:
             out_ << "  " << value_name(value.result.id) << " = add i32 0, "
                  << value_name(value.operand) << "\n";
             return;
-        }
-        if (source_class == SsaClass::Ptr && dest == SsaClass::Ptr) {
+        case CastOp::PtrToPtr:
             out_ << "  " << value_name(value.result.id)
                  << " = getelementptr i8, ptr " << value_name(value.operand)
                  << ", i64 0\n";
             return;
-        }
-        if (source_class == SsaClass::I32 && dest == SsaClass::Ptr) {
+        case CastOp::I32ToPtr:
             out_ << "  " << value_name(value.result.id) << " = inttoptr i32 "
                  << value_name(value.operand) << " to ptr\n";
             return;
-        }
-        if (source_class == SsaClass::Ptr && dest == SsaClass::I32) {
+        case CastOp::PtrToI32:
             out_ << "  " << value_name(value.result.id) << " = ptrtoint ptr "
                  << value_name(value.operand) << " to i32\n";
             return;

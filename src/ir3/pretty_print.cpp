@@ -120,50 +120,90 @@ std::string place_name(const Place& place) {
 
 const char* unary_name(UnaryOp op) {
     switch (op) {
-    case UnaryOp::Neg:
-        return "neg";
-    case UnaryOp::Not:
-        return "not";
+    case UnaryOp::SNeg:
+        return "sneg";
+    case UnaryOp::UNeg:
+        return "uneg";
+    case UnaryOp::BoolNot:
+        return "bool_not";
+    case UnaryOp::BitNot:
+        return "bit_not";
     }
     return "<unary>";
 }
 
 const char* binary_name(BinaryOp op) {
     switch (op) {
-    case BinaryOp::Add:
-        return "add";
-    case BinaryOp::Sub:
-        return "sub";
-    case BinaryOp::Mul:
-        return "mul";
-    case BinaryOp::Div:
-        return "div";
-    case BinaryOp::Rem:
-        return "rem";
+    case BinaryOp::SAdd:
+        return "sadd";
+    case BinaryOp::UAdd:
+        return "uadd";
+    case BinaryOp::SSub:
+        return "ssub";
+    case BinaryOp::USub:
+        return "usub";
+    case BinaryOp::SMul:
+        return "smul";
+    case BinaryOp::UMul:
+        return "umul";
+    case BinaryOp::SDiv:
+        return "sdiv";
+    case BinaryOp::UDiv:
+        return "udiv";
+    case BinaryOp::SRem:
+        return "srem";
+    case BinaryOp::URem:
+        return "urem";
     case BinaryOp::BitAnd:
         return "bit_and";
     case BinaryOp::BitXor:
         return "bit_xor";
     case BinaryOp::BitOr:
         return "bit_or";
-    case BinaryOp::Shl:
-        return "shl";
-    case BinaryOp::Shr:
-        return "shr";
+    case BinaryOp::SShl:
+        return "sshl";
+    case BinaryOp::UShl:
+        return "ushl";
+    case BinaryOp::AShr:
+        return "ashr";
+    case BinaryOp::LShr:
+        return "lshr";
     case BinaryOp::Eq:
         return "eq";
     case BinaryOp::Ne:
         return "ne";
-    case BinaryOp::Lt:
-        return "lt";
-    case BinaryOp::Gt:
-        return "gt";
-    case BinaryOp::Le:
-        return "le";
-    case BinaryOp::Ge:
-        return "ge";
+    case BinaryOp::SLt:
+        return "slt";
+    case BinaryOp::ULt:
+        return "ult";
+    case BinaryOp::SGt:
+        return "sgt";
+    case BinaryOp::UGt:
+        return "ugt";
+    case BinaryOp::SLe:
+        return "sle";
+    case BinaryOp::ULe:
+        return "ule";
+    case BinaryOp::SGe:
+        return "sge";
+    case BinaryOp::UGe:
+        return "uge";
     }
     return "<binary>";
+}
+
+const char* cast_name(CastOp op) {
+    switch (op) {
+    case CastOp::I32ToI32:
+        return "i32_to_i32";
+    case CastOp::PtrToPtr:
+        return "ptr_to_ptr";
+    case CastOp::I32ToPtr:
+        return "i32_to_ptr";
+    case CastOp::PtrToI32:
+        return "ptr_to_i32";
+    }
+    return "<cast>";
 }
 
 void print_instruction(std::ostream& out, const Instruction& inst) {
@@ -197,8 +237,8 @@ void print_instruction(std::ostream& out, const Instruction& inst) {
                     << binary_name(value.op) << " " << ssa_name(value.lhs)
                     << ", " << ssa_name(value.rhs) << "\n";
             } else if constexpr (std::is_same_v<T, Cast>) {
-                out << "  " << ssa_name(value.result.id) << " = cast."
-                    << class_name(value.result.klass) << " "
+                out << "  " << ssa_name(value.result.id) << " = "
+                    << cast_name(value.op) << " "
                     << ssa_name(value.operand) << "\n";
             } else if constexpr (std::is_same_v<T, Call>) {
                 if (value.result) {
