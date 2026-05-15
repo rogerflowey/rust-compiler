@@ -221,11 +221,18 @@ public:
                            method.span);
     }
 
+    auto self_value_type = get_typeID(Type{StructType{.symbol = *self_struct}});
+    auto self_local_type = method.self_param.is_reference
+                               ? get_typeID(Type{ReferenceType{
+                                     .referenced_type = self_value_type,
+                                     .is_mutable = method.self_param.is_mutable}})
+                               : self_value_type;
+
     // create Local for self
     auto self_local = std::make_unique<hir::Local>(hir::Local{
       ast::Identifier{"self"},
       method.self_param.is_mutable,
-      get_typeID(Type{StructType{.symbol = *self_struct}})
+      self_local_type
     });
     self_local->span = method.self_param.span.is_valid() ? method.self_param.span : method.span;
     

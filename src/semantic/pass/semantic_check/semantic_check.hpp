@@ -126,12 +126,7 @@ public:
             throw std::logic_error("Function parameter count mismatch with type annotations");
         }
 
-        // Ensure return type is present (defaults to unit type)
-        if (!function.return_type) {
-            throw std::logic_error("Function missing return type annotation");
-        }
-
-        TypeId return_type = context.type_query(*function.return_type);
+        TypeId return_type = context.function_return_type(function);
 
         for (size_t i = 0; i < function.params.size(); ++i) {
             if (!function.param_type_annotations[i]) {
@@ -176,12 +171,7 @@ public:
             throw std::logic_error("Method parameter count mismatch with type annotations");
         }
         
-        // Ensure return type is present (defaults to unit type)
-        if (!method.return_type) {
-            throw std::logic_error("Method missing return type annotation");
-        }
-
-        TypeId return_type = context.type_query(*method.return_type);
+        TypeId return_type = context.method_return_type(method);
 
         for (size_t i = 0; i < method.params.size(); ++i) {
             if (!method.param_type_annotations[i]) {

@@ -919,9 +919,8 @@ ExprInfo ExprChecker::check(hir::Call &expr, TypeExpectation) {
 
   EndpointSet endpoints = sequence_endpoints(arg_infos);
 
-  auto &return_annotation =
-      const_cast<hir::TypeAnnotation &>(*func_type->def->return_type);
-  return ExprInfo{.type = context.type_query(return_annotation),
+  auto &function_def = const_cast<hir::Function &>(*func_type->def);
+  return ExprInfo{.type = context.function_return_type(function_def),
                   .has_type = true,
                   .is_mut = false,
                   .is_place = false,
@@ -1026,7 +1025,7 @@ ExprInfo ExprChecker::check(hir::MethodCall &expr, TypeExpectation) {
   EndpointSet endpoints = sequence_endpoints(eval_infos);
 
   // Return method's return type
-  return ExprInfo{.type = context.type_query(*method_def->return_type),
+  return ExprInfo{.type = context.method_return_type(*method_def),
                   .has_type = true,
                   .is_mut = false,
                   .is_place = false,
@@ -1274,10 +1273,10 @@ ExprInfo ExprChecker::check(hir::Return &expr, TypeExpectation) {
   TypeId target_return_type = get_typeID(Type{UnitType{}});
   std::visit(
       Overloaded{[&](hir::Function *func) {
-                   target_return_type = context.type_query(*func->return_type);
+                   target_return_type = context.function_return_type(*func);
                  },
                  [&](hir::Method *method) {
-                   target_return_type = context.type_query(*method->return_type);
+                   target_return_type = context.method_return_type(*method);
                  }},
       *expr.target);
 

@@ -48,6 +48,7 @@ add_subdirectory(src/span)
 # and create the 'parser' target.
 add_subdirectory(src/parser)
 add_subdirectory(src/semantic)
+add_subdirectory(src/ir3)
 add_subdirectory(cmd)
 
 
@@ -58,7 +59,7 @@ target_include_directories(compiler PRIVATE src)
 # Link the main executable against our new parser library.
 # Because 'parser' has a PUBLIC dependency on 'parsecpp', we no longer
 # need to link parsecpp directly here.
-target_link_libraries(compiler PRIVATE parser semantic)
+target_link_libraries(compiler PRIVATE parser semantic ir3)
 
 
 if(BUILD_TESTING)
@@ -84,6 +85,7 @@ if(BUILD_TESTING)
         target_link_libraries(${test_name} PRIVATE
             parser # <<< MODIFY THIS LINE (replaces parsecpp)
             semantic
+            ir3
             gtest_main
             compiler_tests_properties
         )
