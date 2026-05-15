@@ -812,12 +812,17 @@ private:
                     return lower_unary(unary, type);
                 },
                 [&](const hir::BinaryOp& binary) {
-                    return lower_binary(binary);
+                    return lower_binary(binary, type);
                 },
                 [&](const hir::Cast& cast) {
                     auto input = lower_value(*cast.expr);
                     auto result = new_value(*klass);
-                    emit(Cast{.result = result, .operand = input.id});
+                    emit(Cast{
+                        .result = result,
+                        .operand = input.id,
+                        .source_type = expr_type(*cast.expr),
+                        .dest_type = type,
+                    });
                     return result;
                 },
                 [&](const hir::Call& call) {
@@ -908,13 +913,23 @@ private:
         case hir::UnaryOp::NOT: {
             auto input = lower_value(*unary.rhs);
             auto result = new_value(SsaClass::I32);
-            emit(Unary{.result = result, .op = UnaryOp::Not, .operand = input.id});
+            emit(Unary{
+                .result = result,
+                .op = UnaryOp::Not,
+                .operand = input.id,
+                .host_type = result_type,
+            });
             return result;
         }
         case hir::UnaryOp::NEGATE: {
             auto input = lower_value(*unary.rhs);
             auto result = new_value(SsaClass::I32);
-            emit(Unary{.result = result, .op = UnaryOp::Neg, .operand = input.id});
+            emit(Unary{
+                .result = result,
+                .op = UnaryOp::Neg,
+                .operand = input.id,
+                .host_type = result_type,
+            });
             return result;
         }
         case hir::UnaryOp::DEREFERENCE:
@@ -935,7 +950,7 @@ private:
         throw LoweringError("unknown unary operator");
     }
 
-    Value lower_binary(const hir::BinaryOp& binary) {
+    Value lower_binary(const hir::BinaryOp& binary, semantic::TypeId result_type) {
         if (binary.op == hir::BinaryOp::AND || binary.op == hir::BinaryOp::OR) {
             return lower_short_circuit(binary);
         }
@@ -947,6 +962,8 @@ private:
             .op = lower_binary_op(binary.op),
             .lhs = lhs.id,
             .rhs = rhs.id,
+            .result_type = result_type,
+            .operand_type = expr_type(*binary.lhs),
         });
         return result;
     }
@@ -1544,6 +1561,9 @@ private:
             .op = BinaryOp::Lt,
             .lhs = index.id,
             .rhs = bound.id,
+            .result_type = semantic::get_typeID(
+                semantic::Type{semantic::PrimitiveKind::BOOL}),
+            .operand_type = index_type,
         });
         terminate(Branch{
             .condition = should_continue.id,
@@ -1568,6 +1588,8 @@ private:
             .op = BinaryOp::Add,
             .lhs = body_index.id,
             .rhs = one.id,
+            .result_type = index_type,
+            .operand_type = index_type,
         });
         store_value(index_slot, next.id);
         terminate(Jump{.target = condition});

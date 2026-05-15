@@ -126,6 +126,7 @@ struct Unary {
     Value result;
     UnaryOp op;
     ValueId operand;
+    semantic::TypeId host_type = semantic::invalid_type_id;
 };
 
 struct Binary {
@@ -133,11 +134,15 @@ struct Binary {
     BinaryOp op;
     ValueId lhs;
     ValueId rhs;
+    semantic::TypeId result_type = semantic::invalid_type_id;
+    semantic::TypeId operand_type = semantic::invalid_type_id;
 };
 
 struct Cast {
     Value result;
     ValueId operand;
+    semantic::TypeId source_type = semantic::invalid_type_id;
+    semantic::TypeId dest_type = semantic::invalid_type_id;
 };
 
 struct Call {
