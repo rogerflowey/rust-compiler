@@ -49,6 +49,7 @@ add_subdirectory(src/span)
 add_subdirectory(src/parser)
 add_subdirectory(src/semantic)
 add_subdirectory(src/ir3)
+add_subdirectory(src/riscv)
 add_subdirectory(cmd)
 
 
@@ -86,6 +87,7 @@ if(BUILD_TESTING)
             parser # <<< MODIFY THIS LINE (replaces parsecpp)
             semantic
             ir3
+            riscv
             gtest_main
             compiler_tests_properties
         )
