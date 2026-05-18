@@ -48,3 +48,19 @@ set_property(TARGET llvm_pipeline PROPERTY CXX_STANDARD 23)
 set_property(TARGET llvm_pipeline PROPERTY CXX_STANDARD_REQUIRED ON)
 
 target_compile_options(llvm_pipeline PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(riscv_pipeline riscv_pipeline.cpp)
+
+target_include_directories(riscv_pipeline PRIVATE .. src)
+
+target_link_libraries(riscv_pipeline PRIVATE
+    parser
+    semantic
+    ir3
+    riscv
+)
+
+set_property(TARGET riscv_pipeline PROPERTY CXX_STANDARD 23)
+set_property(TARGET riscv_pipeline PROPERTY CXX_STANDARD_REQUIRED ON)
+
+target_compile_options(riscv_pipeline PRIVATE -Wall -Wextra -Wpedantic)
