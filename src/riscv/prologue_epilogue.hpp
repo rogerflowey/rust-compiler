@@ -8,7 +8,7 @@
 namespace riscv {
 
 struct PrologueEpiloguePlan {
-    bool needs_frame_pointer = false;
+    FrameBase frame_base = FrameBase::None;
     std::vector<PhysicalRegister> saved_registers;
 };
 

@@ -17,6 +17,20 @@ CfgInfo compute_cfg(const MachineFunction& fn) {
         info.index_of.emplace(fn.blocks[i].id, i);
     }
 
+    auto add_edge = [&](std::size_t pred_index, BlockId succ_id) {
+        const std::size_t succ_index = info.index_of.at(succ_id);
+        if (std::find(info.successors[pred_index].begin(),
+                      info.successors[pred_index].end(),
+                      succ_id) == info.successors[pred_index].end()) {
+            info.successors[pred_index].push_back(succ_id);
+        }
+        if (std::find(info.predecessors[succ_index].begin(),
+                      info.predecessors[succ_index].end(),
+                      fn.blocks[pred_index].id) == info.predecessors[succ_index].end()) {
+            info.predecessors[succ_index].push_back(fn.blocks[pred_index].id);
+        }
+    };
+
     for (std::size_t i = 0; i < n; ++i) {
         const auto& block = fn.blocks[i];
         if (!block.terminator) {
@@ -26,16 +40,10 @@ CfgInfo compute_cfg(const MachineFunction& fn) {
             [&](const auto& term) {
                 using T = std::decay_t<decltype(term)>;
                 if constexpr (std::is_same_v<T, Jump>) {
-                    std::size_t target = info.index_of.at(term.target);
-                    info.successors[i].push_back(term.target);
-                    info.predecessors[target].push_back(block.id);
+                    add_edge(i, term.target);
                 } else if constexpr (std::is_same_v<T, BranchNonZero>) {
-                    std::size_t then_idx = info.index_of.at(term.then_block);
-                    std::size_t else_idx = info.index_of.at(term.else_block);
-                    info.successors[i].push_back(term.then_block);
-                    info.successors[i].push_back(term.else_block);
-                    info.predecessors[then_idx].push_back(block.id);
-                    info.predecessors[else_idx].push_back(block.id);
+                    add_edge(i, term.then_block);
+                    add_edge(i, term.else_block);
                 }
                 // Return and Unreachable have no successors
             },
@@ -48,24 +56,31 @@ CfgInfo compute_cfg(const MachineFunction& fn) {
     postorder.reserve(n);
 
     std::size_t entry_idx = info.index_of.at(fn.entry_block);
+    auto dfs_from = [&](std::size_t root) {
+        std::vector<std::pair<std::size_t, std::size_t>> stack;
+        stack.push_back({root, 0});
+        visited[root] = true;
 
-    // Iterative DFS
-    std::vector<std::pair<std::size_t, std::size_t>> stack; // (block_idx, succ_cursor)
-    stack.push_back({entry_idx, 0});
-    visited[entry_idx] = true;
-
-    while (!stack.empty()) {
-        auto& [idx, cursor] = stack.back();
-        if (cursor < info.successors[idx].size()) {
-            std::size_t succ_idx = info.index_of.at(info.successors[idx][cursor]);
-            ++cursor;
-            if (!visited[succ_idx]) {
-                visited[succ_idx] = true;
-                stack.push_back({succ_idx, 0});
+        while (!stack.empty()) {
+            auto& [idx, cursor] = stack.back();
+            if (cursor < info.successors[idx].size()) {
+                const std::size_t succ_idx = info.index_of.at(info.successors[idx][cursor]);
+                ++cursor;
+                if (!visited[succ_idx]) {
+                    visited[succ_idx] = true;
+                    stack.push_back({succ_idx, 0});
+                }
+            } else {
+                postorder.push_back(idx);
+                stack.pop_back();
             }
-        } else {
-            postorder.push_back(idx);
-            stack.pop_back();
+        }
+    };
+
+    dfs_from(entry_idx);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (!visited[i]) {
+            dfs_from(i);
         }
     }
 

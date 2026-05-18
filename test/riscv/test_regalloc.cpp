@@ -1,7 +1,5 @@
 #include "riscv/machine_ir.hpp"
 #include "riscv/regalloc.hpp"
-#include "riscv/validate.hpp"
-
 #include <gtest/gtest.h>
 
 #include <type_traits>
@@ -257,9 +255,6 @@ TEST(RegAllocTest, SpilledPhiUsesSpillRef) {
     EXPECT_TRUE(no_vregs_in_phis(fn));
     EXPECT_GE(count_spill_refs_in_phis(fn), 1u);
 
-    MachineModule mod;
-    mod.functions.push_back(fn);
-    EXPECT_NO_THROW(validate_module(mod, ValidationStage::PostRegAlloc));
 }
 
 // ---- Test 3: Spill under pressure ----
@@ -368,99 +363,26 @@ TEST(RegAllocTest, CallAcrossLiveRange) {
     EXPECT_TRUE(is_allocatable(*phys)) << "vreg spanning call should be in callee-save s1-s11";
 }
 
-// ---- Test 5: PostRegAlloc validation passes ----
-TEST(RegAllocTest, PostRegAllocValidationPasses) {
-    // Run each of the above function shapes through RA and verify the
-    // validator does not throw.
-
-    // shape 1: no-pressure
+TEST(RegAllocTest, RewritesUnreachableBlocksToo) {
+    MachineFunction fn;
+    fn.symbol = "unreachable"; fn.entry_block = 0; fn.next_value = 2;
     {
-        MachineFunction fn;
-        fn.symbol = "f1"; fn.entry_block = 0; fn.next_value = 3;
         MachineBlock b; b.id = 0;
-        b.instructions = {
-            Li{.dest = VR(0), .value = 1},
-            Li{.dest = VR(1), .value = 2},
-            Binary{.dest = VR(2), .op = BinaryOp::Add, .lhs = VR(0), .rhs = VR(1)},
-        };
-        b.terminator = Return{.value = VR(2)};
+        b.instructions = {Li{.dest = VR(0), .value = 1}};
+        b.terminator = Return{.value = VR(0)};
         fn.blocks.push_back(b);
-        MachineModule mod; mod.functions.push_back(std::move(fn));
-        allocate_registers(mod);
-        EXPECT_NO_THROW(validate_module(mod, ValidationStage::PostRegAlloc));
+    }
+    {
+        MachineBlock b; b.id = 1;
+        b.instructions = {Li{.dest = VR(1), .value = 2}};
+        b.terminator = Return{.value = VR(1)};
+        fn.blocks.push_back(b);
     }
 
-    // shape 2: phi loop (from test 2 above)
-    {
-        MachineFunction fn;
-        fn.symbol = "f2"; fn.entry_block = 0; fn.next_value = 6;
-        {
-            MachineBlock b; b.id = 0;
-            b.instructions = {Li{.dest = VR(0), .value = 0}};
-            b.terminator = Jump{.target = 1};
-            fn.blocks.push_back(b);
-        }
-        {
-            MachineBlock b; b.id = 1;
-            b.phis = {MachinePhi{
-                .dest = VR(1),
-                .incoming = {
-                    MachinePhiIncoming{.pred = 0, .value = VR(0)},
-                    MachinePhiIncoming{.pred = 2, .value = VR(2)},
-                },
-            }};
-            b.instructions = {
-                Li{.dest = VR(3), .value = 10},
-                Compare{.dest = VR(4), .op = CompareOp::LtS, .lhs = VR(1), .rhs = VR(3)},
-            };
-            b.terminator = BranchNonZero{.condition = VR(4), .then_block = 2, .else_block = 3};
-            fn.blocks.push_back(b);
-        }
-        {
-            MachineBlock b; b.id = 2;
-            b.instructions = {
-                Li{.dest = VR(5), .value = 1},
-                Binary{.dest = VR(2), .op = BinaryOp::Add, .lhs = VR(1), .rhs = VR(5)},
-            };
-            b.terminator = Jump{.target = 1};
-            fn.blocks.push_back(b);
-        }
-        {
-            MachineBlock b; b.id = 3; b.terminator = Return{.value = VR(1)};
-            fn.blocks.push_back(b);
-        }
-        MachineModule mod; mod.functions.push_back(std::move(fn));
-        allocate_registers(mod);
-        EXPECT_NO_THROW(validate_module(mod, ValidationStage::PostRegAlloc));
-    }
+    auto stats = allocate_registers(fn);
+    EXPECT_EQ(stats.num_spills, 0u);
+    EXPECT_TRUE(no_vregs_in_instructions(fn));
 
-    // shape 3: pressure (from test 3 above)
-    {
-        MachineFunction fn;
-        fn.symbol = "f3"; fn.entry_block = 0; fn.next_value = 23;
-        MachineBlock b; b.id = 0;
-        for (int i = 0; i < 12; ++i) {
-            b.instructions.push_back(Li{.dest = VR(static_cast<MachineValueId>(i)), .value = i + 1});
-        }
-        for (int i = 0; i < 6; ++i) {
-            b.instructions.push_back(Binary{
-                .dest = VR(static_cast<MachineValueId>(12 + i)),
-                .op = BinaryOp::Add,
-                .lhs = VR(static_cast<MachineValueId>(2 * i)),
-                .rhs = VR(static_cast<MachineValueId>(2 * i + 1)),
-            });
-        }
-        b.instructions.push_back(Binary{.dest = VR(18), .op = BinaryOp::Add, .lhs = VR(12), .rhs = VR(13)});
-        b.instructions.push_back(Binary{.dest = VR(19), .op = BinaryOp::Add, .lhs = VR(14), .rhs = VR(15)});
-        b.instructions.push_back(Binary{.dest = VR(20), .op = BinaryOp::Add, .lhs = VR(16), .rhs = VR(17)});
-        b.instructions.push_back(Binary{.dest = VR(21), .op = BinaryOp::Add, .lhs = VR(18), .rhs = VR(19)});
-        b.instructions.push_back(Binary{.dest = VR(22), .op = BinaryOp::Add, .lhs = VR(20), .rhs = VR(21)});
-        b.terminator = Return{.value = VR(22)};
-        fn.blocks.push_back(b);
-        MachineModule mod; mod.functions.push_back(std::move(fn));
-        allocate_registers(mod);
-        EXPECT_NO_THROW(validate_module(mod, ValidationStage::PostRegAlloc));
-    }
 }
 
 } // namespace

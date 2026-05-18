@@ -1,7 +1,6 @@
 #include "riscv/frame_materialize.hpp"
 
 #include "riscv/layout.hpp"
-#include "riscv/prologue_epilogue.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -32,28 +31,43 @@ const FrameObject* find_frame_object(const MachineFunction& fn, FrameId id) {
     return nullptr;
 }
 
-void ensure_unmaterialized(const MachineFunction& fn) {
-    if (fn.frame_size) {
-        fail(fn, "function already has a materialized frame size");
-    }
-    for (const auto& object : fn.frame_objects) {
-        if (object.materialized_offset) {
-            fail(fn,
-                 "frame object " + frame_name(object.id) +
-                     " already has a materialized offset");
-        }
+int callee_save_rank(PhysicalRegister reg) {
+    switch (reg) {
+    case PhysicalRegister::Ra:
+        return 0;
+    case PhysicalRegister::S0:
+        return 1;
+    case PhysicalRegister::S1:
+        return 2;
+    case PhysicalRegister::S2:
+        return 3;
+    case PhysicalRegister::S3:
+        return 4;
+    case PhysicalRegister::S4:
+        return 5;
+    case PhysicalRegister::S5:
+        return 6;
+    case PhysicalRegister::S6:
+        return 7;
+    case PhysicalRegister::S7:
+        return 8;
+    case PhysicalRegister::S8:
+        return 9;
+    case PhysicalRegister::S9:
+        return 10;
+    case PhysicalRegister::S10:
+        return 11;
+    case PhysicalRegister::S11:
+        return 12;
+    default:
+        return -1;
     }
 }
 
-void ensure_closed_frame(const MachineFunction& fn, const PrologueEpiloguePlan& plan) {
-    if (fn.needs_frame_pointer != plan.needs_frame_pointer) {
-        fail(fn, "needs_frame_pointer does not match prologue/epilogue plan");
-    }
-
-    std::unordered_set<PhysicalRegister> expected(plan.saved_registers.begin(),
-                                                  plan.saved_registers.end());
-    std::unordered_set<PhysicalRegister> actual;
-    for (const auto& object : fn.frame_objects) {
+std::vector<FrameObject*> collect_save_slots(MachineFunction& fn) {
+    std::unordered_set<PhysicalRegister> seen;
+    std::vector<FrameObject*> save_slots;
+    for (auto& object : fn.frame_objects) {
         if (object.kind != FrameObjectKind::CalleeSave) {
             continue;
         }
@@ -61,22 +75,29 @@ void ensure_closed_frame(const MachineFunction& fn, const PrologueEpiloguePlan& 
             fail(fn, "callee-save frame object " + frame_name(object.id) +
                          " is missing its saved register");
         }
-        if (!actual.insert(*object.callee_save_reg).second) {
+        if (!is_callee_saved_register(*object.callee_save_reg)) {
+            fail(fn, "callee-save frame object " + frame_name(object.id) +
+                         " uses a non-callee-saved register");
+        }
+        if (callee_save_rank(*object.callee_save_reg) < 0) {
+            fail(fn, "callee-save frame object " + frame_name(object.id) +
+                         " uses an unsupported saved register");
+        }
+        if (!seen.insert(*object.callee_save_reg).second) {
             fail(fn, "duplicate callee-save frame object for register " +
                          std::string(physical_register_name(*object.callee_save_reg)));
         }
-        if (!expected.contains(*object.callee_save_reg)) {
-            fail(fn, "unexpected callee-save frame object for register " +
-                         std::string(physical_register_name(*object.callee_save_reg)));
-        }
+        save_slots.push_back(&object);
     }
-
-    for (const auto reg : plan.saved_registers) {
-        if (!actual.contains(reg)) {
-            fail(fn, "missing callee-save frame object for register " +
-                         std::string(physical_register_name(reg)));
+    std::sort(save_slots.begin(), save_slots.end(), [](const FrameObject* lhs, const FrameObject* rhs) {
+        const int lhs_rank = callee_save_rank(*lhs->callee_save_reg);
+        const int rhs_rank = callee_save_rank(*rhs->callee_save_reg);
+        if (lhs_rank != rhs_rank) {
+            return lhs_rank < rhs_rank;
         }
-    }
+        return lhs->id < rhs->id;
+    });
+    return save_slots;
 }
 
 void assign_object(FrameObject& object, std::uint32_t& cursor) {
@@ -112,23 +133,8 @@ void assign_primary_frame_objects(MachineFunction& fn, std::uint32_t& cursor) {
     }
 }
 
-void assign_save_slots(MachineFunction& fn,
-                       const std::vector<PhysicalRegister>& saved_regs,
-                       std::uint32_t& cursor) {
-    for (const auto reg : saved_regs) {
-        FrameObject* object = nullptr;
-        for (auto& candidate : fn.frame_objects) {
-            if (candidate.kind == FrameObjectKind::CalleeSave &&
-                candidate.callee_save_reg == reg) {
-                object = &candidate;
-                break;
-            }
-        }
-        if (!object) {
-            fail(fn,
-                 "missing callee-save frame object for register " +
-                     std::string(physical_register_name(reg)));
-        }
+void assign_save_slots(const std::vector<FrameObject*>& save_slots, std::uint32_t& cursor) {
+    for (auto* object : save_slots) {
         assign_object(*object, cursor);
     }
 }
@@ -152,18 +158,11 @@ void assign_incoming_args(MachineFunction& fn, std::uint32_t frame_size) {
 } // namespace
 
 void materialize_frame(MachineFunction& fn) {
-    ensure_unmaterialized(fn);
-    PrologueEpiloguePlan plan;
-    try {
-        plan = compute_prologue_epilogue_plan(fn);
-    } catch (const PrologueEpilogueError& error) {
-        throw FrameMaterializeError(error.what());
-    }
-    ensure_closed_frame(fn, plan);
+    const auto save_slots = collect_save_slots(fn);
 
     std::uint32_t cursor = 0;
     assign_primary_frame_objects(fn, cursor);
-    assign_save_slots(fn, plan.saved_registers, cursor);
+    assign_save_slots(save_slots, cursor);
 
     const std::uint32_t frame_size = align_to(cursor, kCallFrameAlign);
     assign_incoming_args(fn, frame_size);

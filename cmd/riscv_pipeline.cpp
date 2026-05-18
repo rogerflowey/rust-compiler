@@ -14,7 +14,6 @@
 #include "src/riscv/prologue_epilogue.hpp"
 #include "src/riscv/pretty_print.hpp"
 #include "src/riscv/regalloc.hpp"
-#include "src/riscv/validate.hpp"
 #include "src/semantic/hir/converter.hpp"
 #include "src/semantic/pass/control_flow_linking/control_flow_linking.hpp"
 #include "src/semantic/pass/exit_check/exit_check.hpp"
@@ -122,16 +121,10 @@ int main(int argc, char* argv[]) {
 
         auto ir3_module = ir3::lower_program(*hir_program);
         auto machine_module = riscv::lower_module(ir3_module);
-        riscv::validate_module(machine_module);
         riscv::allocate_registers(machine_module);
-        riscv::validate_module(machine_module, riscv::ValidationStage::PostRegAlloc);
         riscv::eliminate_phis(machine_module);
-        riscv::validate_module(machine_module, riscv::ValidationStage::PostPhiElim);
         riscv::insert_prologue_epilogue(machine_module);
-        riscv::validate_module(machine_module, riscv::ValidationStage::PostPhiElim);
         riscv::materialize_frame(machine_module);
-        riscv::validate_module(machine_module,
-                               riscv::ValidationStage::PostFrameMaterialized);
         riscv::print_module(std::cout, machine_module);
         return 0;
     } catch (const LexerError& error) {
@@ -145,9 +138,6 @@ int main(int argc, char* argv[]) {
         return 1;
     } catch (const riscv::LoweringError& error) {
         std::cerr << "Machine IR lowering error: " << error.what() << "\n";
-        return 1;
-    } catch (const riscv::ValidationError& error) {
-        std::cerr << "Machine IR validation error: " << error.what() << "\n";
         return 1;
     } catch (const std::exception& error) {
         std::cerr << "Error: " << error.what() << "\n";

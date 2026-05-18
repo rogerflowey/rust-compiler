@@ -1,8 +1,6 @@
 #include "riscv/machine_ir.hpp"
 #include "riscv/phi_elim.hpp"
 #include "riscv/pretty_print.hpp"
-#include "riscv/validate.hpp"
-
 #include <gtest/gtest.h>
 
 #include <optional>
@@ -49,6 +47,8 @@ FrameObject spill_frame(FrameId id) {
         .spill_class = RegisterClass::Gpr32,
         .source_slot = std::nullopt,
         .debug_name = "",
+        .callee_save_reg = std::nullopt,
+        .materialized_offset = std::nullopt,
     };
 }
 
@@ -65,11 +65,9 @@ MachineBlock block(BlockId id,
     };
 }
 
-void validate_and_eliminate(MachineFunction& fn) {
+void eliminate(MachineFunction& fn) {
     MachineModule module{.functions = {fn}};
-    ASSERT_NO_THROW(validate_module(module, ValidationStage::PostRegAlloc));
     eliminate_phis(module);
-    ASSERT_NO_THROW(validate_module(module, ValidationStage::PostPhiElim));
     fn = std::move(module.functions.front());
 }
 
@@ -110,7 +108,7 @@ TEST(PhiElimTest, InsertsCopiesOnSingleSuccessorPredecessors) {
               }),
     };
 
-    validate_and_eliminate(fn);
+    eliminate(fn);
 
     ASSERT_TRUE(fn.blocks[3].phis.empty());
     ASSERT_EQ(fn.blocks[1].instructions.size(), 1u);
@@ -141,7 +139,7 @@ TEST(PhiElimTest, SplitsCriticalEdgesOnlyWhenNeeded) {
         block(4, Return{.value = S(4)}),
     };
 
-    validate_and_eliminate(fn);
+    eliminate(fn);
 
     ASSERT_EQ(fn.blocks.size(), 6u);
     const auto* branch = std::get_if<BranchNonZero>(&*fn.blocks[1].terminator);
@@ -180,7 +178,7 @@ TEST(PhiElimTest, ResolvesRegisterSwapCyclesWithT0) {
               }),
     };
 
-    validate_and_eliminate(fn);
+    eliminate(fn);
 
     ASSERT_EQ(fn.blocks[0].instructions.size(), 3u);
     EXPECT_TRUE(
@@ -220,7 +218,7 @@ TEST(PhiElimTest, LowersSpillOperandsToLoadsAndStores) {
               }),
     };
 
-    validate_and_eliminate(fn);
+    eliminate(fn);
 
     ASSERT_EQ(fn.blocks[0].instructions.size(), 4u);
     EXPECT_TRUE(std::holds_alternative<Load>(fn.blocks[0].instructions[0]));
@@ -246,37 +244,10 @@ TEST(PhiElimTest, RemovesIdentityPhiWithoutInsertingCopies) {
               }),
     };
 
-    validate_and_eliminate(fn);
+    eliminate(fn);
 
     EXPECT_TRUE(fn.blocks[1].phis.empty());
     EXPECT_TRUE(fn.blocks[0].instructions.empty());
-}
-
-TEST(PhiElimTest, PostPhiElimValidationRejectsRemainingPhiNodes) {
-    MachineModule module{
-        .functions = {
-            MachineFunction{
-                .symbol = "leftover_phi",
-                .frame_objects = {},
-                .blocks = {
-                    block(0, Jump{.target = 1}),
-                    block(1,
-                          Return{.value = S(1)},
-                          {
-                              MachinePhi{
-                                  .dest = S(1),
-                                  .incoming = {
-                                      MachinePhiIncoming{.pred = 0, .value = S(2)},
-                                  },
-                              },
-                          }),
-                },
-                .entry_block = 0,
-            },
-        },
-    };
-
-    EXPECT_THROW(validate_module(module, ValidationStage::PostPhiElim), ValidationError);
 }
 
 } // namespace

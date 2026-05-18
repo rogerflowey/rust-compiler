@@ -66,11 +66,11 @@ IR3
 
 - Run after phi elimination and before frame materialization.
 - Compute:
-  - `needs_frame_pointer`
+  - `frame_base`
   - saved-register set
 - Save policy:
   - save `ra` if the function contains any call
-  - save `s0` if the function needs a frame pointer
+  - save `s0` if `frame_base == S0`
   - save each used allocatable `s1..s11`
 - Effects:
   - append missing `CalleeSave` frame objects

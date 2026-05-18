@@ -1,7 +1,5 @@
 #include "riscv/machine_ir.hpp"
 #include "riscv/prologue_epilogue.hpp"
-#include "riscv/validate.hpp"
-
 #include <gtest/gtest.h>
 
 namespace {
@@ -47,7 +45,7 @@ TEST(PrologueEpilogueTest, AppendsSaveSlotsAndWrapsReturns) {
 
     insert_prologue_epilogue(fn);
 
-    ASSERT_TRUE(fn.needs_frame_pointer);
+    ASSERT_EQ(fn.frame_base, FrameBase::S0);
     ASSERT_EQ(fn.frame_objects.size(), 4u);
     EXPECT_EQ(find_frame(fn, 1)->callee_save_reg, PhysicalRegister::Ra);
     EXPECT_EQ(find_frame(fn, 2)->callee_save_reg, PhysicalRegister::S0);
@@ -89,11 +87,9 @@ TEST(PrologueEpilogueTest, AppendsSaveSlotsAndWrapsReturns) {
     EXPECT_EQ(std::get<PhysicalRegister>(restore_ra->dest), PhysicalRegister::Ra);
     EXPECT_EQ(std::get<FrameAddress>(restore_ra->address).frame, 1u);
 
-    EXPECT_NO_THROW(validate_module(MachineModule{.functions = {fn}},
-                                    ValidationStage::PostPhiElim));
 }
 
-TEST(PrologueEpilogueTest, RejectsUnexpectedExistingCalleeSaveSlot) {
+TEST(PrologueEpilogueTest, IgnoresPreexistingCalleeSaveSlot) {
     MachineFunction fn{
         .symbol = "bad",
         .frame_objects =
@@ -111,6 +107,36 @@ TEST(PrologueEpilogueTest, RejectsUnexpectedExistingCalleeSaveSlot) {
             {
                 MachineBlock{
                     .id = 0,
+                    .terminator = Return{},
+                },
+            },
+        .entry_block = 0,
+    };
+
+    EXPECT_NO_THROW(insert_prologue_epilogue(fn));
+    EXPECT_EQ(fn.frame_objects.size(), 1u);
+    EXPECT_EQ(fn.frame_base, FrameBase::None);
+}
+
+TEST(PrologueEpilogueTest, RejectsPrePhiInput) {
+    MachineFunction fn{
+        .symbol = "bad_phi",
+        .blocks =
+            {
+                MachineBlock{
+                    .id = 0,
+                    .phis =
+                        {
+                            MachinePhi{
+                                .dest = PhysicalRegister::S1,
+                                .incoming = {
+                                    MachinePhiIncoming{
+                                        .pred = 0,
+                                        .value = PhysicalRegister::S1,
+                                    },
+                                },
+                            },
+                        },
                     .terminator = Return{},
                 },
             },

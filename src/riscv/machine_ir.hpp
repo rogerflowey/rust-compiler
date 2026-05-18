@@ -53,6 +53,8 @@ enum class PhysicalRegister {
     A7,
 };
 
+enum class FrameBase { None, S0 };
+
 enum class FrameObjectKind { LocalSlot, IncomingArg, OutgoingArg, Spill, CalleeSave };
 
 enum class BinaryOp {
@@ -200,8 +202,8 @@ struct MachineFunction {
     std::vector<MachineBlock> blocks;
     BlockId entry_block = 0;
     MachineValueId next_value = 0;
+    std::optional<FrameBase> frame_base;
     std::optional<std::uint32_t> frame_size;
-    bool needs_frame_pointer = false;
 };
 
 struct MachineModule {

@@ -179,6 +179,16 @@ const char* compare_name(CompareOp op) {
     return "<compare>";
 }
 
+const char* frame_base_name(FrameBase base) {
+    switch (base) {
+    case FrameBase::None:
+        return "none";
+    case FrameBase::S0:
+        return "s0";
+    }
+    return "<frame-base>";
+}
+
 std::string address_name(const Address& address) {
     return std::visit(
         [](const auto& value) -> std::string {
@@ -268,8 +278,10 @@ void print_function(std::ostream& out, const MachineFunction& function) {
     out << "mfn @" << function.symbol << "\n";
     out << "frame:";
     if (function.frame_size) {
-        out << " size " << *function.frame_size << " fp "
-            << (function.needs_frame_pointer ? "yes" : "no");
+        out << " size " << *function.frame_size;
+        if (function.frame_base) {
+            out << " base " << frame_base_name(*function.frame_base);
+        }
     }
     out << "\n";
     for (const auto& object : function.frame_objects) {

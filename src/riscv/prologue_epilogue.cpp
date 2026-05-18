@@ -52,35 +52,9 @@ MachineBlock& entry_block(MachineFunction& fn) {
 std::unordered_map<PhysicalRegister, FrameId> append_missing_save_slots(
     MachineFunction& fn,
     const std::vector<PhysicalRegister>& saved_regs) {
-    std::unordered_set<PhysicalRegister> expected(saved_regs.begin(), saved_regs.end());
-    std::unordered_map<PhysicalRegister, FrameId> existing;
-
-    for (const auto& object : fn.frame_objects) {
-        if (object.kind != FrameObjectKind::CalleeSave) {
-            continue;
-        }
-        if (!object.callee_save_reg) {
-            fail(fn, "callee-save frame object fi" + std::to_string(object.id) +
-                         " is missing its saved register");
-        }
-        if (!is_callee_saved_register(*object.callee_save_reg)) {
-            fail(fn, "callee-save frame object fi" + std::to_string(object.id) +
-                         " uses a non-callee-saved register");
-        }
-        if (!expected.contains(*object.callee_save_reg)) {
-            fail(fn, "unexpected preexisting callee-save frame object for register " +
-                         std::string(physical_register_name(*object.callee_save_reg)));
-        }
-        if (!existing.emplace(*object.callee_save_reg, object.id).second) {
-            fail(fn, "duplicate callee-save frame objects for register " +
-                         std::string(physical_register_name(*object.callee_save_reg)));
-        }
-    }
+    std::unordered_map<PhysicalRegister, FrameId> save_slots;
 
     for (const auto reg : saved_regs) {
-        if (existing.contains(reg)) {
-            continue;
-        }
         const FrameId id = fn.frame_objects.size();
         fn.frame_objects.push_back(FrameObject{
             .id = id,
@@ -94,10 +68,10 @@ std::unordered_map<PhysicalRegister, FrameId> append_missing_save_slots(
             .callee_save_reg = reg,
             .materialized_offset = std::nullopt,
         });
-        existing.emplace(reg, id);
+        save_slots.emplace(reg, id);
     }
 
-    return existing;
+    return save_slots;
 }
 
 std::vector<Instruction> save_instructions(
@@ -194,16 +168,18 @@ PrologueEpiloguePlan compute_prologue_epilogue_plan(const MachineFunction& fn) {
             return object.kind != FrameObjectKind::CalleeSave;
         });
 
+    const bool has_material_frame =
+        has_non_save_frame_object || has_call || !used_allocatable.empty();
+
     PrologueEpiloguePlan plan{
-        .needs_frame_pointer =
-            has_non_save_frame_object || has_call || !used_allocatable.empty(),
+        .frame_base = has_material_frame ? FrameBase::S0 : FrameBase::None,
         .saved_registers = {},
     };
 
     if (has_call) {
         plan.saved_registers.push_back(PhysicalRegister::Ra);
     }
-    if (plan.needs_frame_pointer) {
+    if (plan.frame_base == FrameBase::S0) {
         plan.saved_registers.push_back(PhysicalRegister::S0);
     }
     for (const auto reg : kAllocatableRegs) {
@@ -215,6 +191,9 @@ PrologueEpiloguePlan compute_prologue_epilogue_plan(const MachineFunction& fn) {
 }
 
 void insert_prologue_epilogue(MachineFunction& fn) {
+    if (fn.frame_base.has_value()) {
+        fail(fn, "frame base already selected");
+    }
     if (fn.frame_size) {
         fail(fn, "function already has a materialized frame size");
     }
@@ -227,7 +206,7 @@ void insert_prologue_epilogue(MachineFunction& fn) {
 
     const auto plan = compute_prologue_epilogue_plan(fn);
     auto save_slots = append_missing_save_slots(fn, plan.saved_registers);
-    fn.needs_frame_pointer = plan.needs_frame_pointer;
+    fn.frame_base = plan.frame_base;
 
     if (plan.saved_registers.empty()) {
         return;

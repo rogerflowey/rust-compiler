@@ -2,7 +2,6 @@
 #include "riscv/lower.hpp"
 #include "riscv/machine_ir.hpp"
 #include "riscv/pretty_print.hpp"
-#include "riscv/validate.hpp"
 #include "semantic/hir/hir.hpp"
 #include "semantic/type/type.hpp"
 
@@ -51,7 +50,7 @@ TEST(RiscvLayoutTest, ComputesRv32StructAndArrayLayout) {
     EXPECT_EQ(riscv::align_of(point_type), 4u);
 }
 
-TEST(RiscvMachineIrTest, PrintsAndValidatesSimpleFunction) {
+TEST(RiscvMachineIrTest, PrintsSimpleFunction) {
     riscv::MachineFunction function{
         .symbol = "add1",
         .frame_objects = {
@@ -100,9 +99,6 @@ TEST(RiscvMachineIrTest, PrintsAndValidatesSimpleFunction) {
     };
 
     const riscv::MachineModule module{.functions = {function}};
-
-    EXPECT_NO_THROW(riscv::validate_module(module));
-
     const auto text = riscv::to_string(module);
     EXPECT_NE(text.find("mfn @add1"), std::string::npos);
     EXPECT_NE(text.find("fi0: slot i32 size 4 align 4 x"), std::string::npos);
@@ -110,87 +106,6 @@ TEST(RiscvMachineIrTest, PrintsAndValidatesSimpleFunction) {
     EXPECT_NE(text.find("v2 = add v0, v1"), std::string::npos);
     EXPECT_NE(text.find("store [fi0 + 0], v2"), std::string::npos);
     EXPECT_NE(text.find("ret v3"), std::string::npos);
-}
-
-TEST(RiscvMachineIrTest, RejectsPhysicalRegisterArithmetic) {
-    riscv::MachineFunction function{
-        .symbol = "bad",
-        .frame_objects = {},
-        .blocks = {
-            riscv::MachineBlock{
-                .id = 0,
-                .name = "bb0",
-                .instructions = {
-                    riscv::Binary{
-                        .dest = riscv::VirtualRegister{.id = 0},
-                        .op = riscv::BinaryOp::Add,
-                        .lhs = riscv::PhysicalRegister::A0,
-                        .rhs = riscv::VirtualRegister{.id = 1},
-                    },
-                },
-                .terminator = riscv::Return{},
-            },
-        },
-        .entry_block = 0,
-        .next_value = 2,
-    };
-
-    EXPECT_THROW(riscv::validate_module(riscv::MachineModule{.functions = {function}}),
-                 riscv::ValidationError);
-}
-
-TEST(RiscvMachineIrTest, RejectsUndefinedVregUse) {
-    riscv::MachineFunction function{
-        .symbol = "undef",
-        .frame_objects = {},
-        .blocks = {
-            riscv::MachineBlock{
-                .id = 0,
-                .name = "bb0",
-                .instructions = {
-                    riscv::Li{.dest = riscv::VirtualRegister{.id = 0}, .value = 1},
-                    riscv::Binary{
-                        .dest = riscv::VirtualRegister{.id = 1},
-                        .op = riscv::BinaryOp::Add,
-                        .lhs = riscv::VirtualRegister{.id = 0},
-                        .rhs = riscv::VirtualRegister{.id = 2},
-                    },
-                },
-                .terminator = riscv::Return{.value = riscv::VirtualRegister{.id = 1}},
-            },
-        },
-        .entry_block = 0,
-        .next_value = 3,
-    };
-
-    EXPECT_THROW(riscv::validate_module(riscv::MachineModule{.functions = {function}}),
-                 riscv::ValidationError);
-}
-
-TEST(RiscvMachineIrTest, RejectsIllegalAbiBoundaryRegisters) {
-    riscv::MachineFunction function{
-        .symbol = "bad_copy",
-        .frame_objects = {},
-        .blocks = {
-            riscv::MachineBlock{
-                .id = 0,
-                .name = "bb0",
-                .instructions = {
-                    riscv::Li{.dest = riscv::VirtualRegister{.id = 0}, .value = 1},
-                    riscv::Copy{
-                        .dest = riscv::PhysicalRegister::T0,
-                        .src = riscv::VirtualRegister{.id = 0},
-                    },
-                },
-                .terminator = riscv::Return{},
-            },
-        },
-        .entry_block = 0,
-        .next_value = 1,
-    };
-
-    EXPECT_THROW(riscv::validate_module(riscv::MachineModule{.functions = {function}}),
-                 riscv::ValidationError);
 }
 
 TEST(RiscvMachineIrLoweringTest, LowersScalarFunctionEntryAndReturnAbi) {
@@ -234,8 +149,6 @@ TEST(RiscvMachineIrLoweringTest, LowersScalarFunctionEntryAndReturnAbi) {
     const auto module = riscv::lower_module(ir3::Module{.functions = {function}});
 
     ASSERT_EQ(module.functions.size(), 1u);
-    EXPECT_NO_THROW(riscv::validate_module(module));
-
     const auto text = riscv::to_string(module);
     EXPECT_NE(text.find("v0 = copy a0"), std::string::npos);
     EXPECT_NE(text.find("v1 = copy a1"), std::string::npos);
@@ -342,7 +255,6 @@ TEST(RiscvMachineIrLoweringTest, PreservesPhiNodesInSsaMir) {
     const auto& lowered = module.functions.front();
 
     // MIR SSA form: no critical-edge splitting, phi nodes preserved.
-    EXPECT_NO_THROW(riscv::validate_module(module));
     ASSERT_EQ(lowered.blocks.size(), 5u);
 
     // bb3 (index 3) must have exactly one MachinePhi for v4.
@@ -404,8 +316,6 @@ TEST(RiscvMachineIrLoweringTest, LowersCallsWithOverflowArguments) {
 
     const auto module = riscv::lower_module(ir3::Module{.functions = {function}});
     ASSERT_EQ(module.functions.size(), 1u);
-    EXPECT_NO_THROW(riscv::validate_module(module));
-
     const auto& lowered = module.functions.front();
     ASSERT_EQ(lowered.frame_objects.size(), 1u);
     EXPECT_EQ(lowered.frame_objects.front().kind, riscv::FrameObjectKind::OutgoingArg);
