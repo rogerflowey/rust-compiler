@@ -967,6 +967,9 @@ IR3 is intentionally close to machine concerns:
 - explicit address computation through place projection
 - machine-like SSA classes
 
+The concrete v1 backend contract after IR3 is specified in
+[asm.md](./asm.md).
+
 ### Slot Lowering
 
 Each slot typically becomes:
