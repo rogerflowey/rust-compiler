@@ -1,0 +1,6 @@
+fn main() {
+    let lhs: i32 = getInt();
+    let rhs: i32 = getInt();
+    printlnInt(lhs + rhs);
+    exit(0i32);
+}
