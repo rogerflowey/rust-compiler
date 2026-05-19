@@ -1,4 +1,14 @@
-# Machine IR and RV32IM ASM Lowering
+# RV32IM Machine IR Contract
+
+This document is the authoritative target-specific backend contract after IR3.
+It defines the current RV32IM Machine IR, the backend pipeline that consumes
+it, and the invariants later backend passes must preserve.
+
+Related backend notes live next to it:
+
+- [README.md](./README.md) for the backend doc map
+- [regalloc-plan.md](./regalloc-plan.md) for the current allocator milestone
+- [asmir-plan.md](./asmir-plan.md) for the planned assembly-shaped final IR
 
 ## Overview
 
@@ -79,6 +89,14 @@ The first backend hardcodes these assumptions:
 - scalar machine word: 32 bits
 - stack alignment at calls: 16 bytes
 - emitted symbols are ordinary function symbols, not `_start`
+
+Current downstream assumption:
+
+- the emitted asm is consumed by a GNU-style assembler frontend
+- in this checkout, `external/REIMU` is an accepted consumer
+- direct calls may remain as the GNU/REIMU `call symbol` pseudo in final text
+- the downstream assembler/linker is responsible for choosing `jal` when the
+  target fits and `auipc` plus `jalr` when it does not
 
 Builtin/runtime scope for v1:
 
@@ -349,6 +367,14 @@ Rules:
   argument
 - overflow arguments are written into the caller outgoing-arg frame area before
   the call
+
+Current asm-emission note:
+
+- Machine IR `call @foo` lowers to GNU-as-style `call foo` text
+- this backend does not currently expand direct calls into explicit `auipc` +
+  `jalr` pairs before printing
+- that is acceptable for the current toolchain because REIMU's assembler accepts
+  `call` and expands it during assembly/link
 
 ### Memory Copy Helper
 

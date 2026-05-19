@@ -1,7 +1,7 @@
 # Register Allocator: Future Improvements
 
-Companion to `regalloc-plan.md`. This document covers three follow-on
-directions once the v1 linear-scan allocator is stable:
+Companion to [regalloc-plan.md](./regalloc-plan.md). This document covers three
+follow-on directions once the v1 linear-scan allocator is stable:
 
 1. Expand the allocatable pool with caller-saved registers (target: add
    `a0–a6` and `t3–t6`).

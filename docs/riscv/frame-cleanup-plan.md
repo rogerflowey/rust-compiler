@@ -1,5 +1,9 @@
 # RISC-V Frame Cleanup Plan
 
+This note is narrower than [machine-ir.md](./machine-ir.md): it does not
+redefine the whole backend contract. It captures the agreed cleanup direction
+for the frame pipeline inside the existing RV32IM backend.
+
 ## Summary
 
 This note captures the agreed cleanup direction for the current `src/riscv`

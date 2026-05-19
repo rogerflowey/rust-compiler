@@ -5,11 +5,34 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace {
 
 using namespace riscv;
+
+int run_llvm_mc_smoke(const std::string& text, const std::string& stem) {
+    const auto dir = std::filesystem::temp_directory_path();
+    const auto asm_path = dir / (stem + ".s");
+    const auto obj_path = dir / (stem + ".o");
+
+    {
+        std::ofstream out(asm_path);
+        out << text;
+    }
+
+    const auto cmd = "llvm-mc -triple riscv32 -filetype=obj " + asm_path.string() +
+                     " -o " + obj_path.string();
+    const int status = std::system(cmd.c_str());
+
+    std::error_code ec;
+    std::filesystem::remove(asm_path, ec);
+    std::filesystem::remove(obj_path, ec);
+    return status;
+}
 
 TEST(AsmLowerTest, LowersFrameBasedFunctionToStrictAsm) {
     MachineFunction fn{
@@ -191,9 +214,78 @@ TEST(AsmLowerTest, InjectsInlineBuiltinRuntimeHelpersOnDemand) {
     EXPECT_NE(text.find(".globl __rcomp_printlnInt"), std::string::npos);
     EXPECT_NE(text.find(".globl __rcomp_getInt"), std::string::npos);
     EXPECT_NE(text.find(".globl __rcomp_exit"), std::string::npos);
-    EXPECT_NE(text.find("%pcrel_hi(putchar)"), std::string::npos);
-    EXPECT_NE(text.find("%pcrel_hi(getchar)"), std::string::npos);
+    EXPECT_NE(text.find("call __rcomp_printInt"), std::string::npos);
+    EXPECT_NE(text.find("call putchar"), std::string::npos);
+    EXPECT_NE(text.find("call getchar"), std::string::npos);
     EXPECT_NE(text.find("jalr zero, 4(zero)"), std::string::npos);
+}
+
+TEST(AsmLowerTest, LowersLargeFrameAdjustmentsWithoutIllegalAddi) {
+    MachineFunction fn{
+        .symbol = "large_frame",
+        .frame_objects =
+            {
+                FrameObject{
+                    .id = 0,
+                    .kind = FrameObjectKind::LocalSlot,
+                    .size = 4,
+                    .align = 4,
+                    .debug_name = "tmp",
+                    .materialized_offset = 0,
+                },
+            },
+        .blocks =
+            {
+                MachineBlock{
+                    .id = 0,
+                    .instructions =
+                        {
+                            Load{
+                                .dest = PhysicalRegister::A0,
+                                .address = FrameAddress{.frame = 0, .offset = 0},
+                            },
+                        },
+                    .terminator = Return{.value = PhysicalRegister::A0},
+                },
+            },
+        .entry_block = 0,
+        .frame_base = FrameBase::S0,
+        .frame_size = 4096,
+    };
+
+    const auto asmir = to_string(lower_to_asm(MachineModule{.functions = {fn}}));
+    EXPECT_NE(asmir.find("lui t2, 1048575"), std::string::npos);
+    EXPECT_NE(asmir.find("add t2, sp, t2"), std::string::npos);
+    EXPECT_NE(asmir.find("addi sp, t2, 0"), std::string::npos);
+    EXPECT_NE(asmir.find("lui t2, 1"), std::string::npos);
+    EXPECT_EQ(asmir.find("addi sp, sp, -4096"), std::string::npos);
+    EXPECT_EQ(asmir.find("addi sp, sp, 4096"), std::string::npos);
+}
+
+TEST(AsmLowerTest, GeneratedGnuAsParsesWithLlvmMc) {
+    if (std::system("llvm-mc --version > /dev/null 2>&1") != 0) {
+        GTEST_SKIP() << "llvm-mc not available";
+    }
+
+    MachineFunction fn{
+        .symbol = "asm_parse_smoke",
+        .blocks =
+            {
+                MachineBlock{
+                    .id = 0,
+                    .instructions =
+                        {
+                            Call{.callee = "foo"},
+                        },
+                    .terminator = Return{},
+                },
+            },
+        .entry_block = 0,
+        .frame_size = 4096,
+    };
+
+    const auto text = to_gnu_as(lower_to_asm(MachineModule{.functions = {fn}}));
+    EXPECT_EQ(run_llvm_mc_smoke(text, "rcomp_test_asm_lower_smoke"), 0);
 }
 
 } // namespace

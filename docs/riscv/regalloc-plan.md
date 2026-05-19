@@ -6,7 +6,7 @@ centralized analysis layer that this pass and future passes (phi elimination,
 peephole, etc.) will share.
 
 It builds on, and does not contradict, the strategy already committed in
-`docs/ir3/asm.md` §"Register Allocation".
+[machine-ir.md](./machine-ir.md) §"Register Allocation".
 
 ---
 
@@ -169,7 +169,8 @@ Concrete changes:
   every operand is a physical register or an annotated spill-slot, not a
   virtual register.
 
-Also: **define `ret v` semantics**. The example in `asm.md:547` shows
+Also: **define `ret v` semantics**. The example in
+[machine-ir.md](./machine-ir.md) shows
 `ret v3` without an explicit `copy a0, v3`. Two options:
 
 1. Lowering always emits `copy a0, v3; ret a0` (preferred — keeps the ABI
@@ -313,7 +314,8 @@ are common — phi elimination must handle them as a first-class case, not
 an edge case.
 
 **Call sites**: no special handling. The lowering already emits
-`copy a0, vN; ...; call @foo; vM = copy a0` (asm.md:326). The rewriter
+`copy a0, vN; ...; call @foo; vM = copy a0`
+([machine-ir.md](./machine-ir.md)). The rewriter
 replaces vregs with phys regs in those copies. Live ranges that span a
 call cannot collide with `a0–a7` because `a0–a7` are not in the
 allocatable pool — this is the design invariant the conservative pool

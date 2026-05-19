@@ -968,7 +968,7 @@ IR3 is intentionally close to machine concerns:
 - machine-like SSA classes
 
 The concrete v1 backend contract after IR3 is specified in
-[asm.md](./asm.md).
+[../riscv/machine-ir.md](../riscv/machine-ir.md).
 
 ### Slot Lowering
 

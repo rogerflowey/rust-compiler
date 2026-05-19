@@ -93,6 +93,10 @@ struct AsmJalInst {
     std::string target;
 };
 
+struct AsmCallInst {
+    std::string target;
+};
+
 struct AsmJalrInst {
     PhysicalRegister rd = PhysicalRegister::Zero;
     PhysicalRegister base = PhysicalRegister::Zero;
@@ -103,7 +107,8 @@ struct AsmEbreakInst {};
 
 using AsmInst =
     std::variant<AsmRInst, AsmIInst, AsmUInst, AsmLoadInst, AsmStoreInst,
-                 AsmBranchInst, AsmJalInst, AsmJalrInst, AsmEbreakInst>;
+                 AsmBranchInst, AsmJalInst, AsmCallInst, AsmJalrInst,
+                 AsmEbreakInst>;
 
 struct AsmBlock {
     std::string label;

@@ -1,4 +1,9 @@
-# Strict RV32IM AsmIR Plan
+# RV32IM AsmIR Plan
+
+This is a forward-looking design note for adding a final assembly-shaped IR
+after the current Machine IR pipeline. It assumes the Machine IR contract in
+[machine-ir.md](./machine-ir.md) and focuses on what should happen after
+post-RA, post-phi-elim backend cleanup.
 
 ## Summary
 
@@ -113,8 +118,17 @@ IR3
     else is not fallthrough
   - `Return`: jump to shared epilogue when one exists, otherwise direct
     `jalr x0, 0(ra)`
-  - `Call`: strict relocation-bearing call sequence with `auipc` plus `jalr`
+  - `Call`: emit GNU-as-style `call symbol` text and leave `jal` versus
+    `auipc` plus `jalr` selection to the downstream assembler/linker
   - `Unreachable`: `ebreak`
+
+Current accepted toolchain note:
+
+- this repo currently treats REIMU as an accepted downstream assembler consumer
+- REIMU parses `call symbol` directly and lowers it to either `jal` or
+  `auipc` plus `jalr` as needed
+- if we later require a strictly instruction-for-instruction AsmIR with no
+  assembler pseudos, call lowering must move back into this backend
 
 ## Temp Register Policy
 
@@ -135,7 +149,8 @@ IR3
   - ordered blocks
   - labels
   - symbols and relocation operands
-  - strict RV32IM instructions
+  - strict RV32IM instructions plus accepted GNU-style call pseudos consumed by
+    the downstream assembler
 - Preferred instruction set:
   - `Add`, `Addi`, `Sub`
   - `And`, `Or`, `Xor`, `Xori`
@@ -159,6 +174,7 @@ IR3
   - MIR-only ops
   - missing block labels
   - invalid relocation use
+  - unsupported assembler pseudos other than accepted direct-call forms
 
 ## Test Plan
 

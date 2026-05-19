@@ -1,10 +1,19 @@
-# IR3 to Pre-RA RV32IM Machine IR Implementation Plan
+# Initial Pre-RA Machine IR Bring-Up Plan
+
+This document records the first milestone plan for bringing up textual,
+validated pre-register-allocation Machine IR under `src/riscv/`.
+
+It is useful as implementation history, but the current normative backend
+contract is [machine-ir.md](./machine-ir.md).
 
 ## Summary
 
 - Implement a new target-specific `src/riscv` stage that lowers the current `ir3::Module` directly to validated, textual pre-register-allocation Machine IR. Do not route through `llvm_transcribe`.
 - Keep the milestone boundary at `IR3 -> Machine IR printing/validation`. Frame layout, register allocation, phi elimination, pseudo expansion, and final asm emission stay out of scope.
-- Follow the existing backend contract in `docs/ir3/asm.md`: one `gpr32` vreg class, explicit ABI registers only at boundaries, aggregates memory-only, direct calls only, and aggregate `ir3::Copy` lowered through `__rcomp_memmove`.
+- Follow the existing backend contract in [machine-ir.md](./machine-ir.md):
+  one `gpr32` vreg class, explicit ABI registers only at boundaries,
+  aggregates memory-only, direct calls only, and aggregate `ir3::Copy`
+  lowered through `__rcomp_memmove`.
 - **Design decision**: Machine IR is in SSA form. IR3 phi nodes lower to `MachinePhi` nodes preserved through register allocation. Phi elimination (parallel copies + critical-edge splitting) runs as a dedicated post-RA pass.
 
 ## Public Interfaces / Types

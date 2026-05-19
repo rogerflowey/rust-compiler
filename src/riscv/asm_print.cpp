@@ -22,6 +22,19 @@ std::string immediate_text(const AsmImmediate& imm) {
         imm);
 }
 
+std::string u_immediate_text(const AsmImmediate& imm) {
+    return std::visit(
+        [&](const auto& value) -> std::string {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, std::int32_t>) {
+                return std::to_string(static_cast<std::uint32_t>(value) & 0xfffffU);
+            } else {
+                return immediate_text(imm);
+            }
+        },
+        imm);
+}
+
 void print_instruction(std::ostream& out, const AsmInst& inst) {
     std::visit(
         [&](const auto& value) {
@@ -39,7 +52,7 @@ void print_instruction(std::ostream& out, const AsmInst& inst) {
             } else if constexpr (std::is_same_v<T, AsmUInst>) {
                 out << "  " << asm_opcode_name(value.opcode) << " "
                     << physical_register_name(value.rd) << ", "
-                    << immediate_text(value.imm) << "\n";
+                    << u_immediate_text(value.imm) << "\n";
             } else if constexpr (std::is_same_v<T, AsmLoadInst>) {
                 out << "  lw " << physical_register_name(value.rd) << ", " << value.offset
                     << "(" << physical_register_name(value.base) << ")\n";
@@ -53,6 +66,8 @@ void print_instruction(std::ostream& out, const AsmInst& inst) {
             } else if constexpr (std::is_same_v<T, AsmJalInst>) {
                 out << "  jal " << physical_register_name(value.rd) << ", "
                     << value.target << "\n";
+            } else if constexpr (std::is_same_v<T, AsmCallInst>) {
+                out << "  call " << value.target << "\n";
             } else if constexpr (std::is_same_v<T, AsmJalrInst>) {
                 out << "  jalr " << physical_register_name(value.rd) << ", "
                     << immediate_text(value.offset) << "("

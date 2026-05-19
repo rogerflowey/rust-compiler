@@ -77,7 +77,5 @@ ctest --test-dir ./ninja-debug
 
 - [Semantic Passes](./semantic/passes/README.md) - Complete semantic analysis pipeline
 - [Component Reference](./component-cross-reference.md) - Detailed component documentation
-- [IR3 Design](./ir3/design.md) - Proposed CFG-based backend IR
-- [HIR to IR3 Lowering](./ir3/hir-to-ir3.md) - How current validated HIR maps into IR3
-- [Machine IR / ASM Lowering](./ir3/asm.md) - RV32IM backend contract between IR3 and final assembly
-- [Strict RV32IM AsmIR Plan](./ir3/asmir-plan.md) - Implementation plan for the final assembly-shaped backend IR
+- [IR3 Docs](./ir3/README.md) - Target-independent IR3 specification and HIR lowering contract
+- [RISC-V Backend Docs](./riscv/README.md) - RV32IM Machine IR contract, backend plans, and cleanup notes
