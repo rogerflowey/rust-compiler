@@ -14,6 +14,8 @@ live in [../riscv/README.md](../riscv/README.md).
 1. [design.md](./design.md) - authoritative IR3 specification and invariants
 2. [hir-to-ir3.md](./hir-to-ir3.md) - how the current validated HIR lowers
    into IR3
+3. [dominance-query-plan.md](./dominance-query-plan.md) - planned query-based
+   analysis layer for IR3 optimization, starting with dominator trees
 
 ## Scope Boundary
 

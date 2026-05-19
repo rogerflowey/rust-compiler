@@ -79,3 +79,5 @@ ctest --test-dir ./ninja-debug
 - [Component Reference](./component-cross-reference.md) - Detailed component documentation
 - [IR3 Docs](./ir3/README.md) - Target-independent IR3 specification and HIR lowering contract
 - [RISC-V Backend Docs](./riscv/README.md) - RV32IM Machine IR contract, backend plans, and cleanup notes
+- [Optimization Plan](./optimization-plan.md) - cross-IR optimization placement and implementation priority
+- [Testing Docs](./testing/README.md) - External corpora, REIMU workflow, and `.rx` testcase rules
