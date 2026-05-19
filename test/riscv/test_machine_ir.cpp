@@ -5,6 +5,7 @@
 #include "semantic/hir/hir.hpp"
 #include "semantic/type/type.hpp"
 
+#include <bit>
 #include <gtest/gtest.h>
 
 #include <string>
@@ -155,6 +156,41 @@ TEST(RiscvMachineIrLoweringTest, LowersScalarFunctionEntryAndReturnAbi) {
     EXPECT_NE(text.find("v2 = add v0, v1"), std::string::npos);
     EXPECT_NE(text.find("copy a0, v2"), std::string::npos);
     EXPECT_NE(text.find("ret a0"), std::string::npos);
+}
+
+TEST(RiscvMachineIrLoweringTest, AcceptsFullRv32BitPatternConstants) {
+    ir3::Function function{
+        .symbol = "u32_bits",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {},
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .phis = {},
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 2166136261LL,
+                    },
+                },
+                .terminator = ir3::Return{.value = 0},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 1,
+    };
+
+    const auto module = riscv::lower_module(ir3::Module{.functions = {function}});
+    ASSERT_EQ(module.functions.size(), 1u);
+    ASSERT_EQ(module.functions.front().blocks.size(), 1u);
+    ASSERT_EQ(module.functions.front().blocks.front().instructions.size(), 2u);
+
+    const auto* li =
+        std::get_if<riscv::Li>(&module.functions.front().blocks.front().instructions[0]);
+    ASSERT_NE(li, nullptr);
+    EXPECT_EQ(li->value, std::bit_cast<std::int32_t>(2166136261u));
 }
 
 TEST(RiscvMachineIrLoweringTest, PreservesPhiNodesInSsaMir) {

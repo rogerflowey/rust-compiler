@@ -165,8 +165,8 @@ TEST(AsmLowerTest, UsesFallthroughAwareBranchLowering) {
     };
 
     const auto text = to_string(lower_to_asm(MachineModule{.functions = {fn}}));
-    EXPECT_NE(text.find("bne s1, zero, .Lbranchy_bb1"), std::string::npos);
-    EXPECT_EQ(text.find("jal zero, .Lbranchy_bb2"), std::string::npos);
+    EXPECT_NE(text.find("beq s1, zero, .Lbranchy_bb0.relax0"), std::string::npos);
+    EXPECT_NE(text.find("jal zero, .Lbranchy_bb1"), std::string::npos);
 }
 
 TEST(AsmLowerTest, InjectsInlineBuiltinRuntimeHelpersOnDemand) {
@@ -203,21 +203,59 @@ TEST(AsmLowerTest, InjectsInlineBuiltinRuntimeHelpersOnDemand) {
                         },
                     .terminator = Return{.value = PhysicalRegister::A0},
                 },
+        },
+        .entry_block = 0,
+    };
+
+    MachineFunction copy_fn{
+        .symbol = "caller_copy",
+        .blocks =
+            {
+                MachineBlock{
+                    .id = 0,
+                    .instructions =
+                        {
+                            Call{.callee = "__rcomp_memmove"},
+                        },
+                    .terminator = Return{},
+                },
             },
         .entry_block = 0,
     };
 
-    const auto asm_module = lower_to_asm(MachineModule{.functions = {print_fn, input_fn}});
+    const auto asm_module =
+        lower_to_asm(MachineModule{.functions = {print_fn, input_fn, copy_fn}});
     const auto text = to_gnu_as(asm_module);
 
+    EXPECT_NE(text.find(".globl __rcomp_memmove"), std::string::npos);
     EXPECT_NE(text.find(".globl __rcomp_printInt"), std::string::npos);
     EXPECT_NE(text.find(".globl __rcomp_printlnInt"), std::string::npos);
     EXPECT_NE(text.find(".globl __rcomp_getInt"), std::string::npos);
     EXPECT_NE(text.find(".globl __rcomp_exit"), std::string::npos);
+    EXPECT_NE(text.find("jal zero, memmove"), std::string::npos);
     EXPECT_NE(text.find("call __rcomp_printInt"), std::string::npos);
     EXPECT_NE(text.find("call putchar"), std::string::npos);
     EXPECT_NE(text.find("call getchar"), std::string::npos);
     EXPECT_NE(text.find("jalr zero, 4(zero)"), std::string::npos);
+}
+
+TEST(AsmLowerTest, LowersUnreachableToExitMinusOne) {
+    MachineFunction fn{
+        .symbol = "trapless",
+        .blocks =
+            {
+                MachineBlock{
+                    .id = 0,
+                    .terminator = Unreachable{},
+                },
+            },
+        .entry_block = 0,
+    };
+
+    const auto text = to_gnu_as(lower_to_asm(MachineModule{.functions = {fn}}));
+    EXPECT_NE(text.find("addi a0, zero, -1"), std::string::npos);
+    EXPECT_NE(text.find("call __rcomp_exit"), std::string::npos);
+    EXPECT_EQ(text.find("ebreak"), std::string::npos);
 }
 
 TEST(AsmLowerTest, LowersLargeFrameAdjustmentsWithoutIllegalAddi) {

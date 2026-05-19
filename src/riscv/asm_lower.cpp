@@ -151,6 +151,60 @@ std::size_t trailing_restore_start(const FunctionLoweringContext& ctx,
     return index;
 }
 
+AsmOpcode invert_branch_opcode(const MachineFunction& fn, AsmOpcode opcode) {
+    switch (opcode) {
+    case AsmOpcode::Beq:
+        return AsmOpcode::Bne;
+    case AsmOpcode::Bne:
+        return AsmOpcode::Beq;
+    default:
+        fail(fn, "branch relaxation only supports beq/bne");
+    }
+}
+
+void relax_conditional_branches(const MachineFunction& fn, AsmFunction& asm_fn) {
+    std::vector<AsmBlock> relaxed_blocks;
+    relaxed_blocks.reserve(asm_fn.blocks.size());
+
+    std::size_t relax_counter = 0;
+    for (const auto& block : asm_fn.blocks) {
+        AsmBlock current{
+            .label = block.label,
+            .instructions = {},
+        };
+
+        for (const auto& inst : block.instructions) {
+            const auto* branch = std::get_if<AsmBranchInst>(&inst);
+            if (!branch) {
+                current.instructions.push_back(inst);
+                continue;
+            }
+
+            const auto skip_label =
+                block.label + ".relax" + std::to_string(relax_counter++);
+            current.instructions.push_back(AsmBranchInst{
+                .opcode = invert_branch_opcode(fn, branch->opcode),
+                .rs1 = branch->rs1,
+                .rs2 = branch->rs2,
+                .target = skip_label,
+            });
+            current.instructions.push_back(AsmJalInst{
+                .rd = PhysicalRegister::Zero,
+                .target = branch->target,
+            });
+            relaxed_blocks.push_back(std::move(current));
+            current = AsmBlock{
+                .label = skip_label,
+                .instructions = {},
+            };
+        }
+
+        relaxed_blocks.push_back(std::move(current));
+    }
+
+    asm_fn.blocks = std::move(relaxed_blocks);
+}
+
 void lower_frame_addr(std::vector<AsmInst>& out,
                       const FunctionLoweringContext& ctx,
                       PhysicalRegister dest,
@@ -518,7 +572,8 @@ void lower_terminator(std::vector<AsmInst>& out,
                     .offset = std::int32_t{0},
                 });
             } else {
-                out.push_back(AsmEbreakInst{});
+                emit_li(out, PhysicalRegister::A0, -1);
+                emit_symbol_call(out, "__rcomp_exit");
             }
         },
         term);
@@ -606,6 +661,7 @@ AsmFunction lower_to_asm(const MachineFunction& fn) {
         asm_fn.blocks.push_back(std::move(asm_block));
     }
 
+    relax_conditional_branches(fn, asm_fn);
     return asm_fn;
 }
 
@@ -613,7 +669,7 @@ AsmModule lower_to_asm(const MachineModule& module) {
     AsmModule asm_module;
     const auto helpers = collect_runtime_helpers(module);
     asm_module.functions.reserve(
-        module.functions.size() + helpers.print_int + helpers.println_int +
+        module.functions.size() + helpers.memmove + helpers.print_int + helpers.println_int +
         helpers.get_int + helpers.exit);
     for (const auto& fn : module.functions) {
         asm_module.functions.push_back(lower_to_asm(fn));

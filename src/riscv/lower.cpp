@@ -3,6 +3,7 @@
 #include "riscv/layout.hpp"
 
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -39,6 +40,11 @@ bool fits_i32(std::int64_t value) {
            value <= std::numeric_limits<std::int32_t>::max();
 }
 
+bool fits_u32(std::int64_t value) {
+    return value >= 0 &&
+           value <= static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max());
+}
+
 std::int32_t checked_i32(std::int64_t value, std::string_view what) {
     if (!fits_i32(value)) {
         throw LoweringError(std::string(what) + " does not fit in RV32 immediate");
@@ -48,6 +54,16 @@ std::int32_t checked_i32(std::int64_t value, std::string_view what) {
 
 std::int32_t checked_i32(std::uint32_t value, std::string_view what) {
     return checked_i32(static_cast<std::int64_t>(value), what);
+}
+
+std::int32_t checked_rv32_word(std::int64_t value, std::string_view what) {
+    if (fits_i32(value)) {
+        return static_cast<std::int32_t>(value);
+    }
+    if (fits_u32(value)) {
+        return std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(value));
+    }
+    throw LoweringError(std::string(what) + " does not fit in RV32 immediate");
 }
 
 semantic::TypeId array_element_type(semantic::TypeId type) {
@@ -303,7 +319,7 @@ private:
                     emit(dest,
                          Li{
                              .dest = vreg(iconst.result.id),
-                             .value = checked_i32(iconst.value, "integer constant"),
+                             .value = checked_rv32_word(iconst.value, "integer constant"),
                          });
                 },
                 [&](const ir3::Load& load) {

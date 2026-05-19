@@ -34,6 +34,25 @@ AsmFunction make_runtime_exit_function() {
     return fn;
 }
 
+AsmFunction make_runtime_memmove_function() {
+    AsmFunction fn{
+        .symbol = "__rcomp_memmove",
+        .frame_size = 0,
+        .blocks = {},
+    };
+
+    AsmBlock entry{
+        .label = runtime_label(fn.symbol, "entry"),
+        .instructions = {},
+    };
+    entry.instructions.push_back(AsmJalInst{
+        .rd = PhysicalRegister::Zero,
+        .target = "memmove",
+    });
+    fn.blocks.push_back(std::move(entry));
+    return fn;
+}
+
 AsmFunction make_runtime_print_int_function() {
     AsmFunction fn{
         .symbol = "__rcomp_printInt",
@@ -649,7 +668,9 @@ RuntimeHelperSelection collect_runtime_helpers(const MachineModule& module) {
                 if (!call) {
                     continue;
                 }
-                if (call->callee == "__rcomp_printInt") {
+                if (call->callee == "__rcomp_memmove") {
+                    helpers.memmove = true;
+                } else if (call->callee == "__rcomp_printInt") {
                     helpers.print_int = true;
                 } else if (call->callee == "__rcomp_printlnInt") {
                     helpers.println_int = true;
@@ -660,12 +681,19 @@ RuntimeHelperSelection collect_runtime_helpers(const MachineModule& module) {
                     helpers.exit = true;
                 }
             }
+            if (block.terminator &&
+                std::holds_alternative<Unreachable>(*block.terminator)) {
+                helpers.exit = true;
+            }
         }
     }
     return helpers;
 }
 
 void append_runtime_helpers(AsmModule& module, const RuntimeHelperSelection& helpers) {
+    if (helpers.memmove) {
+        module.functions.push_back(make_runtime_memmove_function());
+    }
     if (helpers.print_int) {
         module.functions.push_back(make_runtime_print_int_function());
     }
