@@ -1,12 +1,17 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 #include "src/ast/ast.hpp"
 #include "src/ir3/lower.hpp"
 #include "src/lexer/lexer.hpp"
+#include "src/riscv/asm_ir.hpp"
+#include "src/riscv/asm_lower.hpp"
+#include "src/riscv/asm_print.hpp"
 #include "src/parser/parser.hpp"
 #include "src/riscv/frame_materialize.hpp"
 #include "src/riscv/lower.hpp"
@@ -27,6 +32,33 @@
 #include "src/utils/error.hpp"
 
 namespace {
+
+enum class OutputStage { Mir, PostRa, PostPhi, Asmir, Asm };
+
+std::optional<OutputStage> parse_stage_arg(const std::string& arg) {
+    constexpr std::string_view prefix = "--stage=";
+    if (!arg.starts_with(prefix)) {
+        return std::nullopt;
+    }
+
+    const std::string value = arg.substr(prefix.size());
+    if (value == "mir") {
+        return OutputStage::Mir;
+    }
+    if (value == "post-ra") {
+        return OutputStage::PostRa;
+    }
+    if (value == "post-phi") {
+        return OutputStage::PostPhi;
+    }
+    if (value == "asmir") {
+        return OutputStage::Asmir;
+    }
+    if (value == "asm") {
+        return OutputStage::Asm;
+    }
+    return std::nullopt;
+}
 
 void print_parse_error(const parsec::ParseError& error,
                        const std::vector<Token>& tokens,
@@ -62,9 +94,21 @@ void print_semantic_error(const SemanticError& error,
 } // namespace
 
 int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <file>\n";
+    if (argc < 2 || argc > 3) {
+        std::cerr << "Usage: " << argv[0]
+                  << " <file> [--stage=mir|post-ra|post-phi|asmir|asm]\n";
         return 1;
+    }
+
+    OutputStage stage = OutputStage::Asm;
+    if (argc == 3) {
+        const auto parsed = parse_stage_arg(argv[2]);
+        if (!parsed) {
+            std::cerr << "Error: unsupported stage option '" << argv[2] << "'. "
+                      << "Expected --stage=mir|post-ra|post-phi|asmir|asm\n";
+            return 1;
+        }
+        stage = *parsed;
     }
 
     span::SourceManager sources;
@@ -121,11 +165,32 @@ int main(int argc, char* argv[]) {
 
         auto ir3_module = ir3::lower_program(*hir_program);
         auto machine_module = riscv::lower_module(ir3_module);
+        if (stage == OutputStage::Mir) {
+            riscv::print_module(std::cout, machine_module);
+            return 0;
+        }
+
         riscv::allocate_registers(machine_module);
+        if (stage == OutputStage::PostRa) {
+            riscv::print_module(std::cout, machine_module);
+            return 0;
+        }
+
         riscv::eliminate_phis(machine_module);
+        if (stage == OutputStage::PostPhi) {
+            riscv::print_module(std::cout, machine_module);
+            return 0;
+        }
+
         riscv::insert_prologue_epilogue(machine_module);
         riscv::materialize_frame(machine_module);
-        riscv::print_module(std::cout, machine_module);
+        auto asm_module = riscv::lower_to_asm(machine_module);
+        if (stage == OutputStage::Asmir) {
+            riscv::print_module(std::cout, asm_module);
+            return 0;
+        }
+
+        riscv::print_gnu_as(std::cout, asm_module);
         return 0;
     } catch (const LexerError& error) {
         std::cerr << "Error: " << error.what() << "\n";
@@ -138,6 +203,9 @@ int main(int argc, char* argv[]) {
         return 1;
     } catch (const riscv::LoweringError& error) {
         std::cerr << "Machine IR lowering error: " << error.what() << "\n";
+        return 1;
+    } catch (const riscv::AsmLoweringError& error) {
+        std::cerr << "Asm lowering error: " << error.what() << "\n";
         return 1;
     } catch (const std::exception& error) {
         std::cerr << "Error: " << error.what() << "\n";

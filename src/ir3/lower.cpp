@@ -1,5 +1,6 @@
 #include "ir3/lower.hpp"
 
+#include "semantic/symbol/predefined.hpp"
 #include "semantic/type/helper.hpp"
 
 #include <cctype>
@@ -213,12 +214,18 @@ class LoweringSymbols {
 public:
     std::string define_function(const hir::Function& function,
                                 std::optional<semantic::TypeId> impl_type = std::nullopt) {
+        if (auto runtime_symbol = semantic::predefined_runtime_symbol(function)) {
+            return define(function_symbols_, &function, std::string(*runtime_symbol));
+        }
         auto base = impl_type ? type_symbol(*impl_type) + "$" + function_symbol(function)
                               : function_symbol(function);
         return define(function_symbols_, &function, std::move(base));
     }
 
     std::string define_method(const hir::Method& method) {
+        if (auto runtime_symbol = semantic::predefined_runtime_symbol(method)) {
+            return define(method_symbols_, &method, std::string(*runtime_symbol));
+        }
         std::string base;
         if (method.self_local) {
             base = type_symbol(local_type(*method.self_local)) + "$" + method_symbol(method);

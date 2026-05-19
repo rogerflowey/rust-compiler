@@ -1,0 +1,128 @@
+#pragma once
+
+#include "riscv/machine_ir.hpp"
+
+#include <cstdint>
+#include <iosfwd>
+#include <string>
+#include <variant>
+#include <vector>
+
+namespace riscv {
+
+enum class AsmOpcode {
+    Add,
+    Addi,
+    Sub,
+    And,
+    Or,
+    Xor,
+    Xori,
+    Sll,
+    Srl,
+    Sra,
+    Slt,
+    Sltu,
+    Sltiu,
+    Mul,
+    Div,
+    Divu,
+    Rem,
+    Remu,
+    Lui,
+    Auipc,
+    Lw,
+    Sw,
+    Beq,
+    Bne,
+    Jal,
+    Jalr,
+    Ebreak,
+};
+
+enum class RelocationKind { PcrelHi, PcrelLo };
+
+struct Relocation {
+    RelocationKind kind = RelocationKind::PcrelHi;
+    std::string symbol;
+};
+
+using AsmImmediate = std::variant<std::int32_t, Relocation>;
+
+struct AsmRInst {
+    AsmOpcode opcode = AsmOpcode::Add;
+    PhysicalRegister rd = PhysicalRegister::Zero;
+    PhysicalRegister rs1 = PhysicalRegister::Zero;
+    PhysicalRegister rs2 = PhysicalRegister::Zero;
+};
+
+struct AsmIInst {
+    AsmOpcode opcode = AsmOpcode::Addi;
+    PhysicalRegister rd = PhysicalRegister::Zero;
+    PhysicalRegister rs1 = PhysicalRegister::Zero;
+    AsmImmediate imm = std::int32_t{0};
+};
+
+struct AsmUInst {
+    AsmOpcode opcode = AsmOpcode::Lui;
+    PhysicalRegister rd = PhysicalRegister::Zero;
+    AsmImmediate imm = std::int32_t{0};
+};
+
+struct AsmLoadInst {
+    PhysicalRegister rd = PhysicalRegister::Zero;
+    PhysicalRegister base = PhysicalRegister::Zero;
+    std::int32_t offset = 0;
+};
+
+struct AsmStoreInst {
+    PhysicalRegister rs = PhysicalRegister::Zero;
+    PhysicalRegister base = PhysicalRegister::Zero;
+    std::int32_t offset = 0;
+};
+
+struct AsmBranchInst {
+    AsmOpcode opcode = AsmOpcode::Beq;
+    PhysicalRegister rs1 = PhysicalRegister::Zero;
+    PhysicalRegister rs2 = PhysicalRegister::Zero;
+    std::string target;
+};
+
+struct AsmJalInst {
+    PhysicalRegister rd = PhysicalRegister::Zero;
+    std::string target;
+};
+
+struct AsmJalrInst {
+    PhysicalRegister rd = PhysicalRegister::Zero;
+    PhysicalRegister base = PhysicalRegister::Zero;
+    AsmImmediate offset = std::int32_t{0};
+};
+
+struct AsmEbreakInst {};
+
+using AsmInst =
+    std::variant<AsmRInst, AsmIInst, AsmUInst, AsmLoadInst, AsmStoreInst,
+                 AsmBranchInst, AsmJalInst, AsmJalrInst, AsmEbreakInst>;
+
+struct AsmBlock {
+    std::string label;
+    std::vector<AsmInst> instructions;
+};
+
+struct AsmFunction {
+    std::string symbol;
+    std::uint32_t frame_size = 0;
+    std::vector<AsmBlock> blocks;
+};
+
+struct AsmModule {
+    std::vector<AsmFunction> functions;
+};
+
+const char* asm_opcode_name(AsmOpcode opcode);
+
+void print_module(std::ostream& out, const AsmModule& module);
+std::string to_string(const AsmModule& module);
+
+} // namespace riscv

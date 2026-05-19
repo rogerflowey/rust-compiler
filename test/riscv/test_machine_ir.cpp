@@ -329,3 +329,33 @@ TEST(RiscvMachineIrLoweringTest, LowersCallsWithOverflowArguments) {
     EXPECT_NE(text.find("call @callee9"), std::string::npos);
     EXPECT_NE(text.find("v9 = copy a0"), std::string::npos);
 }
+
+TEST(RiscvMachineIrLoweringTest, RejectsUnsupportedReservedBuiltinRuntimeSymbols) {
+    ir3::Function function{
+        .symbol = "builtin_runtime_error",
+        .params = {},
+        .return_class = std::nullopt,
+        .source_return_type = semantic::get_typeID(semantic::Type{semantic::UnitType{}}),
+        .slots = {},
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .phis = {},
+                .instructions = {
+                    ir3::Call{
+                        .result = std::nullopt,
+                        .callee = "__rcomp_builtin_print",
+                        .args = {},
+                    },
+                },
+                .terminator = ir3::Return{.value = std::nullopt},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 0,
+    };
+
+    EXPECT_THROW((void)riscv::lower_module(ir3::Module{.functions = {function}}),
+                 riscv::LoweringError);
+}

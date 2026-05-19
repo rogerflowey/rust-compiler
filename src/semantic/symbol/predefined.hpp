@@ -16,6 +16,29 @@
 
 namespace semantic {
 
+enum class PredefinedFunctionKind {
+    Print,
+    Println,
+    PrintInt,
+    PrintlnInt,
+    GetString,
+    GetInt,
+    Exit,
+};
+
+enum class PredefinedMethodKind {
+    I32ToString,
+    U32ToString,
+    UsizeToString,
+    AnyIntToString,
+    AnyUIntToString,
+    StringAsStr,
+    StringAsMutStr,
+    StringLen,
+    StringAppend,
+    StrLen,
+};
+
 struct PredefinedMethodEntry {
     std::string name;
     hir::Method* method;
@@ -52,7 +75,7 @@ get_predefined_methods() {
 }
 
 // struct String {}
-static hir::StructDef struct_String = [] {
+inline hir::StructDef struct_String = [] {
     hir::StructDef def{};
     def.name = ast::Identifier("String");
     return def;
@@ -177,24 +200,24 @@ inline hir::Method make_builtin_method(std::string_view name,
     return method;
 }
 
-static hir::Function func_print = make_builtin_function("print", {string_ref_type()}, unit_type());
-static hir::Function func_println = make_builtin_function("println", {string_ref_type()}, unit_type());
-static hir::Function func_printInt = make_builtin_function("printInt", {i32_type()}, unit_type());
-static hir::Function func_printlnInt = make_builtin_function("printlnInt", {i32_type()}, unit_type());
-static hir::Function func_getString = make_builtin_function("getString", std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Function func_getInt = make_builtin_function("getInt", std::initializer_list<TypeId>{}, i32_type());
-static hir::Function func_exit = make_builtin_function("exit", {i32_type()}, unit_type());
+inline hir::Function func_print = make_builtin_function("print", {string_ref_type()}, unit_type());
+inline hir::Function func_println = make_builtin_function("println", {string_ref_type()}, unit_type());
+inline hir::Function func_printInt = make_builtin_function("printInt", {i32_type()}, unit_type());
+inline hir::Function func_printlnInt = make_builtin_function("printlnInt", {i32_type()}, unit_type());
+inline hir::Function func_getString = make_builtin_function("getString", std::initializer_list<TypeId>{}, string_struct_type());
+inline hir::Function func_getInt = make_builtin_function("getInt", std::initializer_list<TypeId>{}, i32_type());
+inline hir::Function func_exit = make_builtin_function("exit", {i32_type()}, unit_type());
 
-static hir::Method method_i32_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_u32_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_usize_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_anyint_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_anyuint_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
-static hir::Method method_string_as_str = make_builtin_method("as_str", true, false, std::initializer_list<TypeId>{}, string_ref_type());
-static hir::Method method_string_as_mut_str = make_builtin_method("as_mut_str", true, true, std::initializer_list<TypeId>{}, string_mut_ref_type());
-static hir::Method method_string_len = make_builtin_method("len", true, false, std::initializer_list<TypeId>{}, usize_type());
-static hir::Method method_string_append = make_builtin_method("append", true, true, {string_ref_type()}, unit_type());
-static hir::Method method_str_len = make_builtin_method("len", true, false, std::initializer_list<TypeId>{}, usize_type());
+inline hir::Method method_i32_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
+inline hir::Method method_u32_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
+inline hir::Method method_usize_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
+inline hir::Method method_anyint_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
+inline hir::Method method_anyuint_to_string = make_builtin_method("to_string", true, false, std::initializer_list<TypeId>{}, string_struct_type());
+inline hir::Method method_string_as_str = make_builtin_method("as_str", true, false, std::initializer_list<TypeId>{}, string_ref_type());
+inline hir::Method method_string_as_mut_str = make_builtin_method("as_mut_str", true, true, std::initializer_list<TypeId>{}, string_mut_ref_type());
+inline hir::Method method_string_len = make_builtin_method("len", true, false, std::initializer_list<TypeId>{}, usize_type());
+inline hir::Method method_string_append = make_builtin_method("append", true, true, {string_ref_type()}, unit_type());
+inline hir::Method method_str_len = make_builtin_method("len", true, false, std::initializer_list<TypeId>{}, usize_type());
 
 struct PredefinedMethodRegistrar {
     PredefinedMethodRegistrar() {
@@ -212,7 +235,7 @@ struct PredefinedMethodRegistrar {
     }
 };
 
-static const PredefinedMethodRegistrar predefined_method_registrar{};
+inline const PredefinedMethodRegistrar predefined_method_registrar{};
 
 } // namespace
 
@@ -242,6 +265,177 @@ inline Scope create_predefined_scope() {
 inline Scope& get_predefined_scope() {
     static Scope predefined_scope = create_predefined_scope();
     return predefined_scope;
+}
+
+inline std::optional<PredefinedFunctionKind>
+predefined_function_kind(const hir::Function& function) {
+    const auto has_signature = [&](std::string_view name,
+                                   std::initializer_list<TypeId> param_types,
+                                   TypeId return_type) {
+        if (function.body != nullptr || function.name.name != name) {
+            return false;
+        }
+        if (function.param_type_annotations.size() != param_types.size()) {
+            return false;
+        }
+
+        std::size_t index = 0;
+        for (TypeId expected : param_types) {
+            const auto& annotation = function.param_type_annotations[index++];
+            if (!annotation) {
+                return false;
+            }
+            const auto* actual = std::get_if<TypeId>(&*annotation);
+            if (!actual || *actual != expected) {
+                return false;
+            }
+        }
+
+        if (!function.return_type) {
+            return false;
+        }
+        const auto* actual_return = std::get_if<TypeId>(&*function.return_type);
+        return actual_return && *actual_return == return_type;
+    };
+
+    if (&function == &func_print) {
+        return PredefinedFunctionKind::Print;
+    }
+    if (&function == &func_println) {
+        return PredefinedFunctionKind::Println;
+    }
+    if (&function == &func_printInt) {
+        return PredefinedFunctionKind::PrintInt;
+    }
+    if (&function == &func_printlnInt) {
+        return PredefinedFunctionKind::PrintlnInt;
+    }
+    if (&function == &func_getString) {
+        return PredefinedFunctionKind::GetString;
+    }
+    if (&function == &func_getInt) {
+        return PredefinedFunctionKind::GetInt;
+    }
+    if (&function == &func_exit) {
+        return PredefinedFunctionKind::Exit;
+    }
+    if (has_signature("print", {string_ref_type()}, unit_type())) {
+        return PredefinedFunctionKind::Print;
+    }
+    if (has_signature("println", {string_ref_type()}, unit_type())) {
+        return PredefinedFunctionKind::Println;
+    }
+    if (has_signature("printInt", {i32_type()}, unit_type())) {
+        return PredefinedFunctionKind::PrintInt;
+    }
+    if (has_signature("printlnInt", {i32_type()}, unit_type())) {
+        return PredefinedFunctionKind::PrintlnInt;
+    }
+    if (has_signature("getString", {}, string_struct_type())) {
+        return PredefinedFunctionKind::GetString;
+    }
+    if (has_signature("getInt", {}, i32_type())) {
+        return PredefinedFunctionKind::GetInt;
+    }
+    if (has_signature("exit", {i32_type()}, unit_type())) {
+        return PredefinedFunctionKind::Exit;
+    }
+    return std::nullopt;
+}
+
+inline std::optional<PredefinedMethodKind>
+predefined_method_kind(const hir::Method& method) {
+    if (&method == &method_i32_to_string) {
+        return PredefinedMethodKind::I32ToString;
+    }
+    if (&method == &method_u32_to_string) {
+        return PredefinedMethodKind::U32ToString;
+    }
+    if (&method == &method_usize_to_string) {
+        return PredefinedMethodKind::UsizeToString;
+    }
+    if (&method == &method_anyint_to_string) {
+        return PredefinedMethodKind::AnyIntToString;
+    }
+    if (&method == &method_anyuint_to_string) {
+        return PredefinedMethodKind::AnyUIntToString;
+    }
+    if (&method == &method_string_as_str) {
+        return PredefinedMethodKind::StringAsStr;
+    }
+    if (&method == &method_string_as_mut_str) {
+        return PredefinedMethodKind::StringAsMutStr;
+    }
+    if (&method == &method_string_len) {
+        return PredefinedMethodKind::StringLen;
+    }
+    if (&method == &method_string_append) {
+        return PredefinedMethodKind::StringAppend;
+    }
+    if (&method == &method_str_len) {
+        return PredefinedMethodKind::StrLen;
+    }
+    return std::nullopt;
+}
+
+inline std::optional<std::string_view>
+predefined_runtime_symbol(const hir::Function& function) {
+    const auto kind = predefined_function_kind(function);
+    if (!kind) {
+        return std::nullopt;
+    }
+
+    switch (*kind) {
+    case PredefinedFunctionKind::Print:
+        return "__rcomp_builtin_print";
+    case PredefinedFunctionKind::Println:
+        return "__rcomp_builtin_println";
+    case PredefinedFunctionKind::PrintInt:
+        return "__rcomp_printInt";
+    case PredefinedFunctionKind::PrintlnInt:
+        return "__rcomp_printlnInt";
+    case PredefinedFunctionKind::GetString:
+        return "__rcomp_builtin_getString";
+    case PredefinedFunctionKind::GetInt:
+        return "__rcomp_getInt";
+    case PredefinedFunctionKind::Exit:
+        return "__rcomp_exit";
+    }
+
+    return std::nullopt;
+}
+
+inline std::optional<std::string_view>
+predefined_runtime_symbol(const hir::Method& method) {
+    const auto kind = predefined_method_kind(method);
+    if (!kind) {
+        return std::nullopt;
+    }
+
+    switch (*kind) {
+    case PredefinedMethodKind::I32ToString:
+        return "__rcomp_builtin_i32_to_string";
+    case PredefinedMethodKind::U32ToString:
+        return "__rcomp_builtin_u32_to_string";
+    case PredefinedMethodKind::UsizeToString:
+        return "__rcomp_builtin_usize_to_string";
+    case PredefinedMethodKind::AnyIntToString:
+        return "__rcomp_builtin_anyint_to_string";
+    case PredefinedMethodKind::AnyUIntToString:
+        return "__rcomp_builtin_anyuint_to_string";
+    case PredefinedMethodKind::StringAsStr:
+        return "__rcomp_builtin_string_as_str";
+    case PredefinedMethodKind::StringAsMutStr:
+        return "__rcomp_builtin_string_as_mut_str";
+    case PredefinedMethodKind::StringLen:
+        return "__rcomp_builtin_string_len";
+    case PredefinedMethodKind::StringAppend:
+        return "__rcomp_builtin_string_append";
+    case PredefinedMethodKind::StrLen:
+        return "__rcomp_builtin_str_len";
+    }
+
+    return std::nullopt;
 }
 
 } // namespace semantic

@@ -58,33 +58,52 @@ semantic::TypeId array_element_type(semantic::TypeId type) {
     return array->element_type;
 }
 
-bool is_unsupported_builtin_symbol(const std::string& callee) {
+bool is_supported_runtime_builtin_symbol(const std::string& callee) {
+    static const std::unordered_map<std::string, bool> supported = {
+        {"__rcomp_printInt", true},
+        {"__rcomp_printlnInt", true},
+        {"__rcomp_getInt", true},
+        {"__rcomp_exit", true},
+    };
+    return supported.contains(callee);
+}
+
+bool is_unsupported_runtime_builtin_symbol(const std::string& callee) {
     static const std::unordered_map<std::string, bool> unsupported = {
-        {"print", true},
-        {"println", true},
-        {"printInt", true},
-        {"printlnInt", true},
-        {"getString", true},
-        {"getInt", true},
-        {"i32$to_string", true},
-        {"u32$to_string", true},
-        {"usize$to_string", true},
-        {"anyint$to_string", true},
-        {"anyuint$to_string", true},
-        {"struct$String$as_str", true},
-        {"struct$String$as_mut_str", true},
-        {"struct$String$len", true},
-        {"struct$String$append", true},
-        {"str$len", true},
+        {"__rcomp_builtin_print", true},
+        {"__rcomp_builtin_println", true},
+        {"__rcomp_builtin_getString", true},
+        {"__rcomp_builtin_i32_to_string", true},
+        {"__rcomp_builtin_u32_to_string", true},
+        {"__rcomp_builtin_usize_to_string", true},
+        {"__rcomp_builtin_anyint_to_string", true},
+        {"__rcomp_builtin_anyuint_to_string", true},
+        {"__rcomp_builtin_string_as_str", true},
+        {"__rcomp_builtin_string_as_mut_str", true},
+        {"__rcomp_builtin_string_len", true},
+        {"__rcomp_builtin_string_append", true},
+        {"__rcomp_builtin_str_len", true},
     };
     return unsupported.contains(callee);
 }
 
 std::string lower_callee_symbol(const std::string& callee) {
+    if (callee == "printInt") {
+        return "__rcomp_printInt";
+    }
+    if (callee == "printlnInt") {
+        return "__rcomp_printlnInt";
+    }
+    if (callee == "getInt") {
+        return "__rcomp_getInt";
+    }
     if (callee == "exit") {
         return "__rcomp_exit";
     }
-    if (is_unsupported_builtin_symbol(callee)) {
+    if (is_supported_runtime_builtin_symbol(callee)) {
+        return callee;
+    }
+    if (is_unsupported_runtime_builtin_symbol(callee)) {
         throw LoweringError("builtin @" + callee +
                             " requires runtime support that the RV32 backend does not "
                             "implement yet");
