@@ -211,6 +211,8 @@ TEST(Ir3SlotUseTest, BorrowRejectsPromotionShape) {
     const auto& use = am.get<ir3::SlotUseAnalysis>(fn);
 
     EXPECT_FALSE(use.slot(0).has_promotable_shape());
+    EXPECT_TRUE(use.slot(0).has_borrow);
+    EXPECT_TRUE(use.slot(0).mention_in_block[0]);
 }
 
 TEST(Ir3SlotUseTest, ProjectionRejectsPromotionShape) {
@@ -282,6 +284,55 @@ TEST(Ir3SlotUseTest, TempScalarRootLoadStoreShapeIsPromotable) {
     EXPECT_TRUE(use.slot(0).has_promotable_shape());
 }
 
+TEST(Ir3SlotUseTest, CopyRecordsSourceUseAndDestDef) {
+    ir3::Function fn{
+        .symbol = "copy_shape",
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "src",
+                .origin = ir3::SlotOrigin::User,
+            },
+            ir3::Slot{
+                .id = 1,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "dst",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Copy{
+                        .dest = slot_place(1, i32_type()),
+                        .source = slot_place(0, i32_type()),
+                    },
+                },
+                .terminator = ir3::Return{.value = std::nullopt},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 0,
+    };
+
+    ir3::AnalysisManager am;
+    const auto& use = am.get<ir3::SlotUseAnalysis>(fn);
+
+    EXPECT_TRUE(use.slot(0).has_copy);
+    EXPECT_TRUE(use.slot(1).has_copy);
+    EXPECT_TRUE(use.slot(0).use_before_def[0]);
+    EXPECT_TRUE(use.slot(1).def_in_block[0]);
+    EXPECT_TRUE(use.slot(0).mention_in_block[0]);
+    EXPECT_TRUE(use.slot(1).mention_in_block[0]);
+    EXPECT_FALSE(use.slot(0).has_promotable_shape());
+    EXPECT_FALSE(use.slot(1).has_promotable_shape());
+}
+
 TEST(Ir3SlotLivenessTest, StraightLineDefThenUseIsNotLiveInAtEntry) {
     ir3::Function fn{
         .symbol = "straight",
@@ -313,8 +364,52 @@ TEST(Ir3SlotLivenessTest, StraightLineDefThenUseIsNotLiveInAtEntry) {
     ir3::AnalysisManager am;
     const auto& live = am.get<ir3::SlotLivenessAnalysis>(fn);
 
+    EXPECT_TRUE(live.slot(0).analyzable);
     EXPECT_FALSE(live.slot(0).live_in[0]);
     EXPECT_FALSE(live.slot(0).live_out[0]);
+}
+
+TEST(Ir3SlotLivenessTest, CopyTrafficMakesSlotUnanalyzable) {
+    ir3::Function fn{
+        .symbol = "copy_live",
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "src",
+                .origin = ir3::SlotOrigin::User,
+            },
+            ir3::Slot{
+                .id = 1,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "dst",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Copy{
+                        .dest = slot_place(1, i32_type()),
+                        .source = slot_place(0, i32_type()),
+                    },
+                },
+                .terminator = ir3::Return{.value = std::nullopt},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 0,
+    };
+
+    ir3::AnalysisManager am;
+    const auto& live = am.get<ir3::SlotLivenessAnalysis>(fn);
+
+    EXPECT_FALSE(live.slot(0).analyzable);
+    EXPECT_FALSE(live.slot(1).analyzable);
 }
 
 TEST(Ir3SlotLivenessTest, DiamondJoinIsLiveIntoBothPredsAndEntry) {

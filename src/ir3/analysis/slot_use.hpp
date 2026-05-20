@@ -13,12 +13,21 @@ class AnalysisManager;
 struct SlotUse {
     bool has_ssa_class = false;
     bool exact_root_load_store_only = true;
+    bool has_copy = false;
+    bool has_borrow = false;
     std::vector<BlockId> def_blocks;
     std::vector<bool> def_in_block;     // indexed by block id
     std::vector<bool> use_before_def;   // indexed by block id
+    std::vector<bool> mention_in_block; // indexed by block id
 
     bool has_promotable_shape() const {
-        return has_ssa_class && exact_root_load_store_only;
+        return has_ssa_class && exact_root_load_store_only && !has_copy &&
+               !has_borrow;
+    }
+
+    bool has_liveness_shape() const {
+        return has_ssa_class && exact_root_load_store_only && !has_copy &&
+               !has_borrow;
     }
 };
 

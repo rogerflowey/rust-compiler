@@ -19,9 +19,10 @@ SlotLivenessInfo SlotLivenessAnalysis::compute(const Function& fn, AnalysisManag
 
     for (SlotId slot = 0; slot < fn.slots.size(); ++slot) {
         const auto& slot_use = use.slot(slot);
-        if (!slot_use.has_promotable_shape()) {
+        if (!slot_use.has_liveness_shape()) {
             continue;
         }
+        result.slots[slot].analyzable = true;
 
         bool changed = true;
         while (changed) {

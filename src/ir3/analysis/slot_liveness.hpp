@@ -11,6 +11,7 @@ namespace ir3 {
 class AnalysisManager;
 
 struct SlotLiveness {
+    bool analyzable = false;
     std::vector<bool> live_in;   // indexed by block id
     std::vector<bool> live_out;  // indexed by block id
 };
