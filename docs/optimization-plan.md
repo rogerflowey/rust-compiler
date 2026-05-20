@@ -23,6 +23,9 @@ Implemented pieces:
   liveness, and the analysis manager
 - `src/ir3/passes/dead_block_elim.cpp`: prune unreachable IR3 blocks and repair
   phi predecessors
+- `src/ir3/passes/pointer_to_place.cpp`: recover slot-rooted places from
+  direct borrowed dereferences so later slot passes can see the original
+  memory traffic again
 - `src/ir3/passes/sroa.cpp`: split field-only aggregate slots into leaf slots
 - `src/ir3/passes/copy_coalesce.cpp`: coalesce aggregate root-slot copy chains
   when the source dies and the destination is otherwise untouched
@@ -35,7 +38,7 @@ Implemented pieces:
 Current pipeline shape:
 
 1. run per-function cleanup:
-   `dead_block_elim -> sroa -> copy_coalesce -> slot_to_ssa -> dead_code_elim`
+   `dead_block_elim -> pointer_to_place -> dead_code_elim -> sroa -> copy_coalesce -> slot_to_ssa -> dead_code_elim`
 2. run module-level inlining
 3. rerun the per-function cleanup pipeline
 
@@ -108,6 +111,7 @@ They should not become a general optimization layer.
 The current optimizer now covers:
 
 - structural cleanup with unreachable block elimination
+- direct-borrow pointer-to-place canonicalization before slot-sensitive cleanup
 - field-only aggregate splitting with SROA
 - narrow aggregate copy coalescing at root-slot boundaries
 - narrow scalar slot promotion into SSA

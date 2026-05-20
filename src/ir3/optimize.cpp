@@ -5,6 +5,8 @@
 #include "ir3/passes/dead_block_elim.hpp"
 #include "ir3/passes/dead_code_elim.hpp"
 #include "ir3/passes/inlining.hpp"
+#include "ir3/passes/pointer_to_place.hpp"
+#include "ir3/passes/sccp.hpp"
 #include "ir3/passes/sroa.hpp"
 #include "ir3/passes/slot_to_ssa.hpp"
 
@@ -17,9 +19,13 @@ namespace {
 std::vector<std::unique_ptr<FunctionPass>> build_passes() {
     std::vector<std::unique_ptr<FunctionPass>> passes;
     passes.push_back(std::make_unique<DeadBlockEliminationPass>());
+    passes.push_back(std::make_unique<PointerToPlacePass>());
+    passes.push_back(std::make_unique<DeadCodeEliminationPass>());
     passes.push_back(std::make_unique<SroaPass>());
     passes.push_back(std::make_unique<CopyCoalescePass>());
     passes.push_back(std::make_unique<SlotToSsaPass>());
+    passes.push_back(std::make_unique<SccpPass>());
+    passes.push_back(std::make_unique<DeadBlockEliminationPass>());
     passes.push_back(std::make_unique<DeadCodeEliminationPass>());
     return passes;
 }

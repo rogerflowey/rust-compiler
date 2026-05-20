@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace {
 
@@ -150,6 +151,24 @@ ir3::Place deref_field_place(ir3::ValueId ptr,
     return place;
 }
 
+ir3::Place deref_place(ir3::ValueId ptr,
+                       semantic::TypeId host_type,
+                       bool is_mutable = true) {
+    return deref_field_place(ptr, host_type, {}, is_mutable);
+}
+
+ir3::Place deref_indexed_place(ir3::ValueId ptr,
+                               semantic::TypeId host_type,
+                               ir3::ValueId index,
+                               bool is_mutable = true) {
+    auto place = deref_place(ptr, host_type, is_mutable);
+    auto* array_type = std::get_if<semantic::ArrayType>(&place.host_type->value);
+    place.projections.push_back(
+        ir3::IndexProjection{.index = index, .result_type = array_type->element_type});
+    place.host_type = array_type->element_type;
+    return place;
+}
+
 std::size_t copy_count(const ir3::Function& function) {
     std::size_t count = 0;
     for (const auto& block : function.blocks) {
@@ -160,6 +179,49 @@ std::size_t copy_count(const ir3::Function& function) {
         }
     }
     return count;
+}
+
+template <class T>
+std::size_t instruction_count(const ir3::Function& function) {
+    std::size_t count = 0;
+    for (const auto& block : function.blocks) {
+        for (const auto& inst : block.instructions) {
+            if (std::holds_alternative<T>(inst)) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+bool instruction_has_deref_place(const ir3::Instruction& inst) {
+    return std::visit(
+        [&](const auto& value) -> bool {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, ir3::Load>) {
+                return std::holds_alternative<ir3::DerefBase>(value.source.base);
+            } else if constexpr (std::is_same_v<T, ir3::Store>) {
+                return std::holds_alternative<ir3::DerefBase>(value.dest.base);
+            } else if constexpr (std::is_same_v<T, ir3::Copy>) {
+                return std::holds_alternative<ir3::DerefBase>(value.dest.base) ||
+                       std::holds_alternative<ir3::DerefBase>(value.source.base);
+            } else if constexpr (std::is_same_v<T, ir3::Borrow>) {
+                return std::holds_alternative<ir3::DerefBase>(value.source.base);
+            }
+            return false;
+        },
+        inst);
+}
+
+bool contains_deref_place(const ir3::Function& function) {
+    for (const auto& block : function.blocks) {
+        for (const auto& inst : block.instructions) {
+            if (instruction_has_deref_place(inst)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 std::size_t call_count(const ir3::Function& function) {
@@ -262,10 +324,12 @@ TEST(Ir3OptimizeTest, PrunesUnreachableBlocksAndRewritesPhiPredecessors) {
     EXPECT_EQ(optimized.entry_block, 0u);
     ASSERT_TRUE(std::holds_alternative<ir3::Jump>(*optimized.blocks[1].terminator));
     EXPECT_EQ(std::get<ir3::Jump>(*optimized.blocks[1].terminator).target, 2u);
-    ASSERT_EQ(optimized.blocks[2].phis.size(), 1u);
-    ASSERT_EQ(optimized.blocks[2].phis.front().incoming.size(), 1u);
-    EXPECT_EQ(optimized.blocks[2].phis.front().incoming.front().pred, 1u);
-    EXPECT_EQ(optimized.blocks[2].phis.front().incoming.front().value, 1u);
+    EXPECT_TRUE(optimized.blocks[2].phis.empty());
+    ASSERT_EQ(optimized.blocks[2].instructions.size(), 1u);
+    const auto* iconst = std::get_if<ir3::IConst>(&optimized.blocks[2].instructions.front());
+    ASSERT_NE(iconst, nullptr);
+    EXPECT_EQ(iconst->result.id, 3u);
+    EXPECT_EQ(iconst->value, 10);
 }
 
 TEST(Ir3OptimizeTest, RemovesDeadPureInstructionChainsToFixpoint) {
@@ -402,6 +466,407 @@ TEST(Ir3OptimizeTest, KeepsEffectfulInstructionsAndUsedBorrow) {
     EXPECT_TRUE(std::holds_alternative<ir3::Call>(instructions[4]));
 }
 
+TEST(Ir3OptimizeTest, CanonicalizesRootBorrowedDerefTraffic) {
+    ir3::Function function{
+        .symbol = "ptr_root_scalar",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 17,
+                    },
+                    ir3::Borrow{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::Ptr},
+                        .is_mutable = true,
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = deref_place(1, i32_type()),
+                        .value = 0,
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .source = deref_place(1, i32_type()),
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 3,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    ASSERT_EQ(optimized.blocks.size(), 1u);
+    ASSERT_EQ(optimized.blocks.front().instructions.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<ir3::IConst>(optimized.blocks.front().instructions.front()));
+    EXPECT_EQ(instruction_count<ir3::Borrow>(optimized), 0u);
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 0u);
+    EXPECT_EQ(instruction_count<ir3::Store>(optimized), 0u);
+    EXPECT_FALSE(contains_deref_place(optimized));
+
+    const auto* ret = std::get_if<ir3::Return>(&*optimized.blocks.front().terminator);
+    ASSERT_NE(ret, nullptr);
+    ASSERT_TRUE(ret->value.has_value());
+    EXPECT_EQ(*ret->value, 0u);
+}
+
+TEST(Ir3OptimizeTest, CanonicalizesProjectedBorrowAndExposesFieldTraffic) {
+    ir3::Function function{
+        .symbol = "ptr_field_scalar",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = pair_i32_type(),
+                .is_mutable = true,
+                .debug_name = "pair",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 29,
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = field_place(0, pair_i32_type(), {1}),
+                        .value = 0,
+                    },
+                    ir3::Borrow{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::Ptr},
+                        .is_mutable = false,
+                        .source = field_place(0, pair_i32_type(), {1}),
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .source = deref_place(1, i32_type(), false),
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 3,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    ASSERT_EQ(optimized.blocks.size(), 1u);
+    ASSERT_EQ(optimized.blocks.front().instructions.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<ir3::IConst>(optimized.blocks.front().instructions.front()));
+    EXPECT_EQ(instruction_count<ir3::Borrow>(optimized), 0u);
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 0u);
+    EXPECT_EQ(instruction_count<ir3::Store>(optimized), 0u);
+    EXPECT_FALSE(contains_deref_place(optimized));
+}
+
+TEST(Ir3OptimizeTest, CanonicalizesBorrowedAggregateCopy) {
+    ir3::Function function{
+        .symbol = "ptr_root_copy",
+        .source_return_type = unit_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = pair_i32_type(),
+                .is_mutable = true,
+                .debug_name = "src",
+                .origin = ir3::SlotOrigin::User,
+            },
+            ir3::Slot{
+                .id = 1,
+                .host_type = pair_i32_type(),
+                .is_mutable = true,
+                .debug_name = "mid",
+                .origin = ir3::SlotOrigin::Temp,
+            },
+            ir3::Slot{
+                .id = 2,
+                .host_type = pair_i32_type(),
+                .is_mutable = true,
+                .debug_name = "dst",
+                .origin = ir3::SlotOrigin::Temp,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Borrow{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::Ptr},
+                        .is_mutable = false,
+                        .source = slot_place(0, pair_i32_type()),
+                    },
+                    ir3::Copy{
+                        .dest = slot_place(1, pair_i32_type()),
+                        .source = deref_place(0, pair_i32_type(), false),
+                    },
+                    ir3::Copy{
+                        .dest = slot_place(2, pair_i32_type()),
+                        .source = slot_place(1, pair_i32_type()),
+                    },
+                },
+                .terminator = ir3::Return{.value = std::nullopt},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 1,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Borrow>(optimized), 0u);
+    EXPECT_EQ(copy_count(optimized), 0u);
+    EXPECT_LT(optimized.slots.size(), 3u);
+    EXPECT_FALSE(contains_deref_place(optimized));
+}
+
+TEST(Ir3OptimizeTest, ConcatenatesBorrowedSourceAndDerefSuffixProjections) {
+    ir3::Function function{
+        .symbol = "ptr_projection_suffix",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = struct_with_array_type(),
+                .is_mutable = true,
+                .debug_name = "agg",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 0,
+                    },
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .value = 41,
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = indexed_field_place(0, struct_with_array_type(), 0, 0),
+                        .value = 1,
+                    },
+                    ir3::Borrow{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::Ptr},
+                        .is_mutable = false,
+                        .source = field_place(0, struct_with_array_type(), {0}),
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .source = deref_indexed_place(2, array1_i32_type(), 0, false),
+                    },
+                },
+                .terminator = ir3::Return{.value = 3},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 4,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    ASSERT_EQ(instruction_count<ir3::Borrow>(optimized), 0u);
+    ASSERT_EQ(instruction_count<ir3::Store>(optimized), 1u);
+    ASSERT_EQ(instruction_count<ir3::Load>(optimized), 1u);
+    EXPECT_FALSE(contains_deref_place(optimized));
+
+    const auto& instructions = optimized.blocks.front().instructions;
+    const auto* store = std::get_if<ir3::Store>(&instructions[2]);
+    ASSERT_NE(store, nullptr);
+    const auto* store_base = std::get_if<ir3::SlotBase>(&store->dest.base);
+    ASSERT_NE(store_base, nullptr);
+    EXPECT_EQ(store_base->slot, 0u);
+    ASSERT_EQ(store->dest.projections.size(), 2u);
+    EXPECT_TRUE(std::holds_alternative<ir3::FieldProjection>(store->dest.projections[0]));
+    EXPECT_TRUE(std::holds_alternative<ir3::IndexProjection>(store->dest.projections[1]));
+    EXPECT_EQ(std::get<ir3::FieldProjection>(store->dest.projections[0]).index, 0u);
+    EXPECT_EQ(std::get<ir3::IndexProjection>(store->dest.projections[1]).index, 0u);
+
+    const auto* load = std::get_if<ir3::Load>(&instructions[3]);
+    ASSERT_NE(load, nullptr);
+    const auto* load_base = std::get_if<ir3::SlotBase>(&load->source.base);
+    ASSERT_NE(load_base, nullptr);
+    EXPECT_EQ(load_base->slot, 0u);
+    ASSERT_EQ(load->source.projections.size(), 2u);
+    EXPECT_TRUE(std::holds_alternative<ir3::FieldProjection>(load->source.projections[0]));
+    EXPECT_TRUE(std::holds_alternative<ir3::IndexProjection>(load->source.projections[1]));
+    EXPECT_EQ(std::get<ir3::FieldProjection>(load->source.projections[0]).index, 0u);
+    EXPECT_EQ(std::get<ir3::IndexProjection>(load->source.projections[1]).index, 0u);
+}
+
+TEST(Ir3OptimizeTest, KeepsEscapingBorrowButCanonicalizesLocalDerefUse) {
+    ir3::Function function{
+        .symbol = "ptr_escape",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 9,
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = slot_place(0, i32_type()),
+                        .value = 0,
+                    },
+                    ir3::Borrow{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::Ptr},
+                        .is_mutable = false,
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Call{
+                        .result = std::nullopt,
+                        .callee = "sink_ptr",
+                        .args = {1},
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .source = deref_place(1, i32_type(), false),
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 3,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Borrow>(optimized), 1u);
+    EXPECT_EQ(call_count(optimized), 1u);
+    ASSERT_EQ(instruction_count<ir3::Load>(optimized), 1u);
+    EXPECT_FALSE(contains_deref_place(optimized));
+
+    const auto& instructions = optimized.blocks.front().instructions;
+    const auto* load = std::get_if<ir3::Load>(&instructions.back());
+    ASSERT_NE(load, nullptr);
+    const auto* base = std::get_if<ir3::SlotBase>(&load->source.base);
+    ASSERT_NE(base, nullptr);
+    EXPECT_EQ(base->slot, 0u);
+    EXPECT_TRUE(load->source.projections.empty());
+}
+
+TEST(Ir3OptimizeTest, DoesNotPropagatePointerFactsThroughCast) {
+    ir3::Function function{
+        .symbol = "ptr_cast_boundary",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 12,
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = slot_place(0, i32_type()),
+                        .value = 0,
+                    },
+                    ir3::Borrow{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::Ptr},
+                        .is_mutable = false,
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Cast{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::Ptr},
+                        .operand = 1,
+                        .op = ir3::CastOp::PtrToPtr,
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .source = deref_place(2, i32_type(), false),
+                    },
+                },
+                .terminator = ir3::Return{.value = 3},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 4,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Borrow>(optimized), 1u);
+    EXPECT_EQ(instruction_count<ir3::Cast>(optimized), 1u);
+    ASSERT_EQ(instruction_count<ir3::Load>(optimized), 1u);
+    EXPECT_TRUE(contains_deref_place(optimized));
+
+    const auto& instructions = optimized.blocks.front().instructions;
+    const auto* load = std::get_if<ir3::Load>(&instructions.back());
+    ASSERT_NE(load, nullptr);
+    const auto* base = std::get_if<ir3::DerefBase>(&load->source.base);
+    ASSERT_NE(base, nullptr);
+    EXPECT_EQ(base->ptr, 2u);
+}
+
 TEST(Ir3OptimizeTest, RunsDeadBlockEliminationBeforeDeadCodeElimination) {
     ir3::Function function{
         .symbol = "order",
@@ -504,11 +969,11 @@ TEST(Ir3OptimizeTest, PromotesStraightLineScalarUserSlot) {
 
     const auto& optimized = module.functions.front();
     EXPECT_TRUE(optimized.slots.empty());
-    ASSERT_EQ(optimized.blocks.front().instructions.size(), 2u);
-    EXPECT_TRUE(std::holds_alternative<ir3::IConst>(optimized.blocks.front().instructions[0]));
-    const auto* unary = std::get_if<ir3::Unary>(&optimized.blocks.front().instructions[1]);
-    ASSERT_NE(unary, nullptr);
-    EXPECT_EQ(unary->operand, 0u);
+    ASSERT_EQ(optimized.blocks.front().instructions.size(), 1u);
+    const auto* iconst = std::get_if<ir3::IConst>(&optimized.blocks.front().instructions[0]);
+    ASSERT_NE(iconst, nullptr);
+    EXPECT_EQ(iconst->result.id, 2u);
+    EXPECT_EQ(iconst->value, -8);
 }
 
 TEST(Ir3OptimizeTest, PromotesStraightLineScalarTempSlot) {
@@ -1966,4 +2431,295 @@ TEST(Ir3OptimizeTest, RemovesPromotedSlotFromLlvmAndRiscvLowering) {
         }
     }
     EXPECT_FALSE(has_local_slot);
+}
+
+TEST(Ir3OptimizeTest, SccpRewritesStraightLineValuesAndSimplifiesBranch) {
+    ir3::Function function{
+        .symbol = "sccp_straight",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 7,
+                    },
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .value = 8,
+                    },
+                    ir3::Binary{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .op = ir3::BinaryOp::SAdd,
+                        .lhs = 0,
+                        .rhs = 1,
+                    },
+                    ir3::Unary{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .op = ir3::UnaryOp::BoolNot,
+                        .operand = 2,
+                    },
+                },
+                .terminator = ir3::Branch{.condition = 3, .then_block = 1, .else_block = 2},
+            },
+            ir3::BasicBlock{
+                .id = 1,
+                .name = "bb1",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 4, .klass = ir3::SsaClass::I32},
+                        .value = 1,
+                    },
+                },
+                .terminator = ir3::Return{.value = 4},
+            },
+            ir3::BasicBlock{
+                .id = 2,
+                .name = "bb2",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 5, .klass = ir3::SsaClass::I32},
+                        .value = 2,
+                    },
+                },
+                .terminator = ir3::Return{.value = 5},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 6,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    ASSERT_EQ(optimized.blocks.size(), 2u);
+    EXPECT_TRUE(optimized.blocks.front().instructions.empty());
+    EXPECT_EQ(instruction_count<ir3::Binary>(optimized), 0u);
+    EXPECT_EQ(instruction_count<ir3::Unary>(optimized), 0u);
+
+    const auto* ret = std::get_if<ir3::Return>(&*optimized.blocks[1].terminator);
+    ASSERT_NE(ret, nullptr);
+    ASSERT_TRUE(ret->value.has_value());
+    EXPECT_EQ(*ret->value, 5u);
+}
+
+TEST(Ir3OptimizeTest, SccpRewritesConstantPhiAfterDeadEdgePrune) {
+    ir3::Function function{
+        .symbol = "sccp_phi",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 1,
+                    },
+                },
+                .terminator = ir3::Branch{.condition = 0, .then_block = 1, .else_block = 2},
+            },
+            ir3::BasicBlock{
+                .id = 1,
+                .name = "bb1",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .value = 42,
+                    },
+                },
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 2,
+                .name = "bb2",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .value = 99,
+                    },
+                },
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 3,
+                .name = "bb3",
+                .phis = {
+                    ir3::Phi{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .incoming = {
+                            ir3::PhiIncoming{.pred = 1, .value = 1},
+                            ir3::PhiIncoming{.pred = 2, .value = 2},
+                        },
+                    },
+                },
+                .instructions = {},
+                .terminator = ir3::Return{.value = 3},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 4,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    ASSERT_EQ(optimized.blocks.size(), 3u);
+    EXPECT_TRUE(optimized.blocks[2].phis.empty());
+    ASSERT_FALSE(optimized.blocks[2].instructions.empty());
+    const auto* iconst = std::get_if<ir3::IConst>(&optimized.blocks[2].instructions.front());
+    ASSERT_NE(iconst, nullptr);
+    EXPECT_EQ(iconst->result.id, 3u);
+    EXPECT_EQ(iconst->value, 42);
+}
+
+TEST(Ir3OptimizeTest, SccpUsesSlotToSsaExposedCondition) {
+    ir3::Function function{
+        .symbol = "sccp_slot_to_ssa",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "cond",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 0,
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = slot_place(0, i32_type()),
+                        .value = 0,
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                },
+                .terminator = ir3::Branch{.condition = 1, .then_block = 1, .else_block = 2},
+            },
+            ir3::BasicBlock{
+                .id = 1,
+                .name = "bb1",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .value = 11,
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+            ir3::BasicBlock{
+                .id = 2,
+                .name = "bb2",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .value = 22,
+                    },
+                },
+                .terminator = ir3::Return{.value = 3},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 4,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    ASSERT_EQ(optimized.blocks.size(), 2u);
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 0u);
+    EXPECT_EQ(instruction_count<ir3::Store>(optimized), 0u);
+    const auto* ret = std::get_if<ir3::Return>(&*optimized.blocks[1].terminator);
+    ASSERT_NE(ret, nullptr);
+    ASSERT_TRUE(ret->value.has_value());
+    EXPECT_EQ(*ret->value, 3u);
+}
+
+TEST(Ir3OptimizeTest, SccpLeavesOpaqueComputationNonConstant) {
+    ir3::Function function{
+        .symbol = "sccp_negative",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 7,
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = slot_place(0, i32_type()),
+                        .value = 0,
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Call{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .callee = "opaque",
+                        .args = {},
+                    },
+                    ir3::Borrow{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::Ptr},
+                        .is_mutable = false,
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Cast{
+                        .result = ir3::Value{.id = 4, .klass = ir3::SsaClass::Ptr},
+                        .operand = 3,
+                        .op = ir3::CastOp::PtrToPtr,
+                    },
+                    ir3::Binary{
+                        .result = ir3::Value{.id = 5, .klass = ir3::SsaClass::I32},
+                        .op = ir3::BinaryOp::SAdd,
+                        .lhs = 1,
+                        .rhs = 2,
+                    },
+                },
+                .terminator = ir3::Return{.value = 5},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 6,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Call>(optimized), 1u);
+    EXPECT_EQ(instruction_count<ir3::Binary>(optimized), 1u);
+    EXPECT_FALSE(std::holds_alternative<ir3::IConst>(optimized.blocks.front().instructions.back()));
 }

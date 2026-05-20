@@ -2,8 +2,10 @@
 #include "ir3/analysis/dominance.hpp"
 #include "ir3/analysis/dominance_frontier.hpp"
 #include "ir3/analysis/manager.hpp"
+#include "ir3/analysis/sccp.hpp"
 #include "ir3/analysis/slot_liveness.hpp"
 #include "ir3/analysis/slot_use.hpp"
+#include "ir3/analysis/value_use.hpp"
 #include "semantic/type/type.hpp"
 
 #include <gtest/gtest.h>
@@ -544,4 +546,311 @@ TEST(Ir3SlotLivenessTest, LoopKeepsSlotLiveAroundBackEdge) {
     EXPECT_TRUE(live.slot(0).live_in[1]);
     EXPECT_TRUE(live.slot(0).live_out[2]);
     EXPECT_FALSE(live.slot(0).live_in[0]);
+}
+
+TEST(Ir3ValueUseTest, RecordsDefsAndUsersAcrossPhiInstructionAndTerminatorSites) {
+    ir3::Function fn{
+        .symbol = "value_use",
+        .params = {
+            ir3::Param{
+                .value = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                .name = "cond",
+                .host_type = i32_type(),
+            },
+        },
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .value = 4,
+                    },
+                },
+                .terminator = ir3::Branch{.condition = 0, .then_block = 1, .else_block = 2},
+            },
+            ir3::BasicBlock{
+                .id = 1,
+                .name = "bb1",
+                .instructions = {
+                    ir3::Binary{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .op = ir3::BinaryOp::SAdd,
+                        .lhs = 1,
+                        .rhs = 1,
+                    },
+                },
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 2,
+                .name = "bb2",
+                .instructions = {},
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 3,
+                .name = "bb3",
+                .phis = {
+                    ir3::Phi{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .incoming = {
+                            ir3::PhiIncoming{.pred = 1, .value = 2},
+                            ir3::PhiIncoming{.pred = 2, .value = 1},
+                        },
+                    },
+                },
+                .instructions = {},
+                .terminator = ir3::Return{.value = 3},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 4,
+    };
+
+    ir3::AnalysisManager am;
+    const auto& use = am.get<ir3::ValueUseAnalysis>(fn);
+
+    ASSERT_TRUE(std::holds_alternative<ir3::ParamDefSite>(*use.value(0).def));
+    ASSERT_TRUE(std::holds_alternative<ir3::InstructionDefSite>(*use.value(1).def));
+    ASSERT_TRUE(std::holds_alternative<ir3::InstructionDefSite>(*use.value(2).def));
+    ASSERT_TRUE(std::holds_alternative<ir3::PhiDefSite>(*use.value(3).def));
+
+    EXPECT_EQ(use.value(0).uses.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<ir3::TerminatorUseSite>(use.value(0).uses.front()));
+
+    EXPECT_EQ(use.value(1).uses.size(), 3u);
+    EXPECT_TRUE(std::holds_alternative<ir3::InstructionUseSite>(use.value(1).uses[0]));
+    EXPECT_TRUE(std::holds_alternative<ir3::InstructionUseSite>(use.value(1).uses[1]));
+    EXPECT_TRUE(std::holds_alternative<ir3::PhiUseSite>(use.value(1).uses[2]));
+
+    EXPECT_EQ(use.value(2).uses.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<ir3::PhiUseSite>(use.value(2).uses.front()));
+
+    EXPECT_EQ(use.value(3).uses.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<ir3::TerminatorUseSite>(use.value(3).uses.front()));
+}
+
+TEST(Ir3SccpAnalysisTest, TracksExecutableEdgesAndConstantsThroughDiamondPhi) {
+    ir3::Function fn{
+        .symbol = "sccp_diamond",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 1,
+                    },
+                },
+                .terminator = ir3::Branch{.condition = 0, .then_block = 1, .else_block = 2},
+            },
+            ir3::BasicBlock{
+                .id = 1,
+                .name = "bb1",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .value = 11,
+                    },
+                },
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 2,
+                .name = "bb2",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .value = 99,
+                    },
+                },
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 3,
+                .name = "bb3",
+                .phis = {
+                    ir3::Phi{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .incoming = {
+                            ir3::PhiIncoming{.pred = 1, .value = 1},
+                            ir3::PhiIncoming{.pred = 2, .value = 2},
+                        },
+                    },
+                },
+                .terminator = ir3::Return{.value = 3},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 4,
+    };
+
+    ir3::AnalysisManager am;
+    const auto& sccp = am.get<ir3::SccpAnalysis>(fn);
+
+    EXPECT_TRUE(sccp.is_block_executable(0));
+    EXPECT_TRUE(sccp.is_block_executable(1));
+    EXPECT_FALSE(sccp.is_block_executable(2));
+    EXPECT_TRUE(sccp.is_block_executable(3));
+
+    EXPECT_TRUE(sccp.is_edge_executable(0, 0));
+    EXPECT_FALSE(sccp.is_edge_executable(0, 1));
+    EXPECT_TRUE(sccp.is_edge_executable(1, 0));
+
+    EXPECT_TRUE(sccp.value(0).is_constant());
+    EXPECT_EQ(sccp.value(0).bits, 1u);
+    EXPECT_TRUE(sccp.value(1).is_constant());
+    EXPECT_EQ(sccp.value(1).bits, 11u);
+    EXPECT_TRUE(sccp.value(3).is_constant());
+    EXPECT_EQ(sccp.value(3).bits, 11u);
+}
+
+TEST(Ir3SccpAnalysisTest, LoopPhiReachesFixpointAndKeepsHeaderExecutable) {
+    ir3::Function fn{
+        .symbol = "sccp_loop",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 0,
+                    },
+                },
+                .terminator = ir3::Jump{.target = 1},
+            },
+            ir3::BasicBlock{
+                .id = 1,
+                .name = "bb1",
+                .phis = {
+                    ir3::Phi{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .incoming = {
+                            ir3::PhiIncoming{.pred = 0, .value = 0},
+                            ir3::PhiIncoming{.pred = 2, .value = 2},
+                        },
+                    },
+                },
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .value = 0,
+                    },
+                },
+                .terminator = ir3::Branch{.condition = 3, .then_block = 2, .else_block = 3},
+            },
+            ir3::BasicBlock{
+                .id = 2,
+                .name = "bb2",
+                .instructions = {
+                    ir3::Binary{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .op = ir3::BinaryOp::SAdd,
+                        .lhs = 1,
+                        .rhs = 0,
+                    },
+                },
+                .terminator = ir3::Jump{.target = 1},
+            },
+            ir3::BasicBlock{
+                .id = 3,
+                .name = "bb3",
+                .terminator = ir3::Return{.value = 1},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 4,
+    };
+
+    ir3::AnalysisManager am;
+    const auto& sccp = am.get<ir3::SccpAnalysis>(fn);
+
+    EXPECT_TRUE(sccp.is_block_executable(0));
+    EXPECT_TRUE(sccp.is_block_executable(1));
+    EXPECT_FALSE(sccp.is_block_executable(2));
+    EXPECT_TRUE(sccp.is_block_executable(3));
+
+    EXPECT_TRUE(sccp.value(1).is_constant());
+    EXPECT_EQ(sccp.value(1).bits, 0u);
+}
+
+TEST(Ir3SccpAnalysisTest, MarksLoadsCallsAndPointerCastsOverdefined) {
+    ir3::Function fn{
+        .symbol = "sccp_opaque",
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 7,
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = slot_place(0, i32_type()),
+                        .value = 0,
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Call{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .callee = "opaque",
+                        .args = {},
+                    },
+                    ir3::Borrow{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::Ptr},
+                        .is_mutable = false,
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Cast{
+                        .result = ir3::Value{.id = 4, .klass = ir3::SsaClass::Ptr},
+                        .operand = 3,
+                        .op = ir3::CastOp::PtrToPtr,
+                    },
+                    ir3::Binary{
+                        .result = ir3::Value{.id = 5, .klass = ir3::SsaClass::I32},
+                        .op = ir3::BinaryOp::SAdd,
+                        .lhs = 1,
+                        .rhs = 2,
+                    },
+                },
+                .terminator = ir3::Return{.value = 5},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 6,
+    };
+
+    ir3::AnalysisManager am;
+    const auto& sccp = am.get<ir3::SccpAnalysis>(fn);
+
+    EXPECT_TRUE(sccp.value(1).is_overdefined());
+    EXPECT_TRUE(sccp.value(2).is_overdefined());
+    EXPECT_TRUE(sccp.value(3).is_overdefined());
+    EXPECT_TRUE(sccp.value(4).is_overdefined());
+    EXPECT_TRUE(sccp.value(5).is_overdefined());
 }
