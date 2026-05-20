@@ -114,7 +114,7 @@ bool is_callee_save_store(const FunctionLoweringContext& ctx, const Instruction&
     }
     const FrameObject* object = ctx.find_frame_object(address->frame);
     return object && object->kind == FrameObjectKind::CalleeSave &&
-           object->callee_save_reg == *src;
+           object->saved_reg == *src;
 }
 
 bool is_callee_save_load(const FunctionLoweringContext& ctx, const Instruction& inst) {
@@ -129,7 +129,7 @@ bool is_callee_save_load(const FunctionLoweringContext& ctx, const Instruction& 
     }
     const FrameObject* object = ctx.find_frame_object(address->frame);
     return object && object->kind == FrameObjectKind::CalleeSave &&
-           object->callee_save_reg == *dest;
+           object->saved_reg == *dest;
 }
 
 std::size_t leading_save_count(const FunctionLoweringContext& ctx,

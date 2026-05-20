@@ -65,7 +65,7 @@ std::unordered_map<PhysicalRegister, FrameId> append_missing_save_slots(
             .spill_class = std::nullopt,
             .source_slot = std::nullopt,
             .debug_name = std::string("save.") + physical_register_name(reg),
-            .callee_save_reg = reg,
+            .saved_reg = reg,
             .materialized_offset = std::nullopt,
         });
         save_slots.emplace(reg, id);
@@ -165,7 +165,8 @@ PrologueEpiloguePlan compute_prologue_epilogue_plan(const MachineFunction& fn) {
 
     const bool has_non_save_frame_object =
         std::any_of(fn.frame_objects.begin(), fn.frame_objects.end(), [](const FrameObject& object) {
-            return object.kind != FrameObjectKind::CalleeSave;
+            return object.kind != FrameObjectKind::CalleeSave &&
+                   object.kind != FrameObjectKind::CallerSave;
         });
 
     const bool has_material_frame =

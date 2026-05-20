@@ -1,4 +1,6 @@
+#include "ir3/analysis/manager.hpp"
 #include "ir3/optimize.hpp"
+#include "ir3/passes/load_forwarding.hpp"
 #include "ir3/pretty_print.hpp"
 #include "ir3/llvm_transcribe.hpp"
 #include "riscv/lower.hpp"
@@ -248,6 +250,16 @@ bool contains_callee(const ir3::Function& function, std::string_view callee) {
     return false;
 }
 
+std::size_t block_instruction_count(const ir3::Function& function, ir3::BlockId block_id) {
+    return function.blocks[block_id].instructions.size();
+}
+
+void run_load_forwarding(ir3::Function& function) {
+    ir3::AnalysisManager am;
+    ir3::LoadForwardingPass pass;
+    pass.run(function, am);
+}
+
 } // namespace
 
 TEST(Ir3OptimizeTest, PrunesUnreachableBlocksAndRewritesPhiPredecessors) {
@@ -458,12 +470,11 @@ TEST(Ir3OptimizeTest, KeepsEffectfulInstructionsAndUsedBorrow) {
     ir3::optimize_module(module);
 
     const auto& instructions = module.functions.front().blocks.front().instructions;
-    ASSERT_EQ(instructions.size(), 5u);
+    ASSERT_EQ(instructions.size(), 4u);
     EXPECT_TRUE(std::holds_alternative<ir3::IConst>(instructions[0]));
     EXPECT_TRUE(std::holds_alternative<ir3::Store>(instructions[1]));
-    EXPECT_TRUE(std::holds_alternative<ir3::Load>(instructions[2]));
-    EXPECT_TRUE(std::holds_alternative<ir3::Borrow>(instructions[3]));
-    EXPECT_TRUE(std::holds_alternative<ir3::Call>(instructions[4]));
+    EXPECT_TRUE(std::holds_alternative<ir3::Borrow>(instructions[2]));
+    EXPECT_TRUE(std::holds_alternative<ir3::Call>(instructions[3]));
 }
 
 TEST(Ir3OptimizeTest, CanonicalizesRootBorrowedDerefTraffic) {
@@ -1887,6 +1898,532 @@ TEST(Ir3OptimizeTest, LeavesReachableLoadBeforeDefSlotUntouched) {
     ASSERT_EQ(optimized.slots.size(), 1u);
     EXPECT_TRUE(optimized.blocks[1].instructions.size() == 1u);
     EXPECT_TRUE(optimized.blocks[3].instructions.size() == 1u);
+}
+
+TEST(Ir3OptimizeTest, ForwardsStoreToLoadWithinBlock) {
+    ir3::Function function{
+        .symbol = "forward_store_load",
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .value = 7,
+                    },
+                    ir3::Store{.klass = ir3::SsaClass::I32, .dest = slot_place(0, i32_type()), .value = 0},
+                    ir3::Load{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                },
+                .terminator = ir3::Return{.value = 1},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 2,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 0u);
+    EXPECT_EQ(block_instruction_count(optimized, 0), 1u);
+    ASSERT_TRUE(std::holds_alternative<ir3::IConst>(optimized.blocks[0].instructions[0]));
+    const auto* ret = std::get_if<ir3::Return>(&*optimized.blocks[0].terminator);
+    ASSERT_NE(ret, nullptr);
+    ASSERT_TRUE(ret->value.has_value());
+    EXPECT_EQ(*ret->value, 0u);
+}
+
+TEST(Ir3OptimizeTest, ForwardsRepeatedFieldLoadWithinBlock) {
+    ir3::Function function{
+        .symbol = "forward_field_load",
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = pair_i32_type(),
+                .is_mutable = true,
+                .debug_name = "pair",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Load{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .source = field_place(0, pair_i32_type(), {1}),
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .source = field_place(0, pair_i32_type(), {1}),
+                    },
+                },
+                .terminator = ir3::Return{.value = 1},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 2,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 1u);
+    const auto* ret = std::get_if<ir3::Return>(&*optimized.blocks[0].terminator);
+    ASSERT_NE(ret, nullptr);
+    ASSERT_TRUE(ret->value.has_value());
+    EXPECT_EQ(*ret->value, 0u);
+}
+
+TEST(Ir3OptimizeTest, ForwardsJoinLoadWhenPredecessorsAgree) {
+    ir3::Function function{
+        .symbol = "forward_join_same",
+        .params = {
+            ir3::Param{
+                .value = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                .name = "cond",
+                .host_type = i32_type(),
+            },
+            ir3::Param{
+                .value = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                .name = "x",
+                .host_type = i32_type(),
+            },
+        },
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .terminator = ir3::Branch{.condition = 0, .then_block = 1, .else_block = 2},
+            },
+            ir3::BasicBlock{
+                .id = 1,
+                .name = "bb1",
+                .instructions = {
+                    ir3::Store{.klass = ir3::SsaClass::I32, .dest = slot_place(0, i32_type()), .value = 1},
+                },
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 2,
+                .name = "bb2",
+                .instructions = {
+                    ir3::Store{.klass = ir3::SsaClass::I32, .dest = slot_place(0, i32_type()), .value = 1},
+                },
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 3,
+                .name = "bb3",
+                .instructions = {
+                    ir3::Load{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 3,
+    };
+
+    run_load_forwarding(function);
+
+    const auto& optimized = function;
+    EXPECT_EQ(block_instruction_count(optimized, 3), 0u);
+    const auto* ret = std::get_if<ir3::Return>(&*optimized.blocks[3].terminator);
+    ASSERT_NE(ret, nullptr);
+    ASSERT_TRUE(ret->value.has_value());
+    EXPECT_EQ(*ret->value, 1u);
+}
+
+TEST(Ir3OptimizeTest, LeavesJoinLoadWhenPredecessorsDisagree) {
+    ir3::Function function{
+        .symbol = "forward_join_diff",
+        .params = {
+            ir3::Param{
+                .value = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                .name = "cond",
+                .host_type = i32_type(),
+            },
+            ir3::Param{
+                .value = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                .name = "lhs",
+                .host_type = i32_type(),
+            },
+            ir3::Param{
+                .value = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                .name = "rhs",
+                .host_type = i32_type(),
+            },
+        },
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .terminator = ir3::Branch{.condition = 0, .then_block = 1, .else_block = 2},
+            },
+            ir3::BasicBlock{
+                .id = 1,
+                .name = "bb1",
+                .instructions = {
+                    ir3::Store{.klass = ir3::SsaClass::I32, .dest = slot_place(0, i32_type()), .value = 1},
+                },
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 2,
+                .name = "bb2",
+                .instructions = {
+                    ir3::Store{.klass = ir3::SsaClass::I32, .dest = slot_place(0, i32_type()), .value = 2},
+                },
+                .terminator = ir3::Jump{.target = 3},
+            },
+            ir3::BasicBlock{
+                .id = 3,
+                .name = "bb3",
+                .instructions = {
+                    ir3::Load{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                },
+                .terminator = ir3::Return{.value = 3},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 4,
+    };
+
+    run_load_forwarding(function);
+
+    const auto& optimized = function;
+    EXPECT_EQ(block_instruction_count(optimized, 3), 1u);
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 1u);
+}
+
+TEST(Ir3OptimizeTest, PreservesFieldValueAcrossSiblingFieldStore) {
+    ir3::Function function{
+        .symbol = "forward_sibling_fields",
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = pair_i32_type(),
+                .is_mutable = true,
+                .debug_name = "pair",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Load{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .source = field_place(0, pair_i32_type(), {0}),
+                    },
+                    ir3::IConst{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .value = 5,
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = field_place(0, pair_i32_type(), {1}),
+                        .value = 1,
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .source = field_place(0, pair_i32_type(), {0}),
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 3,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 1u);
+    const auto* ret = std::get_if<ir3::Return>(&*optimized.blocks[0].terminator);
+    ASSERT_NE(ret, nullptr);
+    ASSERT_TRUE(ret->value.has_value());
+    EXPECT_EQ(*ret->value, 0u);
+}
+
+TEST(Ir3OptimizeTest, BorrowBlocksForwarding) {
+    ir3::Function function{
+        .symbol = "forward_borrow_barrier",
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Load{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Borrow{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::Ptr},
+                        .is_mutable = false,
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 3,
+    };
+
+    run_load_forwarding(function);
+
+    const auto& optimized = function;
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 2u);
+}
+
+TEST(Ir3OptimizeTest, CallBlocksForwarding) {
+    ir3::Function function{
+        .symbol = "forward_call_barrier",
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = i32_type(),
+                .is_mutable = true,
+                .debug_name = "x",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Load{
+                        .result = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                    ir3::Call{
+                        .result = std::nullopt,
+                        .callee = "opaque",
+                        .args = {},
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .source = slot_place(0, i32_type()),
+                    },
+                },
+                .terminator = ir3::Return{.value = 1},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 2,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 2u);
+}
+
+TEST(Ir3OptimizeTest, IndexedPlaceRemainsUntouched) {
+    ir3::Function function{
+        .symbol = "forward_indexed_skip",
+        .params = {
+            ir3::Param{
+                .value = ir3::Value{.id = 0, .klass = ir3::SsaClass::I32},
+                .name = "idx",
+                .host_type = i32_type(),
+            },
+        },
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .slots = {
+            ir3::Slot{
+                .id = 0,
+                .host_type = array1_i32_type(),
+                .is_mutable = true,
+                .debug_name = "arr",
+                .origin = ir3::SlotOrigin::User,
+            },
+        },
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Load{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .source = indexed_slot_place(0, array1_i32_type(), 0),
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .source = indexed_slot_place(0, array1_i32_type(), 0),
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 3,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 2u);
+}
+
+TEST(Ir3OptimizeTest, ForwardsRepeatedDerefFieldLoad) {
+    ir3::Function function{
+        .symbol = "forward_deref_field",
+        .params = {
+            ir3::Param{
+                .value = ir3::Value{.id = 0, .klass = ir3::SsaClass::Ptr},
+                .name = "ptr",
+                .host_type = pair_i32_type(),
+            },
+        },
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Load{
+                        .result = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                        .source = deref_field_place(0, pair_i32_type(), {1}, false),
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .source = deref_field_place(0, pair_i32_type(), {1}, false),
+                    },
+                },
+                .terminator = ir3::Return{.value = 2},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 3,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 1u);
+    const auto* ret = std::get_if<ir3::Return>(&*optimized.blocks[0].terminator);
+    ASSERT_NE(ret, nullptr);
+    ASSERT_TRUE(ret->value.has_value());
+    EXPECT_EQ(*ret->value, 1u);
+}
+
+TEST(Ir3OptimizeTest, DerefStoreKillsCachedFacts) {
+    ir3::Function function{
+        .symbol = "forward_deref_store_kill",
+        .params = {
+            ir3::Param{
+                .value = ir3::Value{.id = 0, .klass = ir3::SsaClass::Ptr},
+                .name = "ptr",
+                .host_type = pair_i32_type(),
+            },
+            ir3::Param{
+                .value = ir3::Value{.id = 1, .klass = ir3::SsaClass::I32},
+                .name = "rhs",
+                .host_type = i32_type(),
+            },
+        },
+        .return_class = ir3::SsaClass::I32,
+        .source_return_type = i32_type(),
+        .blocks = {
+            ir3::BasicBlock{
+                .id = 0,
+                .name = "bb0",
+                .instructions = {
+                    ir3::Load{
+                        .result = ir3::Value{.id = 2, .klass = ir3::SsaClass::I32},
+                        .source = deref_field_place(0, pair_i32_type(), {0}, true),
+                    },
+                    ir3::Store{
+                        .klass = ir3::SsaClass::I32,
+                        .dest = deref_field_place(0, pair_i32_type(), {1}, true),
+                        .value = 1,
+                    },
+                    ir3::Load{
+                        .result = ir3::Value{.id = 3, .klass = ir3::SsaClass::I32},
+                        .source = deref_field_place(0, pair_i32_type(), {0}, true),
+                    },
+                },
+                .terminator = ir3::Return{.value = 3},
+            },
+        },
+        .entry_block = 0,
+        .next_value = 4,
+    };
+
+    ir3::Module module{.functions = {function}};
+    ir3::optimize_module(module);
+
+    const auto& optimized = module.functions.front();
+    EXPECT_EQ(instruction_count<ir3::Load>(optimized), 2u);
 }
 
 TEST(Ir3OptimizeTest, InlinesSimpleScalarCall) {

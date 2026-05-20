@@ -113,6 +113,8 @@ const char* frame_kind_name(FrameObjectKind kind) {
         return "spill";
     case FrameObjectKind::CalleeSave:
         return "callee_save";
+    case FrameObjectKind::CallerSave:
+        return "caller_save";
     }
     return "<frame-kind>";
 }
@@ -291,8 +293,8 @@ void print_function(std::ostream& out, const MachineFunction& function) {
         } else if (object.spill_class) {
             out << " " << register_class_name(*object.spill_class);
         }
-        if (object.callee_save_reg) {
-            out << " " << physical_register_name(*object.callee_save_reg);
+        if (object.saved_reg) {
+            out << " " << physical_register_name(*object.saved_reg);
         }
         out << " size " << object.size << " align " << object.align;
         if (object.materialized_offset) {

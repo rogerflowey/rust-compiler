@@ -1,5 +1,8 @@
 # Official Testcases
 
+!!!IMPORTANT!!!
+These files are big, avoid searching/catting them. Compiled output will be even bigger. Unless explicitly required, do not inspect the folder/any compile artifact originate from this. Only pass/fail is allowed, not detailed content.
+
 ## Scope
 
 The official external corpus for this checkout lives at:
@@ -117,3 +120,5 @@ Two points matter:
 3. Runtime checking still needs REIMU plus smaller curated programs when you
    want fast, explainable failures. The default-stack IR-1 runtime sweep is now
    mostly a stress signal for large-stack programs.
+
+

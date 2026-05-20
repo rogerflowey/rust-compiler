@@ -16,11 +16,14 @@ which document is normative.
 
 1. [regalloc-plan.md](./regalloc-plan.md) - the v1 register-allocation plan
    that builds directly on the Machine IR contract
-2. [frame-cleanup-plan.md](./frame-cleanup-plan.md) - the frame-pipeline
+2. [machine-ir-opt-plan.md](./machine-ir-opt-plan.md) - the Machine IR
+   optimization roadmap for pre-RA cleanup, allocator-quality work, and
+   post-phi CFG cleanup
+3. [frame-cleanup-plan.md](./frame-cleanup-plan.md) - the frame-pipeline
    cleanup note for prologue/epilogue generation and frame materialization
-3. [asmir-plan.md](./asmir-plan.md) - forward-looking plan for adding a final
+4. [asmir-plan.md](./asmir-plan.md) - forward-looking plan for adding a final
    assembly-shaped IR after Machine IR cleanup
-4. [regalloc-future.md](./regalloc-future.md) - follow-on allocator and
+5. [regalloc-future.md](./regalloc-future.md) - follow-on allocator and
    optimizer directions after the v1 register allocator is stable
 
 ## Historical Milestone Notes

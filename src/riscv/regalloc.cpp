@@ -1,25 +1,35 @@
 #include "riscv/regalloc.hpp"
 
 #include "riscv/analysis/cfg.hpp"
-#include "riscv/analysis/intervals.hpp"
 #include "riscv/analysis/liveness.hpp"
 
+#include "semantic/type/type.hpp"
+
+#include <algorithm>
+#include <array>
+#include <iterator>
 #include <limits>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace riscv {
 namespace {
 
-// Allocatable pool: s1-s11 (callee-saved, 11 registers)
-constexpr PhysicalRegister kAllocatable[] = {
+constexpr std::array<PhysicalRegister, 19> kAllocatable = {
     PhysicalRegister::S1,  PhysicalRegister::S2,  PhysicalRegister::S3,
     PhysicalRegister::S4,  PhysicalRegister::S5,  PhysicalRegister::S6,
     PhysicalRegister::S7,  PhysicalRegister::S8,  PhysicalRegister::S9,
-    PhysicalRegister::S10, PhysicalRegister::S11,
+    PhysicalRegister::S10, PhysicalRegister::S11, PhysicalRegister::A0,
+    PhysicalRegister::A1,  PhysicalRegister::A2,  PhysicalRegister::A3,
+    PhysicalRegister::A4,  PhysicalRegister::A5,  PhysicalRegister::A6,
+    PhysicalRegister::A7,
 };
 
 constexpr PhysicalRegister kScratch0 = PhysicalRegister::T0;
@@ -30,103 +40,604 @@ struct Allocation {
     std::unordered_map<MachineValueId, FrameId> spilled;
 };
 
-// ---- Linear scan ----
+struct OriginalNode {
+    std::optional<MachineValueId> vreg;
+    std::optional<PhysicalRegister> precolor;
+    RegisterClass reg_class = RegisterClass::Gpr32;
+    std::size_t weight = 0;
+};
 
-Allocation linear_scan(const LiveIntervals& intervals, MachineFunction& fn) {
-    Allocation alloc;
-    std::vector<PhysicalRegister> free_regs(std::begin(kAllocatable), std::end(kAllocatable));
+struct NodeTable {
+    std::vector<OriginalNode> nodes;
+    std::unordered_map<MachineValueId, int> vreg_nodes;
+    std::unordered_map<PhysicalRegister, int> phys_nodes;
+};
 
-    struct Active {
-        Position end;
-        MachineValueId vreg;
-        PhysicalRegister reg;
-        bool operator<(const Active& o) const {
-            return end < o.end || (end == o.end && vreg < o.vreg);
+struct GraphInput {
+    NodeTable table;
+    std::vector<std::unordered_set<int>> adjacency;
+    std::vector<std::pair<int, int>> moves;
+};
+
+struct CoalescedNode {
+    int rep = -1;
+    std::optional<PhysicalRegister> precolor;
+    std::size_t weight = 0;
+    std::unordered_set<int> neighbors;
+    std::vector<MachineValueId> members;
+};
+
+struct CoalescedGraph {
+    std::unordered_map<int, CoalescedNode> nodes;
+};
+
+class Dsu {
+public:
+    explicit Dsu(std::size_t n) : parent_(n), rank_(n, 0) {
+        for (std::size_t i = 0; i < n; ++i) {
+            parent_[i] = static_cast<int>(i);
         }
-    };
-    std::set<Active> active;
-
-    auto expire = [&](Position cur) {
-        while (!active.empty() && active.begin()->end < cur) {
-            free_regs.push_back(active.begin()->reg);
-            active.erase(active.begin());
-        }
-    };
-
-    auto do_spill = [&](MachineValueId id) {
-        FrameId fid = fn.frame_objects.size();
-        fn.frame_objects.push_back(FrameObject{
-            .id = fid,
-            .kind = FrameObjectKind::Spill,
-            .size = 4,
-            .align = 4,
-            .host_type = semantic::invalid_type_id,
-            .spill_class = RegisterClass::Gpr32,
-            .source_slot = std::nullopt,
-            .debug_name = "",
-        });
-        alloc.spilled.emplace(id, fid);
-    };
-
-    // Return the next use position after `after`, or a maximum sentinel for dead defs.
-    // The sentinel is std::numeric_limits<Position>::max(), which is always chosen as spill victim.
-    auto next_use = [&](const LiveInterval& iv, Position after) -> Position {
-        for (Position u : iv.uses) {
-            if (u > after) return u;
-        }
-        // No future use: treat as dead def (will be spilled in preference to live ranges).
-        return std::numeric_limits<Position>::max();
-    };
-
-    std::unordered_map<MachineValueId, const LiveInterval*> iv_map;
-    for (const auto& iv : intervals.intervals) {
-        iv_map[iv.vreg] = &iv;
     }
 
-    for (const auto& iv : intervals.intervals) {
-        expire(iv.start);
-
-        if (!free_regs.empty()) {
-            PhysicalRegister reg = free_regs.back();
-            free_regs.pop_back();
-            alloc.assigned.emplace(iv.vreg, reg);
-            active.insert({iv.end, iv.vreg, reg});
-            continue;
+    int find(int value) {
+        if (parent_[static_cast<std::size_t>(value)] == value) {
+            return value;
         }
+        parent_[static_cast<std::size_t>(value)] =
+            find(parent_[static_cast<std::size_t>(value)]);
+        return parent_[static_cast<std::size_t>(value)];
+    }
 
-        // Farthest-next-use spill heuristic
-        Position cur_next = next_use(iv, iv.start);
-        Active best_victim;
-        bool found_victim = false;
+    int unite(int a, int b, bool prefer_a) {
+        a = find(a);
+        b = find(b);
+        if (a == b) {
+            return a;
+        }
+        if (rank_[static_cast<std::size_t>(a)] < rank_[static_cast<std::size_t>(b)] ||
+            (rank_[static_cast<std::size_t>(a)] == rank_[static_cast<std::size_t>(b)] &&
+             !prefer_a)) {
+            std::swap(a, b);
+        }
+        parent_[static_cast<std::size_t>(b)] = a;
+        if (rank_[static_cast<std::size_t>(a)] == rank_[static_cast<std::size_t>(b)]) {
+            ++rank_[static_cast<std::size_t>(a)];
+        }
+        return a;
+    }
 
-        for (const auto& a : active) {
-            Position vn = next_use(*iv_map.at(a.vreg), iv.start);
-            if (vn > cur_next) {
-                if (!found_victim ||
-                    vn > next_use(*iv_map.at(best_victim.vreg), iv.start)) {
-                    best_victim = a;
-                    found_victim = true;
+private:
+    std::vector<int> parent_;
+    std::vector<int> rank_;
+};
+
+template <class Fn>
+void for_each_register_ref(const RegisterRef& reg, Fn&& fn) {
+    std::visit(
+        [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, VirtualRegister>) {
+                fn(value);
+            } else if constexpr (std::is_same_v<T, PhysicalRegister>) {
+                fn(value);
+            }
+        },
+        reg);
+}
+
+template <class Fn>
+void for_each_address_register(const Address& address, Fn&& fn) {
+    if (const auto* reg_addr = std::get_if<RegisterAddress>(&address)) {
+        for_each_register_ref(reg_addr->base, fn);
+    }
+}
+
+template <class Fn>
+void for_each_instruction_use(const Instruction& inst, Fn&& fn) {
+    std::visit(
+        [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, Copy>) {
+                for_each_register_ref(value.src, fn);
+            } else if constexpr (std::is_same_v<T, Binary>) {
+                for_each_register_ref(value.lhs, fn);
+                for_each_register_ref(value.rhs, fn);
+            } else if constexpr (std::is_same_v<T, Compare>) {
+                for_each_register_ref(value.lhs, fn);
+                for_each_register_ref(value.rhs, fn);
+            } else if constexpr (std::is_same_v<T, Load>) {
+                for_each_address_register(value.address, fn);
+            } else if constexpr (std::is_same_v<T, Store>) {
+                for_each_register_ref(value.src, fn);
+                for_each_address_register(value.address, fn);
+            }
+        },
+        inst);
+}
+
+template <class Fn>
+void for_each_instruction_def(const Instruction& inst, Fn&& fn) {
+    std::visit(
+        [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, Copy> || std::is_same_v<T, Li> ||
+                          std::is_same_v<T, Binary> || std::is_same_v<T, Compare> ||
+                          std::is_same_v<T, FrameAddr> || std::is_same_v<T, Load>) {
+                for_each_register_ref(value.dest, fn);
+            }
+        },
+        inst);
+}
+
+template <class Fn>
+void for_each_terminator_use(const Terminator& term, Fn&& fn) {
+    std::visit(
+        [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, BranchNonZero>) {
+                for_each_register_ref(value.condition, fn);
+            } else if constexpr (std::is_same_v<T, Return>) {
+                if (value.value) {
+                    for_each_register_ref(*value.value, fn);
+                }
+            }
+        },
+        term);
+}
+
+std::optional<int> node_for(const NodeTable& table, const RegisterRef& reg) {
+    return std::visit(
+        [&](const auto& value) -> std::optional<int> {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, VirtualRegister>) {
+                return table.vreg_nodes.at(value.id);
+            } else if constexpr (std::is_same_v<T, PhysicalRegister>) {
+                if (!is_allocatable_register(value)) {
+                    return std::nullopt;
+                }
+                return table.phys_nodes.at(value);
+            } else {
+                return std::nullopt;
+            }
+        },
+        reg);
+}
+
+void ensure_node(NodeTable& table, const RegisterRef& reg) {
+    std::visit(
+        [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, VirtualRegister>) {
+                if (!table.vreg_nodes.contains(value.id)) {
+                    const int id = static_cast<int>(table.nodes.size());
+                    table.nodes.push_back(OriginalNode{
+                        .vreg = value.id,
+                        .precolor = std::nullopt,
+                        .reg_class = value.reg_class,
+                        .weight = 0,
+                    });
+                    table.vreg_nodes.emplace(value.id, id);
+                }
+            } else if constexpr (std::is_same_v<T, PhysicalRegister>) {
+                if (!is_allocatable_register(value) || table.phys_nodes.contains(value)) {
+                    return;
+                }
+                const int id = static_cast<int>(table.nodes.size());
+                table.nodes.push_back(OriginalNode{
+                    .vreg = std::nullopt,
+                    .precolor = value,
+                    .reg_class = RegisterClass::Gpr32,
+                    .weight = std::numeric_limits<std::size_t>::max() / 4,
+                });
+                table.phys_nodes.emplace(value, id);
+            }
+        },
+        reg);
+}
+
+void add_edge(std::vector<std::unordered_set<int>>& adjacency, int a, int b) {
+    if (a == b) {
+        return;
+    }
+    adjacency[static_cast<std::size_t>(a)].insert(b);
+    adjacency[static_cast<std::size_t>(b)].insert(a);
+}
+
+NodeTable collect_nodes(const MachineFunction& fn) {
+    NodeTable table;
+    for (const auto reg : kAllocatable) {
+        ensure_node(table, reg);
+    }
+
+    for (const auto& block : fn.blocks) {
+        for (const auto& phi : block.phis) {
+            ensure_node(table, phi.dest);
+            for (const auto& incoming : phi.incoming) {
+                ensure_node(table, incoming.value);
+            }
+        }
+        for (const auto& inst : block.instructions) {
+            for_each_instruction_def(inst, [&](const auto& reg) { ensure_node(table, reg); });
+            for_each_instruction_use(inst, [&](const auto& reg) { ensure_node(table, reg); });
+        }
+        if (block.terminator) {
+            for_each_terminator_use(*block.terminator,
+                                    [&](const auto& reg) { ensure_node(table, reg); });
+        }
+    }
+    return table;
+}
+
+void bump_weight(NodeTable& table, const RegisterRef& reg) {
+    if (const auto* vreg = std::get_if<VirtualRegister>(&reg)) {
+        ++table.nodes[static_cast<std::size_t>(table.vreg_nodes.at(vreg->id))].weight;
+    }
+}
+
+GraphInput build_graph(const MachineFunction& fn) {
+    GraphInput input;
+    input.table = collect_nodes(fn);
+    input.adjacency.resize(input.table.nodes.size());
+
+    const auto cfg = compute_cfg(fn);
+    const auto live = compute_liveness(fn, cfg);
+
+    for (const auto& block : fn.blocks) {
+        for (const auto& phi : block.phis) {
+            bump_weight(input.table, phi.dest);
+            for (const auto& incoming : phi.incoming) {
+                bump_weight(input.table, incoming.value);
+                const auto dest = node_for(input.table, phi.dest);
+                const auto src = node_for(input.table, incoming.value);
+                if (dest && src) {
+                    input.moves.push_back({*dest, *src});
                 }
             }
         }
+        for (const auto& inst : block.instructions) {
+            for_each_instruction_def(inst, [&](const auto& reg) { bump_weight(input.table, reg); });
+            for_each_instruction_use(inst, [&](const auto& reg) { bump_weight(input.table, reg); });
+            if (const auto* copy = std::get_if<Copy>(&inst)) {
+                const auto dest = node_for(input.table, copy->dest);
+                const auto src = node_for(input.table, copy->src);
+                if (dest && src) {
+                    input.moves.push_back({*dest, *src});
+                }
+            }
+        }
+        if (block.terminator) {
+            for_each_terminator_use(*block.terminator,
+                                    [&](const auto& reg) { bump_weight(input.table, reg); });
+        }
+    }
 
-        if (!found_victim) {
-            do_spill(iv.vreg);
+    auto add_phys_live_edges =
+        [&](const std::vector<PhysicalRegister>& phys_regs,
+            const std::unordered_set<MachineValueId>& live_vregs) {
+            for (const auto phys : phys_regs) {
+                if (!is_allocatable_register(phys)) {
+                    continue;
+                }
+                const int phys_node = input.table.phys_nodes.at(phys);
+                for (const auto live_vreg : live_vregs) {
+                    add_edge(input.adjacency, phys_node, input.table.vreg_nodes.at(live_vreg));
+                }
+            }
+        };
+
+    for (std::size_t block_index = 0; block_index < fn.blocks.size(); ++block_index) {
+        const auto& block = fn.blocks[block_index];
+        auto current_live = live.live_out[block_index];
+
+        if (block.terminator) {
+            std::vector<PhysicalRegister> phys_uses;
+            for_each_terminator_use(*block.terminator, [&](const auto& reg) {
+                using T = std::decay_t<decltype(reg)>;
+                if constexpr (std::is_same_v<T, PhysicalRegister>) {
+                    phys_uses.push_back(reg);
+                }
+            });
+            add_phys_live_edges(phys_uses, current_live);
+            for_each_terminator_use(*block.terminator, [&](const auto& reg) {
+                using T = std::decay_t<decltype(reg)>;
+                if constexpr (std::is_same_v<T, VirtualRegister>) {
+                    current_live.insert(reg.id);
+                }
+            });
+        }
+
+        for (auto it = block.instructions.rbegin(); it != block.instructions.rend(); ++it) {
+            const Instruction& inst = *it;
+            std::vector<MachineValueId> defs;
+            std::vector<MachineValueId> uses;
+            std::vector<PhysicalRegister> phys_defs;
+            std::vector<PhysicalRegister> phys_uses;
+
+            for_each_instruction_def(inst, [&](const auto& reg) {
+                using T = std::decay_t<decltype(reg)>;
+                if constexpr (std::is_same_v<T, VirtualRegister>) {
+                    defs.push_back(reg.id);
+                } else if constexpr (std::is_same_v<T, PhysicalRegister>) {
+                    phys_defs.push_back(reg);
+                }
+            });
+            for_each_instruction_use(inst, [&](const auto& reg) {
+                using T = std::decay_t<decltype(reg)>;
+                if constexpr (std::is_same_v<T, VirtualRegister>) {
+                    uses.push_back(reg.id);
+                } else if constexpr (std::is_same_v<T, PhysicalRegister>) {
+                    phys_uses.push_back(reg);
+                }
+            });
+
+            add_phys_live_edges(phys_defs, current_live);
+            add_phys_live_edges(phys_uses, current_live);
+
+            std::optional<MachineValueId> copy_src_vreg;
+            if (const auto* copy = std::get_if<Copy>(&inst)) {
+                if (const auto* src_vreg = std::get_if<VirtualRegister>(&copy->src)) {
+                    copy_src_vreg = src_vreg->id;
+                }
+            }
+
+            for (const auto def : defs) {
+                const int def_node = input.table.vreg_nodes.at(def);
+                for (const auto live_vreg : current_live) {
+                    if (def == live_vreg) {
+                        continue;
+                    }
+                    if (copy_src_vreg && *copy_src_vreg == live_vreg) {
+                        continue;
+                    }
+                    add_edge(input.adjacency, def_node, input.table.vreg_nodes.at(live_vreg));
+                }
+            }
+
+            for (const auto def : defs) {
+                current_live.erase(def);
+            }
+            for (const auto use : uses) {
+                current_live.insert(use);
+            }
+        }
+
+        for (const auto& phi : block.phis) {
+            const auto* dest = std::get_if<VirtualRegister>(&phi.dest);
+            if (!dest) {
+                continue;
+            }
+            const int dest_node = input.table.vreg_nodes.at(dest->id);
+            for (const auto live_vreg : current_live) {
+                if (live_vreg == dest->id) {
+                    continue;
+                }
+                add_edge(input.adjacency, dest_node, input.table.vreg_nodes.at(live_vreg));
+            }
+        }
+    }
+
+    for (const auto& block : fn.blocks) {
+        for (const auto& phi : block.phis) {
+            for (const auto& incoming : phi.incoming) {
+                const auto* phys = std::get_if<PhysicalRegister>(&incoming.value);
+                if (!phys || !is_allocatable_register(*phys)) {
+                    continue;
+                }
+                const std::size_t pred_index = cfg.index_of.at(incoming.pred);
+                const int phys_node = input.table.phys_nodes.at(*phys);
+                for (const auto live_vreg : live.live_out[pred_index]) {
+                    add_edge(input.adjacency, phys_node, input.table.vreg_nodes.at(live_vreg));
+                }
+            }
+        }
+    }
+
+    return input;
+}
+
+CoalescedGraph build_coalesced_graph(const GraphInput& input, Dsu& dsu) {
+    CoalescedGraph graph;
+
+    for (std::size_t i = 0; i < input.table.nodes.size(); ++i) {
+        const int rep = dsu.find(static_cast<int>(i));
+        auto& node = graph.nodes[rep];
+        node.rep = rep;
+        node.weight += input.table.nodes[i].weight;
+        if (input.table.nodes[i].precolor) {
+            node.precolor = input.table.nodes[i].precolor;
+        }
+        if (input.table.nodes[i].vreg) {
+            node.members.push_back(*input.table.nodes[i].vreg);
+        }
+    }
+
+    for (std::size_t i = 0; i < input.adjacency.size(); ++i) {
+        const int lhs = dsu.find(static_cast<int>(i));
+        for (const int neighbor : input.adjacency[i]) {
+            const int rhs = dsu.find(neighbor);
+            if (lhs == rhs) {
+                continue;
+            }
+            graph.nodes[lhs].neighbors.insert(rhs);
+        }
+    }
+
+    return graph;
+}
+
+bool can_coalesce(const CoalescedGraph& graph, int lhs, int rhs) {
+    if (lhs == rhs) {
+        return false;
+    }
+    const auto& a = graph.nodes.at(lhs);
+    const auto& b = graph.nodes.at(rhs);
+    if (a.neighbors.contains(rhs)) {
+        return false;
+    }
+    if (a.precolor && b.precolor && *a.precolor != *b.precolor) {
+        return false;
+    }
+
+    if (a.precolor || b.precolor) {
+        const auto& pre = a.precolor ? a : b;
+        const auto& other = a.precolor ? b : a;
+        for (const int neighbor : other.neighbors) {
+            const auto& candidate = graph.nodes.at(neighbor);
+            if (candidate.precolor || candidate.neighbors.size() < kAllocatable.size() ||
+                candidate.neighbors.contains(pre.rep)) {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    std::unordered_set<int> union_neighbors = a.neighbors;
+    union_neighbors.insert(b.neighbors.begin(), b.neighbors.end());
+    union_neighbors.erase(lhs);
+    union_neighbors.erase(rhs);
+
+    std::size_t high_degree = 0;
+    for (const int neighbor : union_neighbors) {
+        const auto& candidate = graph.nodes.at(neighbor);
+        if (candidate.precolor || candidate.neighbors.size() >= kAllocatable.size()) {
+            ++high_degree;
+        }
+    }
+    return high_degree < kAllocatable.size();
+}
+
+Allocation color_graph(MachineFunction& fn, const GraphInput& input) {
+    Dsu dsu(input.table.nodes.size());
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        const auto graph = build_coalesced_graph(input, dsu);
+        for (const auto& [lhs0, rhs0] : input.moves) {
+            const int lhs = dsu.find(lhs0);
+            const int rhs = dsu.find(rhs0);
+            if (!can_coalesce(graph, lhs, rhs)) {
+                continue;
+            }
+            const bool prefer_lhs = graph.nodes.at(lhs).precolor.has_value() ||
+                                    !graph.nodes.at(rhs).precolor.has_value();
+            dsu.unite(lhs, rhs, prefer_lhs);
+            changed = true;
+        }
+    }
+
+    const auto graph = build_coalesced_graph(input, dsu);
+    std::unordered_map<int, PhysicalRegister> colors;
+    std::unordered_set<int> active;
+    std::unordered_map<int, std::size_t> degree;
+
+    for (const auto& [rep, node] : graph.nodes) {
+        if (node.precolor) {
+            colors.emplace(rep, *node.precolor);
+            continue;
+        }
+        active.insert(rep);
+    }
+    for (const auto& [rep, node] : graph.nodes) {
+        degree.emplace(rep, node.neighbors.size());
+    }
+
+    struct StackEntry {
+        int rep = -1;
+        bool spill_bias = false;
+    };
+    std::vector<StackEntry> stack;
+    stack.reserve(active.size());
+
+    while (!active.empty()) {
+        auto low_degree = std::find_if(active.begin(), active.end(), [&](int rep) {
+            return degree.at(rep) < kAllocatable.size();
+        });
+
+        int chosen = -1;
+        bool spill_bias = false;
+        if (low_degree != active.end()) {
+            chosen = *low_degree;
         } else {
-            active.erase(best_victim);
-            do_spill(best_victim.vreg);
-            alloc.assigned.erase(best_victim.vreg);
-            alloc.assigned.emplace(iv.vreg, best_victim.reg);
-            active.insert({iv.end, iv.vreg, best_victim.reg});
+            spill_bias = true;
+            chosen = *std::min_element(
+                active.begin(),
+                active.end(),
+                [&](int lhs, int rhs) {
+                    const auto& left = graph.nodes.at(lhs);
+                    const auto& right = graph.nodes.at(rhs);
+                    if (left.weight != right.weight) {
+                        return left.weight < right.weight;
+                    }
+                    if (degree.at(lhs) != degree.at(rhs)) {
+                        return degree.at(lhs) > degree.at(rhs);
+                    }
+                    return lhs < rhs;
+                });
+        }
+
+        active.erase(chosen);
+        stack.push_back({.rep = chosen, .spill_bias = spill_bias});
+        for (const int neighbor : graph.nodes.at(chosen).neighbors) {
+            if (active.contains(neighbor)) {
+                --degree[neighbor];
+            }
+        }
+    }
+
+    std::unordered_set<int> spilled_reps;
+    for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
+        std::unordered_set<PhysicalRegister> used;
+        for (const int neighbor : graph.nodes.at(it->rep).neighbors) {
+            if (const auto color = colors.find(neighbor); color != colors.end()) {
+                used.insert(color->second);
+            }
+        }
+
+        auto available = std::find_if(kAllocatable.begin(), kAllocatable.end(), [&](auto reg) {
+            return !used.contains(reg);
+        });
+        if (available == kAllocatable.end()) {
+            spilled_reps.insert(it->rep);
+            continue;
+        }
+        colors.emplace(it->rep, *available);
+    }
+
+    Allocation alloc;
+    for (const auto& [rep, node] : graph.nodes) {
+        if (spilled_reps.contains(rep)) {
+            for (const auto vreg : node.members) {
+                const FrameId frame = fn.frame_objects.size();
+                fn.frame_objects.push_back(FrameObject{
+                    .id = frame,
+                    .kind = FrameObjectKind::Spill,
+                    .size = 4,
+                    .align = 4,
+                    .host_type = semantic::invalid_type_id,
+                    .spill_class = RegisterClass::Gpr32,
+                    .source_slot = std::nullopt,
+                    .debug_name = "",
+                    .saved_reg = std::nullopt,
+                    .materialized_offset = std::nullopt,
+                });
+                alloc.spilled.emplace(vreg, frame);
+            }
+            continue;
+        }
+
+        if (!colors.contains(rep)) {
+            throw std::runtime_error("graph coloring left an uncolored machine register node");
+        }
+        for (const auto vreg : node.members) {
+            alloc.assigned.emplace(vreg, colors.at(rep));
         }
     }
 
     return alloc;
 }
 
-// ---- Rewrite helpers ----
-
-// Returns the assigned physical register for a vreg, or nullopt if spilled.
 std::optional<PhysicalRegister> lookup(MachineValueId id, const Allocation& alloc) {
     if (const auto it = alloc.assigned.find(id); it != alloc.assigned.end()) {
         return it->second;
@@ -135,16 +646,9 @@ std::optional<PhysicalRegister> lookup(MachineValueId id, const Allocation& allo
 }
 
 SpillRef spilled_ref(const VirtualRegister& reg, const Allocation& alloc) {
-    return SpillRef{
-        .frame = alloc.spilled.at(reg.id),
-        .reg_class = reg.reg_class,
-    };
+    return SpillRef{.frame = alloc.spilled.at(reg.id), .reg_class = reg.reg_class};
 }
 
-// Rewrite a RegisterRef used as a source operand.
-// If the vreg is spilled, a load is inserted into `pre` and a scratch register is returned.
-// We allocate t0 for the first spilled source, t1 for the second. A third would exceed
-// the 2-scratch budget and is an error.
 RegisterRef rewrite_src(const RegisterRef& reg,
                         const Allocation& alloc,
                         std::vector<Instruction>& pre,
@@ -156,40 +660,36 @@ RegisterRef rewrite_src(const RegisterRef& reg,
     if (std::holds_alternative<SpillRef>(reg)) {
         throw std::runtime_error("unexpected SpillRef during instruction rewrite");
     }
-    MachineValueId id = std::get<VirtualRegister>(reg).id;
-    if (const auto phys = lookup(id, alloc)) {
+
+    const auto vreg = std::get<VirtualRegister>(reg);
+    if (const auto phys = lookup(vreg.id, alloc)) {
         return *phys;
     }
-    // Spilled: pick a scratch register
-    PhysicalRegister scr;
+
+    PhysicalRegister scratch;
     if (!scratch0_used) {
-        scr = kScratch0;
+        scratch = kScratch0;
         scratch0_used = true;
     } else if (!scratch1_used) {
-        scr = kScratch1;
+        scratch = kScratch1;
         scratch1_used = true;
     } else {
         throw std::runtime_error("Exceeded 2-scratch-register budget in instruction rewrite");
     }
+
     pre.push_back(Load{
-        .dest = scr,
-        .address = FrameAddress{.frame = alloc.spilled.at(id), .offset = 0},
+        .dest = scratch,
+        .address = FrameAddress{.frame = alloc.spilled.at(vreg.id), .offset = 0},
     });
-    return scr;
+    return scratch;
 }
 
-// Rewrite instruction dest vreg to physical register.
-// If spilled, uses kScratch0 for the def and emits a store to `post`.
-// IMPORTANT: this always returns kScratch0, which must match the first spilled source
-// (if any) to implement the aliasing on RV32IM (e.g., dest=rd, lhs=rs1, both aliased to t0).
-// The caller must ensure rewrite_src is called for sources before this for defs.
 RegisterRef rewrite_dest(MachineValueId id,
                          const Allocation& alloc,
                          std::vector<Instruction>& post) {
     if (const auto phys = lookup(id, alloc)) {
         return *phys;
     }
-    // Spilled: use kScratch0, store after. Any spilled lhs will also use kScratch0 (aliased).
     post.push_back(Store{
         .address = FrameAddress{.frame = alloc.spilled.at(id), .offset = 0},
         .src = kScratch0,
@@ -197,26 +697,25 @@ RegisterRef rewrite_dest(MachineValueId id,
     return kScratch0;
 }
 
-// Rewrite address base
 Address rewrite_address(const Address& addr,
                         const Allocation& alloc,
                         std::vector<Instruction>& pre,
                         bool& scratch0_used,
                         bool& scratch1_used) {
     return std::visit(
-        [&](const auto& a) -> Address {
-            using T = std::decay_t<decltype(a)>;
+        [&](const auto& value) -> Address {
+            using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, RegisterAddress>) {
-                RegisterRef new_base = rewrite_src(a.base, alloc, pre, scratch0_used, scratch1_used);
-                return RegisterAddress{.base = new_base, .offset = a.offset};
-            } else {
-                return a; // FrameAddress unchanged
+                return RegisterAddress{
+                    .base = rewrite_src(value.base, alloc, pre, scratch0_used, scratch1_used),
+                    .offset = value.offset,
+                };
             }
+            return value;
         },
         addr);
 }
 
-// Rewrite one instruction, producing pre/post instruction lists for loads/stores.
 Instruction rewrite_instruction(const Instruction& inst,
                                 const Allocation& alloc,
                                 std::vector<Instruction>& pre,
@@ -224,69 +723,72 @@ Instruction rewrite_instruction(const Instruction& inst,
     return std::visit(
         [&](const auto& value) -> Instruction {
             using T = std::decay_t<decltype(value)>;
-            bool scratch0_used = false, scratch1_used = false;
+            bool scratch0_used = false;
+            bool scratch1_used = false;
 
             if constexpr (std::is_same_v<T, Copy>) {
-                RegisterRef new_src = rewrite_src(value.src, alloc, pre, scratch0_used, scratch1_used);
-                RegisterRef new_dest;
-                if (const auto* phys = std::get_if<PhysicalRegister>(&value.dest)) {
-                    new_dest = *phys;
-                } else {
-                    MachineValueId id = std::get<VirtualRegister>(value.dest).id;
-                    new_dest = rewrite_dest(id, alloc, post);
+                const RegisterRef new_src =
+                    rewrite_src(value.src, alloc, pre, scratch0_used, scratch1_used);
+                RegisterRef new_dest = value.dest;
+                if (const auto* vreg = std::get_if<VirtualRegister>(&value.dest)) {
+                    new_dest = rewrite_dest(vreg->id, alloc, post);
                 }
                 return Copy{.dest = new_dest, .src = new_src};
             } else if constexpr (std::is_same_v<T, Li>) {
-                MachineValueId id = std::get<VirtualRegister>(value.dest).id;
-                RegisterRef new_dest = rewrite_dest(id, alloc, post);
-                return Li{.dest = new_dest, .value = value.value};
+                return Li{.dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
+                          .value = value.value};
             } else if constexpr (std::is_same_v<T, Binary>) {
-                RegisterRef new_lhs = rewrite_src(value.lhs, alloc, pre, scratch0_used, scratch1_used);
-                RegisterRef new_rhs = rewrite_src(value.rhs, alloc, pre, scratch0_used, scratch1_used);
-                MachineValueId id = std::get<VirtualRegister>(value.dest).id;
-                RegisterRef new_dest = rewrite_dest(id, alloc, post);
-                return Binary{.dest = new_dest, .op = value.op, .lhs = new_lhs, .rhs = new_rhs};
+                return Binary{
+                    .dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
+                    .op = value.op,
+                    .lhs = rewrite_src(value.lhs, alloc, pre, scratch0_used, scratch1_used),
+                    .rhs = rewrite_src(value.rhs, alloc, pre, scratch0_used, scratch1_used),
+                };
             } else if constexpr (std::is_same_v<T, Compare>) {
-                RegisterRef new_lhs = rewrite_src(value.lhs, alloc, pre, scratch0_used, scratch1_used);
-                RegisterRef new_rhs = rewrite_src(value.rhs, alloc, pre, scratch0_used, scratch1_used);
-                MachineValueId id = std::get<VirtualRegister>(value.dest).id;
-                RegisterRef new_dest = rewrite_dest(id, alloc, post);
                 return Compare{
-                    .dest = new_dest, .op = value.op, .lhs = new_lhs, .rhs = new_rhs};
+                    .dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
+                    .op = value.op,
+                    .lhs = rewrite_src(value.lhs, alloc, pre, scratch0_used, scratch1_used),
+                    .rhs = rewrite_src(value.rhs, alloc, pre, scratch0_used, scratch1_used),
+                };
             } else if constexpr (std::is_same_v<T, FrameAddr>) {
-                MachineValueId id = std::get<VirtualRegister>(value.dest).id;
-                RegisterRef new_dest = rewrite_dest(id, alloc, post);
-                return FrameAddr{.dest = new_dest, .frame = value.frame, .offset = value.offset};
+                return FrameAddr{
+                    .dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
+                    .frame = value.frame,
+                    .offset = value.offset,
+                };
             } else if constexpr (std::is_same_v<T, Load>) {
-                Address new_addr = rewrite_address(value.address, alloc, pre, scratch0_used, scratch1_used);
-                MachineValueId id = std::get<VirtualRegister>(value.dest).id;
-                RegisterRef new_dest = rewrite_dest(id, alloc, post);
-                return Load{.dest = new_dest, .address = new_addr};
+                return Load{
+                    .dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
+                    .address =
+                        rewrite_address(value.address, alloc, pre, scratch0_used, scratch1_used),
+                };
             } else if constexpr (std::is_same_v<T, Store>) {
-                Address new_addr = rewrite_address(value.address, alloc, pre, scratch0_used, scratch1_used);
-                RegisterRef new_src = rewrite_src(value.src, alloc, pre, scratch0_used, scratch1_used);
-                return Store{.address = new_addr, .src = new_src};
+                return Store{
+                    .address =
+                        rewrite_address(value.address, alloc, pre, scratch0_used, scratch1_used),
+                    .src = rewrite_src(value.src, alloc, pre, scratch0_used, scratch1_used),
+                };
             } else {
-                return value; // Call: no register operands
+                return value;
             }
         },
         inst);
 }
 
-// Rewrite a register operand that appears in a terminator (branch condition or return value).
-// Delegates to rewrite_src but appends any spill loads directly to the provided vector.
-RegisterRef rewrite_register_ref(const RegisterRef& reg, const Allocation& alloc,
-                                  std::vector<Instruction>& spill_loads) {
-    bool s0 = false, s1 = false;
-    return rewrite_src(reg, alloc, spill_loads, s0, s1);
+RegisterRef rewrite_register_ref(const RegisterRef& reg,
+                                 const Allocation& alloc,
+                                 std::vector<Instruction>& spill_loads) {
+    bool scratch0_used = false;
+    bool scratch1_used = false;
+    return rewrite_src(reg, alloc, spill_loads, scratch0_used, scratch1_used);
 }
 
 RegisterRef rewrite_phi_ref(const RegisterRef& reg, const Allocation& alloc) {
     return std::visit(
         [&](const auto& value) -> RegisterRef {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, PhysicalRegister> ||
-                          std::is_same_v<T, SpillRef>) {
+            if constexpr (std::is_same_v<T, PhysicalRegister> || std::is_same_v<T, SpillRef>) {
                 return value;
             } else {
                 if (const auto phys = lookup(value.id, alloc)) {
@@ -299,51 +801,62 @@ RegisterRef rewrite_phi_ref(const RegisterRef& reg, const Allocation& alloc) {
 }
 
 void rewrite_block(MachineBlock& block, const Allocation& alloc) {
-    // Rewrite instructions
-    std::vector<Instruction> new_instrs;
-    new_instrs.reserve(block.instructions.size() * 2);
+    std::vector<Instruction> rewritten;
+    rewritten.reserve(block.instructions.size() * 2);
 
     for (const auto& inst : block.instructions) {
-        std::vector<Instruction> pre, post;
-        Instruction rewritten = rewrite_instruction(inst, alloc, pre, post);
-        for (auto& p : pre) new_instrs.push_back(std::move(p));
-        new_instrs.push_back(std::move(rewritten));
-        for (auto& p : post) new_instrs.push_back(std::move(p));
+        std::vector<Instruction> pre;
+        std::vector<Instruction> post;
+        Instruction body = rewrite_instruction(inst, alloc, pre, post);
+        rewritten.insert(rewritten.end(),
+                         std::make_move_iterator(pre.begin()),
+                         std::make_move_iterator(pre.end()));
+        if (const auto* copy = std::get_if<Copy>(&body);
+            !copy || copy->dest != copy->src) {
+            rewritten.push_back(std::move(body));
+        }
+        rewritten.insert(rewritten.end(),
+                         std::make_move_iterator(post.begin()),
+                         std::make_move_iterator(post.end()));
     }
-    block.instructions = std::move(new_instrs);
+    block.instructions = std::move(rewritten);
 
-    // Rewrite terminator
     if (block.terminator) {
         block.terminator = std::visit(
             [&](const auto& term) -> Terminator {
                 using T = std::decay_t<decltype(term)>;
                 if constexpr (std::is_same_v<T, BranchNonZero>) {
                     std::vector<Instruction> loads;
-                    RegisterRef new_cond =
+                    const RegisterRef condition =
                         rewrite_register_ref(term.condition, alloc, loads);
-                    for (auto& l : loads) block.instructions.push_back(std::move(l));
-                    return BranchNonZero{.condition = new_cond,
-                                        .then_block = term.then_block,
-                                        .else_block = term.else_block};
+                    block.instructions.insert(block.instructions.end(),
+                                              std::make_move_iterator(loads.begin()),
+                                              std::make_move_iterator(loads.end()));
+                    return BranchNonZero{
+                        .condition = condition,
+                        .then_block = term.then_block,
+                        .else_block = term.else_block,
+                    };
                 } else if constexpr (std::is_same_v<T, Return>) {
-                    if (!term.value) return term;
+                    if (!term.value) {
+                        return term;
+                    }
                     std::vector<Instruction> loads;
-                    RegisterRef new_val =
-                        rewrite_register_ref(*term.value, alloc, loads);
-                    for (auto& l : loads) block.instructions.push_back(std::move(l));
-                    return Return{.value = new_val};
-                } else {
-                    return term;
+                    const RegisterRef value = rewrite_register_ref(*term.value, alloc, loads);
+                    block.instructions.insert(block.instructions.end(),
+                                              std::make_move_iterator(loads.begin()),
+                                              std::make_move_iterator(loads.end()));
+                    return Return{.value = value};
                 }
+                return term;
             },
             *block.terminator);
     }
 
-    // Rewrite phi operands
     for (auto& phi : block.phis) {
         phi.dest = rewrite_phi_ref(phi.dest, alloc);
-        for (auto& inc : phi.incoming) {
-            inc.value = rewrite_phi_ref(inc.value, alloc);
+        for (auto& incoming : phi.incoming) {
+            incoming.value = rewrite_phi_ref(incoming.value, alloc);
         }
     }
 }
@@ -351,11 +864,8 @@ void rewrite_block(MachineBlock& block, const Allocation& alloc) {
 } // namespace
 
 AllocationStats allocate_registers(MachineFunction& fn) {
-    const auto cfg = compute_cfg(fn);
-    const auto live = compute_liveness(fn, cfg);
-    const auto intervals = compute_intervals(fn, cfg, live);
-
-    Allocation alloc = linear_scan(intervals, fn);
+    const auto graph = build_graph(fn);
+    Allocation alloc = color_graph(fn, graph);
 
     for (auto& block : fn.blocks) {
         rewrite_block(block, alloc);

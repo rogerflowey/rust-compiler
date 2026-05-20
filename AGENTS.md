@@ -26,6 +26,7 @@ Start from these entry points before wandering elsewhere:
   entry-point file.
 - Prefer `rg`, `rg --files`, and narrow `sed -n` slices over opening whole
   directories or long files.
+  > Use scoped rg -n only. Search one subdirectory at a time, avoid broad multi-root scans, and avoid emitting large result sets into context. After finding a hit, inspect only narrow file windows.
 - Do not sweep unrelated docs, tests, or subsystems unless the first entry
   points clearly require them.
 - When planning, inspect only the minimum set of files needed to justify the
@@ -51,3 +52,7 @@ Start from these entry points before wandering elsewhere:
   explicitly asks for execution.
 - If testing is explicitly requested, choose the narrowest relevant command
   instead of broad suite sweeps.
+
+
+!!!IMPORTANT!!!
+RCompiler-Testcases contains big files, avoid searching/catting them. Compiled output will be even bigger. Unless explicitly required, do not inspect the folder/any compile artifact originate from this. Only pass/fail is allowed, not detailed content.

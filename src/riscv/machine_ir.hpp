@@ -55,7 +55,14 @@ enum class PhysicalRegister {
 
 enum class FrameBase { None, S0 };
 
-enum class FrameObjectKind { LocalSlot, IncomingArg, OutgoingArg, Spill, CalleeSave };
+enum class FrameObjectKind {
+    LocalSlot,
+    IncomingArg,
+    OutgoingArg,
+    Spill,
+    CalleeSave,
+    CallerSave,
+};
 
 enum class BinaryOp {
     Add,
@@ -80,11 +87,15 @@ enum class CompareOp { Eq, Ne, LtS, LtU, LeS, LeU, GtS, GtU, GeS, GeU };
 struct VirtualRegister {
     MachineValueId id = 0;
     RegisterClass reg_class = RegisterClass::Gpr32;
+
+    bool operator==(const VirtualRegister&) const = default;
 };
 
 struct SpillRef {
     FrameId frame = 0;
     RegisterClass reg_class = RegisterClass::Gpr32;
+
+    bool operator==(const SpillRef&) const = default;
 };
 
 using RegisterRef = std::variant<VirtualRegister, PhysicalRegister, SpillRef>;
@@ -98,7 +109,7 @@ struct FrameObject {
     std::optional<RegisterClass> spill_class;
     std::optional<ir3::SlotId> source_slot;
     std::string debug_name;
-    std::optional<PhysicalRegister> callee_save_reg;
+    std::optional<PhysicalRegister> saved_reg;
     std::optional<std::int32_t> materialized_offset;
 };
 
@@ -213,8 +224,9 @@ struct MachineModule {
 const char* register_class_name(RegisterClass reg_class);
 const char* physical_register_name(PhysicalRegister reg);
 bool is_fixed_register(PhysicalRegister reg);
-bool is_callee_saved_register(PhysicalRegister reg);
 bool is_allocatable_register(PhysicalRegister reg);
+bool is_callee_saved_register(PhysicalRegister reg);
+bool is_caller_saved_register(PhysicalRegister reg);
 bool is_reserved_scratch_register(PhysicalRegister reg);
 bool is_argument_register(PhysicalRegister reg);
 bool is_abi_visible_register(PhysicalRegister reg);

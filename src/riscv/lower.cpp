@@ -225,6 +225,8 @@ private:
                 .spill_class = std::nullopt,
                 .source_slot = slot.id,
                 .debug_name = slot.debug_name,
+                .saved_reg = std::nullopt,
+                .materialized_offset = std::nullopt,
             });
             slot_frames_.emplace(slot.id, frame);
         }
@@ -240,6 +242,8 @@ private:
                 .spill_class = std::nullopt,
                 .source_slot = std::nullopt,
                 .debug_name = "arg" + std::to_string(i) + ".stack",
+                .saved_reg = std::nullopt,
+                .materialized_offset = std::nullopt,
             });
             incoming_arg_frames_.emplace(i, frame);
         }
@@ -273,6 +277,8 @@ private:
                 .spill_class = std::nullopt,
                 .source_slot = std::nullopt,
                 .debug_name = "outgoing",
+                .saved_reg = std::nullopt,
+                .materialized_offset = std::nullopt,
             });
     }
 

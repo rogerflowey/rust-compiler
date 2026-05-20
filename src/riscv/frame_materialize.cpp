@@ -71,27 +71,27 @@ std::vector<FrameObject*> collect_save_slots(MachineFunction& fn) {
         if (object.kind != FrameObjectKind::CalleeSave) {
             continue;
         }
-        if (!object.callee_save_reg) {
+        if (!object.saved_reg) {
             fail(fn, "callee-save frame object " + frame_name(object.id) +
                          " is missing its saved register");
         }
-        if (!is_callee_saved_register(*object.callee_save_reg)) {
+        if (!is_callee_saved_register(*object.saved_reg)) {
             fail(fn, "callee-save frame object " + frame_name(object.id) +
                          " uses a non-callee-saved register");
         }
-        if (callee_save_rank(*object.callee_save_reg) < 0) {
+        if (callee_save_rank(*object.saved_reg) < 0) {
             fail(fn, "callee-save frame object " + frame_name(object.id) +
                          " uses an unsupported saved register");
         }
-        if (!seen.insert(*object.callee_save_reg).second) {
+        if (!seen.insert(*object.saved_reg).second) {
             fail(fn, "duplicate callee-save frame object for register " +
-                         std::string(physical_register_name(*object.callee_save_reg)));
+                         std::string(physical_register_name(*object.saved_reg)));
         }
         save_slots.push_back(&object);
     }
     std::sort(save_slots.begin(), save_slots.end(), [](const FrameObject* lhs, const FrameObject* rhs) {
-        const int lhs_rank = callee_save_rank(*lhs->callee_save_reg);
-        const int rhs_rank = callee_save_rank(*rhs->callee_save_reg);
+        const int lhs_rank = callee_save_rank(*lhs->saved_reg);
+        const int rhs_rank = callee_save_rank(*rhs->saved_reg);
         if (lhs_rank != rhs_rank) {
             return lhs_rank < rhs_rank;
         }
