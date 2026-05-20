@@ -5,6 +5,7 @@
 #include "ir3/analysis/dominance_frontier.hpp"
 #include "ir3/analysis/slot_liveness.hpp"
 #include "ir3/analysis/slot_use.hpp"
+#include "ir3/passes/value_rewrite_internal.hpp"
 #include "ir3/slot_utils.hpp"
 
 #include <algorithm>
@@ -29,107 +30,6 @@ std::optional<SlotId> exact_root_slot(const Place& place) {
         return std::nullopt;
     }
     return base->slot;
-}
-
-ValueId resolve_replacement(const std::unordered_map<ValueId, ValueId>& replacements,
-                            ValueId value) {
-    ValueId current = value;
-    while (true) {
-        const auto it = replacements.find(current);
-        if (it == replacements.end() || it->second == current) {
-            return current;
-        }
-        current = it->second;
-    }
-}
-
-void rewrite_value_ref(const std::unordered_map<ValueId, ValueId>& replacements, ValueId& value) {
-    value = resolve_replacement(replacements, value);
-}
-
-void rewrite_place(const std::unordered_map<ValueId, ValueId>& replacements, Place& place) {
-    std::visit(
-        [&](auto& base) {
-            using T = std::decay_t<decltype(base)>;
-            if constexpr (std::is_same_v<T, DerefBase>) {
-                rewrite_value_ref(replacements, base.ptr);
-            }
-        },
-        place.base);
-
-    for (auto& projection : place.projections) {
-        if (auto* index = std::get_if<IndexProjection>(&projection)) {
-            rewrite_value_ref(replacements, index->index);
-        }
-    }
-}
-
-void rewrite_instruction_uses(const std::unordered_map<ValueId, ValueId>& replacements,
-                              Instruction& inst) {
-    std::visit(
-        [&](auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, Load>) {
-                rewrite_place(replacements, value.source);
-            } else if constexpr (std::is_same_v<T, Store>) {
-                rewrite_place(replacements, value.dest);
-                rewrite_value_ref(replacements, value.value);
-            } else if constexpr (std::is_same_v<T, Copy>) {
-                rewrite_place(replacements, value.dest);
-                rewrite_place(replacements, value.source);
-            } else if constexpr (std::is_same_v<T, Borrow>) {
-                rewrite_place(replacements, value.source);
-            } else if constexpr (std::is_same_v<T, Unary>) {
-                rewrite_value_ref(replacements, value.operand);
-            } else if constexpr (std::is_same_v<T, Binary>) {
-                rewrite_value_ref(replacements, value.lhs);
-                rewrite_value_ref(replacements, value.rhs);
-            } else if constexpr (std::is_same_v<T, Cast>) {
-                rewrite_value_ref(replacements, value.operand);
-            } else if constexpr (std::is_same_v<T, Call>) {
-                for (auto& arg : value.args) {
-                    rewrite_value_ref(replacements, arg);
-                }
-            }
-        },
-        inst);
-}
-
-void rewrite_terminator_uses(const std::unordered_map<ValueId, ValueId>& replacements,
-                             Terminator& term) {
-    std::visit(
-        [&](auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, Branch>) {
-                rewrite_value_ref(replacements, value.condition);
-            } else if constexpr (std::is_same_v<T, Return>) {
-                if (value.value) {
-                    rewrite_value_ref(replacements, *value.value);
-                }
-            }
-        },
-        term);
-}
-
-void rewrite_all_uses(Function& fn,
-                      const std::unordered_map<ValueId, ValueId>& replacements) {
-    if (replacements.empty()) {
-        return;
-    }
-
-    for (auto& block : fn.blocks) {
-        for (auto& phi : block.phis) {
-            for (auto& incoming : phi.incoming) {
-                rewrite_value_ref(replacements, incoming.value);
-            }
-        }
-        for (auto& inst : block.instructions) {
-            rewrite_instruction_uses(replacements, inst);
-        }
-        if (block.terminator) {
-            rewrite_terminator_uses(replacements, *block.terminator);
-        }
-    }
 }
 
 std::unordered_map<ValueId, std::size_t> phi_index_by_result(const BasicBlock& block) {
@@ -177,7 +77,9 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
             continue;
         }
 
-        PromotedSlot promoted{.slot = slot, .klass = *klass};
+        PromotedSlot promoted;
+        promoted.slot = slot;
+        promoted.klass = *klass;
         bool slot_changed = true;
         std::vector<bool> has_phi(fn.blocks.size(), false);
         std::vector<BlockId> worklist = use.def_blocks;
@@ -217,7 +119,7 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
                         throw std::runtime_error("IR3 slot-to-SSA found reachable load-before-def for slot %" +
                                                  std::to_string(slot) + " in @" + fn.symbol);
                     }
-                    replacements[load->result.id] = resolve_replacement(replacements, *current);
+                    replacements[load->result.id] = detail::resolve_replacement(replacements, *current);
                     erase_mask[block][ii] = true;
                     slot_changed = true;
                 } else if (auto* store = std::get_if<Store>(&inst)) {
@@ -225,7 +127,7 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
                     if (!slot_ref || *slot_ref != slot) {
                         continue;
                     }
-                    current = resolve_replacement(replacements, store->value);
+                    current = detail::resolve_replacement(replacements, store->value);
                     erase_mask[block][ii] = true;
                     slot_changed = true;
                 }
@@ -250,7 +152,7 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
                 fn.blocks[succ].phis[index_it->second].incoming.push_back(
                     PhiIncoming{
                         .pred = block,
-                        .value = resolve_replacement(replacements, *current),
+                        .value = detail::resolve_replacement(replacements, *current),
                     });
             }
 
@@ -284,7 +186,7 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
         return PreservedAnalyses::all();
     }
 
-    rewrite_all_uses(fn, replacements);
+    detail::rewrite_all_uses(fn, replacements);
 
     for (std::size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         std::vector<Instruction> kept;
