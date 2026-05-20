@@ -11,8 +11,9 @@ analyses safely.
 ## Why This Is Needed Now
 
 The current checkout already has a high-level optimization placement doc in
-[../optimization-plan.md](../optimization-plan.md), but IR3 still has no
-analysis layer or pass runner.
+[../optimization-plan.md](../optimization-plan.md). This note records the
+analysis-layer plan that originally unblocked the first IR3 pass runner and
+still describes the intended query boundary for later passes.
 
 That gap will matter as soon as IR3 optimization starts to grow beyond
 trivial local rewrites:
@@ -31,13 +32,16 @@ is not yet a reusable optimizer service.
 
 ### IR3
 
-`IR3` currently has:
+`IR3` now has:
 
 - the IR definition in [`src/ir3/ir3.hpp`](../../src/ir3/ir3.hpp)
 - lowering and printing
-- no pass runner
-- no analysis directory
-- no shared CFG or dominance utilities
+- an eager pass runner in `src/ir3/optimize.cpp`
+- `src/ir3/analysis/` with CFG, dominance, dominance frontier, slot use,
+  slot liveness, and the analysis manager
+
+This document still matters because it captures the contract those analyses
+should keep as more optimization passes are added.
 
 ### RISC-V backend
 
