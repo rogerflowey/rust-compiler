@@ -2,17 +2,41 @@
 
 ## Overview
 
-This document records the current optimization design for the `ir3-impl`
-checkout:
+This document records the intended optimization split for the `ir3-impl`
+checkout and the current state of the first IR3 optimization slice.
 
-- which IR should own which optimization classes
-- which optimizations should be implemented first
-- which later optimizations are valuable but should not shape the initial
-  architecture
+The guiding rule is still the same:
 
-The goal is not to maximize the number of passes early. The goal is to keep the
-pipeline simple while putting each optimization at the IR layer where it has
-the right information and the lowest implementation risk.
+- keep the pipeline simple
+- put transformations at the earliest IR that still has the right information
+- avoid growing Machine IR or AsmIR into a second general optimizer
+
+## Current Implementation Status
+
+The checkout now has a small eager IR3 optimization pipeline wired into the
+`ir3`, `llvm`, and `riscv` command pipelines.
+
+Implemented pieces:
+
+- `src/ir3/optimize.cpp`: function/module optimizer entry point
+- `src/ir3/analysis/`: CFG, dominators, dominance frontier, slot use, slot
+  liveness, and a small analysis manager
+- `src/ir3/passes/dead_block_elim.cpp`: prune unreachable IR3 blocks and repair
+  phi predecessors
+- `src/ir3/passes/sroa.cpp`: split field-only aggregate slots into leaf slots
+- `src/ir3/passes/slot_to_ssa.cpp`: promote simple root-slot load/store traffic
+  into SSA
+- `src/ir3/passes/dead_code_elim.cpp`: remove dead pure SSA instruction chains
+
+Current pass order:
+
+1. dead block elimination
+2. SROA
+3. slot-to-SSA promotion
+4. dead code elimination
+
+This is intentionally small. It establishes the optimization boundary without
+forcing a large framework or backend-first cleanup.
 
 ## Placement Rules
 
@@ -27,30 +51,27 @@ Prefer `IR3` when a pass needs:
 - slots
 - base + projection places
 - host-type layout information
-- alias / TBAA categories
 - aggregate-via-memory structure
 - target-neutral CFG rewriting
 
-In practice, this means `IR3` should own most meaningful program
-transformations.
+In practice, most meaningful program transformation should happen here.
 
 ### Machine IR
 
-`Machine IR` is the main home for backend-oriented cleanup and scalar
-improvement after IR3 lowering.
+`Machine IR` is the main home for backend-oriented cleanup after IR3 lowering.
 
 Prefer `Machine IR` when a pass needs:
 
 - physical-register or ABI awareness
 - frame objects or stack-layout knowledge
-- post-lowering CFG cleanup
-- instruction-shape cleanup that is easier after target-specific lowering
+- backend-only CFG cleanup
+- instruction-shape cleanup that is simpler after target-specific lowering
 
 `Machine IR` should not grow into a second memory-oriented optimizer.
 
 ### AsmIR / Final Assembly
 
-`AsmIR` and final asm should stay almost non-optimizing.
+`AsmIR` and final assembly should stay almost non-optimizing.
 
 They may do:
 
@@ -69,7 +90,7 @@ They should not become a general optimization layer.
 | Dead instruction elimination for pure SSA ops | `IR3` | `P1` | Cheap and immediately reduces IR noise |
 | Copy propagation | `IR3` | `P2` | Better before backend lowering duplicates copies |
 | Scalar mem2reg for promotable slots | `IR3` | `P2` | IR3 still knows slot identity and addressability |
-| Slot-local load forwarding / redundant load elimination | `IR3` | `P2` | Needs place and alias structure still visible in IR3 |
+| Slot-local load forwarding / redundant load elimination | `IR3` | `P2` | Needs place structure still visible in IR3 |
 | Dead store elimination | `IR3` | `P3` | Memory-sensitive; should run before Machine IR erases structure |
 | Aggregate forwarding / copy elision through memory | `IR3` | `P3` | IR3 is the last layer where aggregate traffic is explicit |
 | Function inlining | `IR3` | `P4` | Target-neutral and should happen before ABI/register artifacts appear |
@@ -85,90 +106,69 @@ They should not become a general optimization layer.
 
 ### P1. Foundation and canonical IR3 cleanup
 
-Land the minimum infrastructure needed to support optimization safely.
+This slice is mostly in place now.
 
-- Add an `IR3` validator.
-- Add a simple eager `IR3` pass runner.
-- Add `IR3` CFG simplification:
-  - unreachable block pruning
-  - constant-branch folding
-  - trivial block merge
-  - trivial phi simplification
-- Add `IR3` dead instruction elimination for pure scalar instructions.
+Implemented:
 
-Rationale:
+- eager IR3 pass runner
+- CFG analysis and dominance infrastructure
+- dead block elimination
+- dead pure-instruction elimination
 
-- `IR3` currently has no real pass scaffold.
-- These passes are low-risk and become the canonical normalization stage for
-  every later transform.
+Still missing from the original foundation list:
 
-### P2. First useful scalar + memory-aware IR3 improvements
+- a dedicated IR3 validator
+- fuller CFG canonicalization such as constant-branch folding and block merging
 
-Add the first optimization pack that materially reduces unnecessary memory and
-copy traffic without needing a full global optimizer.
+### P2. First useful scalar and memory-aware IR3 improvements
 
-- Add `IR3` copy propagation.
-- Add narrow `IR3` mem2reg for promotable scalar slots:
-  - non-aggregate
-  - non-address-taken
-  - function-local
-  - no tricky aliasing
-- Add slot-local load forwarding / redundant load elimination.
+This slice has started and is now the active optimization boundary.
 
-Rationale:
+Implemented:
 
-- These passes directly reduce the lowering burden on the backend.
-- They fit the current IR3 contract well.
+- narrow SROA for field-only aggregate slots
+- narrow scalar slot-to-SSA promotion for simple root-slot traffic
+
+Still recommended next:
+
+- copy propagation
+- slot-local load forwarding
+- redundant load elimination
 
 ### P3. IR3 memory optimization pack
 
-Once the first canonical and promotion passes are stable, add the more
-important memory-specific passes.
+After the current promotion passes stabilize, add:
 
-- Add dead store elimination.
-- Add aggregate forwarding / copy elision through memory.
+- dead store elimination
+- aggregate forwarding / copy elision through memory
 
-Rationale:
-
-- These are high-value passes for this IR design.
-- They should happen before Machine IR, because Machine IR intentionally does
-  not preserve structured memory semantics.
+These belong in IR3 because Machine IR intentionally does not preserve the
+structured memory semantics needed to reason about them cleanly.
 
 ### P4. IR3 inlining
 
-Add function inlining only after `P1` to `P3` exist.
+Add function inlining only after `P1` to `P3` are stable.
 
-First inlining scope:
+First inlining scope should stay narrow:
 
 - direct-call only
 - intra-module only
 - non-recursive
 - small functions only
-- rerun `P1` to `P3` cleanup after inlining
-
-Rationale:
-
-- Inlining is powerful, but it multiplies CFG and memory structure.
-- It should land only after cleanup and simplification are already available.
+- rerun IR3 cleanup after inlining
 
 ### P5. Machine IR cleanup passes
 
-Add a small backend cleanup layer after the IR3 pipeline is already producing
-better code.
+Once IR3 is producing cleaner input, add a small backend cleanup layer:
 
-- Remove identity copies.
-- Collapse jump chains and dead backend-only blocks.
-- Remove jumps to the next block.
-- Add small compare / branch / copy cleanups that are easier after lowering.
-
-Rationale:
-
-- These are useful backend cleanups.
-- They should stay local and not replace IR3 optimization.
+- remove identity copies
+- collapse jump chains and dead backend-only blocks
+- remove jumps to the next block
+- add small compare / branch / copy cleanups that are easier after lowering
 
 ### P6. Advanced quality work
 
-These are worthwhile, but should not define the first optimizer milestones.
+These are worthwhile, but should not define the first optimizer milestones:
 
 - richer Machine IR analysis manager / optimizer pipeline
 - phi/copy coalescing
@@ -176,42 +176,25 @@ These are worthwhile, but should not define the first optimizer milestones.
 - improved register allocation
 - SCCP, GVN, LICM, and loop-aware optimization
 
-Rationale:
-
-- These need more infrastructure and more invariants.
-- The payoff is better after the simpler passes have already reduced obvious
-  waste.
-
 ### P7. Late AsmIR / asm peepholes
 
-Keep the final stage intentionally small.
+Keep the final stage intentionally small:
 
 - branch relaxation
 - final jump cleanup
 - encoding-oriented canonicalization
 
-Rationale:
-
-- This stage should stay close to serialization and legality.
-- Do not move high-level optimization pressure here.
-
 ## Suggested Immediate Work
 
-If work starts now, the first milestone should be:
+The next useful milestone after the current landing is:
 
-1. add `IR3` validator
-2. add `IR3` pass runner
-3. implement `IR3` CFG simplify
-4. implement trivial `IR3` DCE
+1. add copy propagation after slot-to-SSA
+2. add constant-branch folding and trivial block merge
+3. add slot-local load forwarding
+4. add dead store elimination
 
-After that, the next milestone should be:
-
-1. narrow scalar mem2reg
-2. copy propagation
-3. slot-local load forwarding
-
-This gives the compiler a real optimization boundary without forcing a large
-framework or prematurely growing `Machine IR` into a second optimizer.
+That extends the current IR3 optimizer without pushing optimization pressure
+down into Machine IR.
 
 ## Non-Goals For The First Milestones
 

@@ -207,5 +207,7 @@ enum class HostClass { I32, Ptr, Unit, Aggregate, Never };
 
 HostClass classify_host_type(semantic::TypeId type);
 std::optional<SsaClass> ssa_class_for(semantic::TypeId type);
+std::size_t struct_field_count(semantic::TypeId type);
+semantic::TypeId struct_field_type(semantic::TypeId type, std::size_t index);
 
 } // namespace ir3

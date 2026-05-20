@@ -6,6 +6,7 @@
 #include "src/ast/ast.hpp"
 #include "src/ir3/llvm_transcribe.hpp"
 #include "src/ir3/lower.hpp"
+#include "src/ir3/optimize.hpp"
 #include "src/lexer/lexer.hpp"
 #include "src/parser/parser.hpp"
 #include "src/semantic/hir/converter.hpp"
@@ -114,6 +115,7 @@ int main(int argc, char* argv[]) {
         exit_checker.check_program(*hir_program);
 
         auto module = ir3::lower_program(*hir_program);
+        ir3::optimize_module(module);
         ir3::transcribe_llvm(std::cout, module);
         return 0;
     } catch (const LexerError& error) {
