@@ -34,6 +34,10 @@ constexpr std::array<PhysicalRegister, 19> kAllocatable = {
 
 constexpr PhysicalRegister kScratch0 = PhysicalRegister::T0;
 constexpr PhysicalRegister kScratch1 = PhysicalRegister::T1;
+constexpr std::array<PhysicalRegister, 8> kCallerSaved = {
+    PhysicalRegister::A0, PhysicalRegister::A1, PhysicalRegister::A2, PhysicalRegister::A3,
+    PhysicalRegister::A4, PhysicalRegister::A5, PhysicalRegister::A6, PhysicalRegister::A7,
+};
 
 struct Allocation {
     std::unordered_map<MachineValueId, PhysicalRegister> assigned;
@@ -56,7 +60,23 @@ struct NodeTable {
 struct GraphInput {
     NodeTable table;
     std::vector<std::unordered_set<int>> adjacency;
-    std::vector<std::pair<int, int>> moves;
+    enum class AffinitySource {
+        Copy,
+        Phi,
+        AbiArg,
+        AbiRet,
+    };
+    struct AffinityEdge {
+        int lhs = -1;
+        int rhs = -1;
+        AffinitySource source = AffinitySource::Copy;
+    };
+    std::vector<AffinityEdge> affinity_edges;
+};
+
+struct BlockInstructionLiveness {
+    std::vector<std::unordered_set<MachineValueId>> live_before;
+    std::vector<std::unordered_set<MachineValueId>> live_after;
 };
 
 struct CoalescedNode {
@@ -126,6 +146,13 @@ void for_each_register_ref(const RegisterRef& reg, Fn&& fn) {
 }
 
 template <class Fn>
+void for_each_virtual_register_ref(const RegisterRef& reg, Fn&& fn) {
+    if (const auto* value = std::get_if<VirtualRegister>(&reg)) {
+        fn(*value);
+    }
+}
+
+template <class Fn>
 void for_each_address_register(const Address& address, Fn&& fn) {
     if (const auto* reg_addr = std::get_if<RegisterAddress>(&address)) {
         for_each_register_ref(reg_addr->base, fn);
@@ -170,6 +197,47 @@ void for_each_instruction_def(const Instruction& inst, Fn&& fn) {
 }
 
 template <class Fn>
+void for_each_instruction_vreg_use(const Instruction& inst, Fn&& fn) {
+    std::visit(
+        [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, Copy>) {
+                for_each_virtual_register_ref(value.src, fn);
+            } else if constexpr (std::is_same_v<T, Binary>) {
+                for_each_virtual_register_ref(value.lhs, fn);
+                for_each_virtual_register_ref(value.rhs, fn);
+            } else if constexpr (std::is_same_v<T, Compare>) {
+                for_each_virtual_register_ref(value.lhs, fn);
+                for_each_virtual_register_ref(value.rhs, fn);
+            } else if constexpr (std::is_same_v<T, Load>) {
+                if (const auto* reg_addr = std::get_if<RegisterAddress>(&value.address)) {
+                    for_each_virtual_register_ref(reg_addr->base, fn);
+                }
+            } else if constexpr (std::is_same_v<T, Store>) {
+                for_each_virtual_register_ref(value.src, fn);
+                if (const auto* reg_addr = std::get_if<RegisterAddress>(&value.address)) {
+                    for_each_virtual_register_ref(reg_addr->base, fn);
+                }
+            }
+        },
+        inst);
+}
+
+template <class Fn>
+void for_each_instruction_vreg_def(const Instruction& inst, Fn&& fn) {
+    std::visit(
+        [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, Copy> || std::is_same_v<T, Li> ||
+                          std::is_same_v<T, Binary> || std::is_same_v<T, Compare> ||
+                          std::is_same_v<T, FrameAddr> || std::is_same_v<T, Load>) {
+                for_each_virtual_register_ref(value.dest, fn);
+            }
+        },
+        inst);
+}
+
+template <class Fn>
 void for_each_terminator_use(const Terminator& term, Fn&& fn) {
     std::visit(
         [&](const auto& value) {
@@ -183,6 +251,134 @@ void for_each_terminator_use(const Terminator& term, Fn&& fn) {
             }
         },
         term);
+}
+
+template <class Fn>
+void for_each_terminator_vreg_use(const Terminator& term, Fn&& fn) {
+    std::visit(
+        [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, BranchNonZero>) {
+                for_each_virtual_register_ref(value.condition, fn);
+            } else if constexpr (std::is_same_v<T, Return>) {
+                if (value.value) {
+                    for_each_virtual_register_ref(*value.value, fn);
+                }
+            }
+        },
+        term);
+}
+
+const FrameObject* find_frame_object(const MachineFunction& fn, FrameId id) {
+    for (const auto& object : fn.frame_objects) {
+        if (object.id == id) {
+            return &object;
+        }
+    }
+    return nullptr;
+}
+
+bool is_outgoing_arg_store(const MachineFunction& fn, const Instruction& inst) {
+    const auto* store = std::get_if<Store>(&inst);
+    if (!store) {
+        return false;
+    }
+    const auto* address = std::get_if<FrameAddress>(&store->address);
+    if (!address) {
+        return false;
+    }
+    const FrameObject* object = find_frame_object(fn, address->frame);
+    return object && object->kind == FrameObjectKind::OutgoingArg;
+}
+
+bool is_argument_setup(const MachineFunction& fn, const Instruction& inst) {
+    if (const auto* copy = std::get_if<Copy>(&inst)) {
+        const auto* dest = std::get_if<PhysicalRegister>(&copy->dest);
+        return dest && is_argument_register(*dest);
+    }
+    return is_outgoing_arg_store(fn, inst);
+}
+
+bool is_result_extract(const Instruction& inst) {
+    const auto* copy = std::get_if<Copy>(&inst);
+    if (!copy) {
+        return false;
+    }
+    const auto* src = std::get_if<PhysicalRegister>(&copy->src);
+    return src && is_argument_register(*src);
+}
+
+std::optional<PhysicalRegister> argument_setup_register(const Instruction& inst) {
+    const auto* copy = std::get_if<Copy>(&inst);
+    if (!copy) {
+        return std::nullopt;
+    }
+    const auto* dest = std::get_if<PhysicalRegister>(&copy->dest);
+    if (!dest || !is_argument_register(*dest) || !is_allocatable_register(*dest)) {
+        return std::nullopt;
+    }
+    return *dest;
+}
+
+std::optional<PhysicalRegister> result_extract_register(const Instruction& inst) {
+    const auto* copy = std::get_if<Copy>(&inst);
+    if (!copy) {
+        return std::nullopt;
+    }
+    const auto* src = std::get_if<PhysicalRegister>(&copy->src);
+    if (!src || !is_argument_register(*src) || !is_allocatable_register(*src)) {
+        return std::nullopt;
+    }
+    return *src;
+}
+
+std::optional<MachineValueId> copy_src_vreg(const Instruction& inst) {
+    const auto* copy = std::get_if<Copy>(&inst);
+    if (!copy) {
+        return std::nullopt;
+    }
+    const auto* src = std::get_if<VirtualRegister>(&copy->src);
+    if (!src) {
+        return std::nullopt;
+    }
+    return src->id;
+}
+
+std::optional<MachineValueId> copy_dest_vreg(const Instruction& inst) {
+    const auto* copy = std::get_if<Copy>(&inst);
+    if (!copy) {
+        return std::nullopt;
+    }
+    const auto* dest = std::get_if<VirtualRegister>(&copy->dest);
+    if (!dest) {
+        return std::nullopt;
+    }
+    return dest->id;
+}
+
+BlockInstructionLiveness compute_block_instruction_liveness(
+    const MachineBlock& block,
+    const std::unordered_set<MachineValueId>& block_live_out) {
+    BlockInstructionLiveness info;
+    info.live_before.resize(block.instructions.size());
+    info.live_after.resize(block.instructions.size());
+
+    auto current = block_live_out;
+    if (block.terminator) {
+        for_each_terminator_vreg_use(*block.terminator,
+                                     [&](VirtualRegister reg) { current.insert(reg.id); });
+    }
+
+    for (std::size_t index = block.instructions.size(); index-- > 0;) {
+        info.live_after[index] = current;
+        for_each_instruction_vreg_def(block.instructions[index],
+                                      [&](VirtualRegister reg) { current.erase(reg.id); });
+        for_each_instruction_vreg_use(block.instructions[index],
+                                      [&](VirtualRegister reg) { current.insert(reg.id); });
+        info.live_before[index] = current;
+    }
+
+    return info;
 }
 
 std::optional<int> node_for(const NodeTable& table, const RegisterRef& reg) {
@@ -243,6 +439,19 @@ void add_edge(std::vector<std::unordered_set<int>>& adjacency, int a, int b) {
     adjacency[static_cast<std::size_t>(b)].insert(a);
 }
 
+void add_vreg_clique_edges(std::vector<std::unordered_set<int>>& adjacency,
+                           const NodeTable& table,
+                           const std::vector<MachineValueId>& values) {
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        for (std::size_t j = i + 1; j < values.size(); ++j) {
+            if (values[i] == values[j]) {
+                continue;
+            }
+            add_edge(adjacency, table.vreg_nodes.at(values[i]), table.vreg_nodes.at(values[j]));
+        }
+    }
+}
+
 NodeTable collect_nodes(const MachineFunction& fn) {
     NodeTable table;
     for (const auto reg : kAllocatable) {
@@ -274,34 +483,67 @@ void bump_weight(NodeTable& table, const RegisterRef& reg) {
     }
 }
 
+void add_affinity_edge(GraphInput& input, int lhs, int rhs, GraphInput::AffinitySource source) {
+    if (lhs == rhs) {
+        return;
+    }
+    input.affinity_edges.push_back({.lhs = lhs, .rhs = rhs, .source = source});
+}
+
 GraphInput build_graph(const MachineFunction& fn) {
     GraphInput input;
     input.table = collect_nodes(fn);
     input.adjacency.resize(input.table.nodes.size());
 
+    for (std::size_t i = 0; i < kAllocatable.size(); ++i) {
+        const int lhs = input.table.phys_nodes.at(kAllocatable[i]);
+        for (std::size_t j = i + 1; j < kAllocatable.size(); ++j) {
+            add_edge(input.adjacency, lhs, input.table.phys_nodes.at(kAllocatable[j]));
+        }
+    }
+
     const auto cfg = compute_cfg(fn);
     const auto live = compute_liveness(fn, cfg);
 
     for (const auto& block : fn.blocks) {
+        std::vector<MachineValueId> phi_dests;
         for (const auto& phi : block.phis) {
             bump_weight(input.table, phi.dest);
+            if (const auto* dest = std::get_if<VirtualRegister>(&phi.dest)) {
+                phi_dests.push_back(dest->id);
+            }
             for (const auto& incoming : phi.incoming) {
                 bump_weight(input.table, incoming.value);
                 const auto dest = node_for(input.table, phi.dest);
                 const auto src = node_for(input.table, incoming.value);
                 if (dest && src) {
-                    input.moves.push_back({*dest, *src});
+                    add_affinity_edge(input, *dest, *src, GraphInput::AffinitySource::Phi);
                 }
             }
         }
+        add_vreg_clique_edges(input.adjacency, input.table, phi_dests);
+
+        std::unordered_map<BlockId, std::vector<MachineValueId>> phi_edge_values;
+        for (const auto& phi : block.phis) {
+            for (const auto& incoming : phi.incoming) {
+                if (const auto* value = std::get_if<VirtualRegister>(&incoming.value)) {
+                    phi_edge_values[incoming.pred].push_back(value->id);
+                }
+            }
+        }
+        for (const auto& [_, values] : phi_edge_values) {
+            add_vreg_clique_edges(input.adjacency, input.table, values);
+        }
+
         for (const auto& inst : block.instructions) {
             for_each_instruction_def(inst, [&](const auto& reg) { bump_weight(input.table, reg); });
             for_each_instruction_use(inst, [&](const auto& reg) { bump_weight(input.table, reg); });
-            if (const auto* copy = std::get_if<Copy>(&inst)) {
+            if (const auto* copy = std::get_if<Copy>(&inst);
+                copy && !is_argument_setup(fn, inst) && !is_result_extract(inst)) {
                 const auto dest = node_for(input.table, copy->dest);
                 const auto src = node_for(input.table, copy->src);
                 if (dest && src) {
-                    input.moves.push_back({*dest, *src});
+                    add_affinity_edge(input, *dest, *src, GraphInput::AffinitySource::Copy);
                 }
             }
         }
@@ -322,6 +564,22 @@ GraphInput build_graph(const MachineFunction& fn) {
                 for (const auto live_vreg : live_vregs) {
                     add_edge(input.adjacency, phys_node, input.table.vreg_nodes.at(live_vreg));
                 }
+            }
+        };
+
+    auto add_single_phys_live_edges =
+        [&](PhysicalRegister phys,
+            const std::unordered_set<MachineValueId>& live_vregs,
+            std::optional<MachineValueId> excluded = std::nullopt) {
+            if (!is_allocatable_register(phys)) {
+                return;
+            }
+            const int phys_node = input.table.phys_nodes.at(phys);
+            for (const auto live_vreg : live_vregs) {
+                if (excluded && *excluded == live_vreg) {
+                    continue;
+                }
+                add_edge(input.adjacency, phys_node, input.table.vreg_nodes.at(live_vreg));
             }
         };
 
@@ -369,6 +627,8 @@ GraphInput build_graph(const MachineFunction& fn) {
                     phys_uses.push_back(reg);
                 }
             });
+
+            add_vreg_clique_edges(input.adjacency, input.table, uses);
 
             add_phys_live_edges(phys_defs, current_live);
             add_phys_live_edges(phys_uses, current_live);
@@ -432,6 +692,98 @@ GraphInput build_graph(const MachineFunction& fn) {
         }
     }
 
+    for (std::size_t block_index = 0; block_index < fn.blocks.size(); ++block_index) {
+        const auto& block = fn.blocks[block_index];
+        const auto instruction_live =
+            compute_block_instruction_liveness(block, live.live_out[block_index]);
+
+        for (std::size_t index = 0; index < block.instructions.size(); ++index) {
+            if (!std::holds_alternative<Call>(block.instructions[index])) {
+                continue;
+            }
+
+            for (const auto phys : kCallerSaved) {
+                add_single_phys_live_edges(phys, instruction_live.live_after[index]);
+            }
+
+            std::size_t start = index;
+            while (start > 0 && is_argument_setup(fn, block.instructions[start - 1])) {
+                --start;
+            }
+            for (std::size_t setup = start; setup < index; ++setup) {
+                const auto phys = argument_setup_register(block.instructions[setup]);
+                if (!phys) {
+                    continue;
+                }
+                if (const auto* copy = std::get_if<Copy>(&block.instructions[setup])) {
+                    const auto src_node = node_for(input.table, copy->src);
+                    if (src_node) {
+                        add_affinity_edge(
+                            input,
+                            input.table.phys_nodes.at(*phys),
+                            *src_node,
+                            GraphInput::AffinitySource::AbiArg);
+                    }
+                }
+                const auto source = copy_src_vreg(block.instructions[setup]);
+                // ABI arg registers are reserved for the whole setup bundle, not only
+                // after their own copy executes. Excluding the lane's own source still
+                // permits identity coalescing onto that fixed argument register.
+                add_single_phys_live_edges(*phys, instruction_live.live_before[start], source);
+                for (std::size_t live_index = start; live_index < index; ++live_index) {
+                    add_single_phys_live_edges(
+                        *phys, instruction_live.live_after[live_index], source);
+                }
+            }
+
+            std::size_t end = index;
+            while (end + 1 < block.instructions.size() &&
+                   is_result_extract(block.instructions[end + 1])) {
+                ++end;
+            }
+            for (std::size_t extract = index + 1; extract <= end; ++extract) {
+                const auto phys = result_extract_register(block.instructions[extract]);
+                if (!phys) {
+                    continue;
+                }
+                if (const auto* copy = std::get_if<Copy>(&block.instructions[extract])) {
+                    const auto dest_node = node_for(input.table, copy->dest);
+                    if (dest_node) {
+                        add_affinity_edge(
+                            input,
+                            input.table.phys_nodes.at(*phys),
+                            *dest_node,
+                            GraphInput::AffinitySource::AbiRet);
+                    }
+                }
+                const auto dest = copy_dest_vreg(block.instructions[extract]);
+                for (std::size_t live_index = index; live_index < extract; ++live_index) {
+                    add_single_phys_live_edges(*phys,
+                                               instruction_live.live_after[live_index],
+                                               dest);
+                }
+            }
+        }
+    }
+
+    std::stable_sort(input.affinity_edges.begin(),
+                     input.affinity_edges.end(),
+                     [](const GraphInput::AffinityEdge& lhs, const GraphInput::AffinityEdge& rhs) {
+                         auto priority = [](GraphInput::AffinitySource source) {
+                             switch (source) {
+                             case GraphInput::AffinitySource::AbiArg:
+                             case GraphInput::AffinitySource::AbiRet:
+                                 return 0;
+                             case GraphInput::AffinitySource::Phi:
+                                 return 1;
+                             case GraphInput::AffinitySource::Copy:
+                                 return 2;
+                             }
+                             return 3;
+                         };
+                         return priority(lhs.source) < priority(rhs.source);
+                     });
+
     return input;
 }
 
@@ -463,6 +815,48 @@ CoalescedGraph build_coalesced_graph(const GraphInput& input, Dsu& dsu) {
     }
 
     return graph;
+}
+
+void merge_coalesced_nodes(CoalescedGraph& graph, int lhs, int rhs, int rep) {
+    const int merged = (rep == lhs) ? rhs : lhs;
+    if (rep == merged) {
+        return;
+    }
+
+    auto rep_it = graph.nodes.find(rep);
+    auto merged_it = graph.nodes.find(merged);
+    if (rep_it == graph.nodes.end() || merged_it == graph.nodes.end()) {
+        throw std::runtime_error("coalesced graph lost a node during incremental merge");
+    }
+
+    auto& rep_node = rep_it->second;
+    CoalescedNode merged_node = std::move(merged_it->second);
+    graph.nodes.erase(merged_it);
+
+    rep_node.weight += merged_node.weight;
+    if (!rep_node.precolor && merged_node.precolor) {
+        rep_node.precolor = merged_node.precolor;
+    }
+    rep_node.members.insert(rep_node.members.end(),
+                            std::make_move_iterator(merged_node.members.begin()),
+                            std::make_move_iterator(merged_node.members.end()));
+
+    rep_node.neighbors.erase(rep);
+    rep_node.neighbors.erase(merged);
+
+    for (const int neighbor : merged_node.neighbors) {
+        if (neighbor == rep) {
+            continue;
+        }
+        auto neighbor_it = graph.nodes.find(neighbor);
+        if (neighbor_it == graph.nodes.end()) {
+            throw std::runtime_error("coalesced graph lost a neighbor during incremental merge");
+        }
+        auto& neighbor_node = neighbor_it->second;
+        neighbor_node.neighbors.erase(merged);
+        neighbor_node.neighbors.insert(rep);
+        rep_node.neighbors.insert(neighbor);
+    }
 }
 
 bool can_coalesce(const CoalescedGraph& graph, int lhs, int rhs) {
@@ -509,25 +903,24 @@ bool can_coalesce(const CoalescedGraph& graph, int lhs, int rhs) {
 
 Allocation color_graph(MachineFunction& fn, const GraphInput& input) {
     Dsu dsu(input.table.nodes.size());
+    CoalescedGraph graph = build_coalesced_graph(input, dsu);
 
     bool changed = true;
     while (changed) {
         changed = false;
-        const auto graph = build_coalesced_graph(input, dsu);
-        for (const auto& [lhs0, rhs0] : input.moves) {
-            const int lhs = dsu.find(lhs0);
-            const int rhs = dsu.find(rhs0);
+        for (const auto& edge : input.affinity_edges) {
+            const int lhs = dsu.find(edge.lhs);
+            const int rhs = dsu.find(edge.rhs);
             if (!can_coalesce(graph, lhs, rhs)) {
                 continue;
             }
             const bool prefer_lhs = graph.nodes.at(lhs).precolor.has_value() ||
                                     !graph.nodes.at(rhs).precolor.has_value();
-            dsu.unite(lhs, rhs, prefer_lhs);
+            const int rep = dsu.unite(lhs, rhs, prefer_lhs);
+            merge_coalesced_nodes(graph, lhs, rhs, rep);
             changed = true;
         }
     }
-
-    const auto graph = build_coalesced_graph(input, dsu);
     std::unordered_map<int, PhysicalRegister> colors;
     std::unordered_set<int> active;
     std::unordered_map<int, std::size_t> degree;

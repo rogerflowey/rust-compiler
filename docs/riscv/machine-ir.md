@@ -76,10 +76,12 @@ The IR knows these RV32IM registers:
 - ABI argument/result regs: `a0`..`a7`
 
 Current allocator policy:
-- long-lived allocation uses only `s1`..`s11`
+- general allocation uses `s1`..`s11` and ABI-visible `a0`..`a7`
+- values live across a `call` are blocked from caller-saved `a0`..`a7`
+- explicit ABI setup/result copies may coalesce away when a value can safely
+  color directly to the required `aN`
 - `t0` and `t1` are used by spill rewriting and phi elimination
 - `t2`..`t6` remain reserved for later lowering stages
-- `a0`..`a7` are ABI-visible, not general allocation targets
 
 ## Frame Objects
 Every addressable stack-resident object is represented by a frame object.

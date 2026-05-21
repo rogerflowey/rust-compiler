@@ -13,7 +13,6 @@
 #include "src/riscv/asm_ir.hpp"
 #include "src/riscv/asm_lower.hpp"
 #include "src/riscv/asm_print.hpp"
-#include "src/riscv/caller_save.hpp"
 #include "src/parser/parser.hpp"
 #include "src/riscv/frame_materialize.hpp"
 #include "src/riscv/lower.hpp"
@@ -35,7 +34,7 @@
 
 namespace {
 
-enum class OutputStage { Mir, PostRa, PostCallsave, PostPhi, Asmir, Asm };
+enum class OutputStage { Mir, PostRa, PostPhi, Asmir, Asm };
 
 std::optional<OutputStage> parse_stage_arg(const std::string& arg) {
     constexpr std::string_view prefix = "--stage=";
@@ -49,9 +48,6 @@ std::optional<OutputStage> parse_stage_arg(const std::string& arg) {
     }
     if (value == "post-ra") {
         return OutputStage::PostRa;
-    }
-    if (value == "post-callsave") {
-        return OutputStage::PostCallsave;
     }
     if (value == "post-phi") {
         return OutputStage::PostPhi;
@@ -101,7 +97,7 @@ void print_semantic_error(const SemanticError& error,
 int main(int argc, char* argv[]) {
     if (argc < 2 || argc > 3) {
         std::cerr << "Usage: " << argv[0]
-                  << " <file> [--stage=mir|post-ra|post-callsave|post-phi|asmir|asm]\n";
+                  << " <file> [--stage=mir|post-ra|post-phi|asmir|asm]\n";
         return 1;
     }
 
@@ -110,7 +106,7 @@ int main(int argc, char* argv[]) {
         const auto parsed = parse_stage_arg(argv[2]);
         if (!parsed) {
             std::cerr << "Error: unsupported stage option '" << argv[2] << "'. "
-                      << "Expected --stage=mir|post-ra|post-callsave|post-phi|asmir|asm\n";
+                      << "Expected --stage=mir|post-ra|post-phi|asmir|asm\n";
             return 1;
         }
         stage = *parsed;
@@ -178,12 +174,6 @@ int main(int argc, char* argv[]) {
 
         riscv::allocate_registers(machine_module);
         if (stage == OutputStage::PostRa) {
-            riscv::print_module(std::cout, machine_module);
-            return 0;
-        }
-
-        riscv::preserve_caller_saved(machine_module);
-        if (stage == OutputStage::PostCallsave) {
             riscv::print_module(std::cout, machine_module);
             return 0;
         }
