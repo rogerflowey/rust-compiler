@@ -167,6 +167,8 @@ struct Store {
 
 struct Call {
     std::string callee;
+    std::vector<PhysicalRegister> uses;
+    std::vector<PhysicalRegister> defs;
 };
 
 using Instruction = std::variant<Copy, Li, Binary, Compare, FrameAddr, Load, Store, Call>;

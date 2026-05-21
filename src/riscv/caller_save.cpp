@@ -32,11 +32,6 @@ struct CallRegion {
     std::vector<PhysicalRegister> preserved;
 };
 
-constexpr std::array<PhysicalRegister, 8> kCallerSavedRegs = {
-    PhysicalRegister::A0, PhysicalRegister::A1, PhysicalRegister::A2, PhysicalRegister::A3,
-    PhysicalRegister::A4, PhysicalRegister::A5, PhysicalRegister::A6, PhysicalRegister::A7,
-};
-
 [[noreturn]] void fail(const MachineFunction& fn, const std::string& message) {
     throw CallerSaveError("Caller-save preservation failed for @" + fn.symbol + ": " + message);
 }
@@ -90,7 +85,7 @@ void for_each_instruction_def(const Instruction& inst, Fn&& fn) {
                           std::is_same_v<T, FrameAddr> || std::is_same_v<T, Load>) {
                 for_each_register_ref(value.dest, fn);
             } else if constexpr (std::is_same_v<T, Call>) {
-                for (const auto reg : kCallerSavedRegs) {
+                for (const auto reg : value.defs) {
                     fn(reg);
                 }
             }

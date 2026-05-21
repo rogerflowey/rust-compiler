@@ -26,28 +26,29 @@ basic blocks but forces the allocator to model call clobbers explicitly.
 
 ### 1.1 Call clobber modeling
 
-`Call` currently carries only `callee: string` (`machine_ir.hpp:148`). The
-allocator needs to know *which* physical registers a call destroys.
+`Call` now carries explicit ABI-facing `uses` / `defs`, so the allocator can
+see consumed argument lanes and allocatable caller-clobber defs directly.
+The remaining design question is how far that explicit modeling should go if
+indirect calls or non-default conventions appear.
 
 Two equivalent representations:
 
-**Option A — explicit fields on `Call`:**
+**Option A — keep explicit fields on `Call`:**
 ```cpp
 struct Call {
     std::string callee;
-    std::vector<PhysicalRegister> arg_regs;   // input ABI regs (a0..aN)
-    std::vector<PhysicalRegister> result_regs; // output ABI regs (a0 normally)
-    // clobbers are implicit: all caller-save regs not in arg_regs/result_regs
+    std::vector<PhysicalRegister> uses; // input ABI regs (a0..aN)
+    std::vector<PhysicalRegister> defs; // allocatable caller-clobber defs
 };
 ```
 
-**Option B — leave `Call` minimal, derive clobbers from convention.**
-Every direct call clobbers the standard caller-save set
-(`a0–a7, t0–t6, ra`). The allocator hard-codes this; no IR change.
+**Option B — shrink `Call` again and derive clobbers from convention.**
+Every direct call would instead hard-code the standard caller-save set
+(`a0–a7, t0–t6, ra`) in the allocator, undoing the current explicit ABI model.
 
-**Recommendation: Option B for v1+1**, Option A only if/when indirect calls
-or unusual conventions appear. Hard-coding the caller-save mask is simpler
-and matches our single-ISA target.
+**Current checkout**: effectively Option A for the allocatable ABI-visible
+pool. Extending beyond that remains optional unless indirect calls or unusual
+conventions appear.
 
 ### 1.2 Precolored physical-register live intervals
 
@@ -448,7 +449,7 @@ struct AffinityEdge {
     RegisterRef a;
     RegisterRef b;
     int weight;        // exec_freq × 2^loop_depth (or just freq for v1)
-    enum Source { Copy, Phi, AbiArg, AbiRet } source;
+    enum Source { Copy, Phi } source;
 };
 ```
 
@@ -499,7 +500,8 @@ no-op union, with distinct pregs it is rejected by the pin check.
 
 ```
 1. Build interference graph (or use linear-scan intervals).
-2. Collect affinity edges from Copy, MachinePhi, ABI-shuffle copies.
+2. Collect affinity edges from Copy and MachinePhi. Call-adjacent ABI shuffles
+   are ordinary `Copy` edges once `Call` exposes its own `uses` / `defs`.
 3. Sort edges by weight, descending.
 4. For each edge in order, attempt try_coalesce with a safety check:
      - linear scan v1+1:  refuse merge iff intervals overlap.

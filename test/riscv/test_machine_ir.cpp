@@ -362,7 +362,9 @@ TEST(RiscvMachineIrLoweringTest, LowersCallsWithOverflowArguments) {
     EXPECT_NE(text.find("copy a0, v0"), std::string::npos);
     EXPECT_NE(text.find("copy a7, v7"), std::string::npos);
     EXPECT_NE(text.find("store [fi0 + 0], v8"), std::string::npos);
-    EXPECT_NE(text.find("call @callee9"), std::string::npos);
+    EXPECT_NE(text.find("call @callee9 uses(a0, a1, a2, a3, a4, a5, a6, a7)"),
+              std::string::npos);
+    EXPECT_NE(text.find("defs(a0, a1, a2, a3, a4, a5, a6, a7)"), std::string::npos);
     EXPECT_NE(text.find("v9 = copy a0"), std::string::npos);
 }
 

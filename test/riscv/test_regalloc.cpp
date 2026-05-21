@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <type_traits>
+#include <utility>
 
 namespace {
 
@@ -14,6 +15,27 @@ VirtualRegister VR(MachineValueId id) {
 
 bool is_allocatable(PhysicalRegister r) {
     return is_allocatable_register(r);
+}
+
+std::vector<PhysicalRegister> allocatable_call_defs() {
+    return {
+        PhysicalRegister::A0,
+        PhysicalRegister::A1,
+        PhysicalRegister::A2,
+        PhysicalRegister::A3,
+        PhysicalRegister::A4,
+        PhysicalRegister::A5,
+        PhysicalRegister::A6,
+        PhysicalRegister::A7,
+    };
+}
+
+Call abi_call(std::string callee, std::vector<PhysicalRegister> uses = {}) {
+    return Call{
+        .callee = std::move(callee),
+        .uses = std::move(uses),
+        .defs = allocatable_call_defs(),
+    };
 }
 
 // Returns true if every non-phi instruction operand (def and use) is a PhysicalRegister.
@@ -526,7 +548,7 @@ TEST(RegAllocTest, CallAcrossLiveRange) {
     b.instructions = {
         Li{.dest = VR(0), .value = 42},
         Copy{.dest = PhysicalRegister::A0, .src = VR(0)},
-        Call{.callee = "foo"},
+        abi_call("foo", {PhysicalRegister::A0}),
         Copy{.dest = VR(1), .src = PhysicalRegister::A0},
         Binary{.dest = VR(2), .op = BinaryOp::Add, .lhs = VR(0), .rhs = VR(1)},
     };
@@ -570,7 +592,7 @@ TEST(RegAllocTest, CallArgumentValuesDoNotCollapseToOneRegister) {
         Li{.dest = VR(1), .value = 7},
         Copy{.dest = PhysicalRegister::A0, .src = VR(0)},
         Copy{.dest = PhysicalRegister::A1, .src = VR(1)},
-        Call{.callee = "build_leaf"},
+        abi_call("build_leaf", {PhysicalRegister::A0, PhysicalRegister::A1}),
     };
     b.terminator = Return{};
     fn.blocks.push_back(b);
@@ -598,7 +620,7 @@ TEST(RegAllocTest, CallArgumentCopyMayCoalesceAway) {
     b.instructions = {
         Li{.dest = VR(0), .value = 5},
         Copy{.dest = PhysicalRegister::A0, .src = VR(0)},
-        Call{.callee = "foo"},
+        abi_call("foo", {PhysicalRegister::A0}),
     };
     b.terminator = Return{};
     fn.blocks.push_back(b);
@@ -637,7 +659,7 @@ TEST(RegAllocTest, EarlierArgRegisterStaysReservedAcrossOutgoingArgSetup) {
         Li{.dest = VR(1), .value = 22},
         Copy{.dest = PhysicalRegister::A0, .src = VR(0)},
         Store{.address = FrameAddress{.frame = 0, .offset = 0}, .src = VR(1)},
-        Call{.callee = "foo"},
+        abi_call("foo", {PhysicalRegister::A0}),
     };
     b.terminator = Return{};
     fn.blocks.push_back(b);
@@ -683,6 +705,36 @@ TEST(RegAllocTest, EarlierArgRegisterStaysReservedAcrossOutgoingArgSetup) {
         << "arg0 source should still be allowed to coalesce into a0";
     EXPECT_NE(*store_src, PhysicalRegister::A0)
         << "later outgoing-arg setup must not reuse the already-reserved a0 lane";
+}
+
+TEST(RegAllocTest, CallResultCopyMayCoalesceAway) {
+    MachineFunction fn;
+    fn.symbol = "ret_coalesce"; fn.entry_block = 0; fn.next_value = 2;
+    MachineBlock b; b.id = 0;
+    b.instructions = {
+        abi_call("foo"),
+        Copy{.dest = VR(0), .src = PhysicalRegister::A0},
+        Binary{.dest = VR(1), .op = BinaryOp::Add, .lhs = VR(0), .rhs = VR(0)},
+    };
+    b.terminator = Return{.value = VR(1)};
+    fn.blocks.push_back(b);
+
+    auto stats = allocate_registers(fn);
+    EXPECT_EQ(stats.num_spills, 0u);
+    EXPECT_TRUE(no_vregs_in_instructions(fn));
+    ASSERT_EQ(fn.blocks[0].instructions.size(), 2u);
+
+    const auto* copy = std::get_if<Copy>(&fn.blocks[0].instructions[0]);
+    ASSERT_EQ(copy, nullptr)
+        << "result extract should coalesce away when the value can stay in a0";
+    const auto* add = std::get_if<Binary>(&fn.blocks[0].instructions[1]);
+    ASSERT_NE(add, nullptr);
+    const auto* lhs = std::get_if<PhysicalRegister>(&add->lhs);
+    const auto* rhs = std::get_if<PhysicalRegister>(&add->rhs);
+    ASSERT_NE(lhs, nullptr);
+    ASSERT_NE(rhs, nullptr);
+    EXPECT_EQ(*lhs, PhysicalRegister::A0);
+    EXPECT_EQ(*rhs, PhysicalRegister::A0);
 }
 
 TEST(RegAllocTest, RewritesUnreachableBlocksToo) {

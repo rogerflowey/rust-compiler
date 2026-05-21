@@ -34,10 +34,6 @@ constexpr std::array<PhysicalRegister, 19> kAllocatable = {
 
 constexpr PhysicalRegister kScratch0 = PhysicalRegister::T0;
 constexpr PhysicalRegister kScratch1 = PhysicalRegister::T1;
-constexpr std::array<PhysicalRegister, 8> kCallerSaved = {
-    PhysicalRegister::A0, PhysicalRegister::A1, PhysicalRegister::A2, PhysicalRegister::A3,
-    PhysicalRegister::A4, PhysicalRegister::A5, PhysicalRegister::A6, PhysicalRegister::A7,
-};
 
 struct Allocation {
     std::unordered_map<MachineValueId, PhysicalRegister> assigned;
@@ -63,8 +59,6 @@ struct GraphInput {
     enum class AffinitySource {
         Copy,
         Phi,
-        AbiArg,
-        AbiRet,
     };
     struct AffinityEdge {
         int lhs = -1;
@@ -72,11 +66,6 @@ struct GraphInput {
         AffinitySource source = AffinitySource::Copy;
     };
     std::vector<AffinityEdge> affinity_edges;
-};
-
-struct BlockInstructionLiveness {
-    std::vector<std::unordered_set<MachineValueId>> live_before;
-    std::vector<std::unordered_set<MachineValueId>> live_after;
 };
 
 struct CoalescedNode {
@@ -146,13 +135,6 @@ void for_each_register_ref(const RegisterRef& reg, Fn&& fn) {
 }
 
 template <class Fn>
-void for_each_virtual_register_ref(const RegisterRef& reg, Fn&& fn) {
-    if (const auto* value = std::get_if<VirtualRegister>(&reg)) {
-        fn(*value);
-    }
-}
-
-template <class Fn>
 void for_each_address_register(const Address& address, Fn&& fn) {
     if (const auto* reg_addr = std::get_if<RegisterAddress>(&address)) {
         for_each_register_ref(reg_addr->base, fn);
@@ -177,6 +159,10 @@ void for_each_instruction_use(const Instruction& inst, Fn&& fn) {
             } else if constexpr (std::is_same_v<T, Store>) {
                 for_each_register_ref(value.src, fn);
                 for_each_address_register(value.address, fn);
+            } else if constexpr (std::is_same_v<T, Call>) {
+                for (const auto reg : value.uses) {
+                    fn(reg);
+                }
             }
         },
         inst);
@@ -191,47 +177,10 @@ void for_each_instruction_def(const Instruction& inst, Fn&& fn) {
                           std::is_same_v<T, Binary> || std::is_same_v<T, Compare> ||
                           std::is_same_v<T, FrameAddr> || std::is_same_v<T, Load>) {
                 for_each_register_ref(value.dest, fn);
-            }
-        },
-        inst);
-}
-
-template <class Fn>
-void for_each_instruction_vreg_use(const Instruction& inst, Fn&& fn) {
-    std::visit(
-        [&](const auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, Copy>) {
-                for_each_virtual_register_ref(value.src, fn);
-            } else if constexpr (std::is_same_v<T, Binary>) {
-                for_each_virtual_register_ref(value.lhs, fn);
-                for_each_virtual_register_ref(value.rhs, fn);
-            } else if constexpr (std::is_same_v<T, Compare>) {
-                for_each_virtual_register_ref(value.lhs, fn);
-                for_each_virtual_register_ref(value.rhs, fn);
-            } else if constexpr (std::is_same_v<T, Load>) {
-                if (const auto* reg_addr = std::get_if<RegisterAddress>(&value.address)) {
-                    for_each_virtual_register_ref(reg_addr->base, fn);
+            } else if constexpr (std::is_same_v<T, Call>) {
+                for (const auto reg : value.defs) {
+                    fn(reg);
                 }
-            } else if constexpr (std::is_same_v<T, Store>) {
-                for_each_virtual_register_ref(value.src, fn);
-                if (const auto* reg_addr = std::get_if<RegisterAddress>(&value.address)) {
-                    for_each_virtual_register_ref(reg_addr->base, fn);
-                }
-            }
-        },
-        inst);
-}
-
-template <class Fn>
-void for_each_instruction_vreg_def(const Instruction& inst, Fn&& fn) {
-    std::visit(
-        [&](const auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, Copy> || std::is_same_v<T, Li> ||
-                          std::is_same_v<T, Binary> || std::is_same_v<T, Compare> ||
-                          std::is_same_v<T, FrameAddr> || std::is_same_v<T, Load>) {
-                for_each_virtual_register_ref(value.dest, fn);
             }
         },
         inst);
@@ -251,85 +200,6 @@ void for_each_terminator_use(const Terminator& term, Fn&& fn) {
             }
         },
         term);
-}
-
-template <class Fn>
-void for_each_terminator_vreg_use(const Terminator& term, Fn&& fn) {
-    std::visit(
-        [&](const auto& value) {
-            using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, BranchNonZero>) {
-                for_each_virtual_register_ref(value.condition, fn);
-            } else if constexpr (std::is_same_v<T, Return>) {
-                if (value.value) {
-                    for_each_virtual_register_ref(*value.value, fn);
-                }
-            }
-        },
-        term);
-}
-
-const FrameObject* find_frame_object(const MachineFunction& fn, FrameId id) {
-    for (const auto& object : fn.frame_objects) {
-        if (object.id == id) {
-            return &object;
-        }
-    }
-    return nullptr;
-}
-
-bool is_outgoing_arg_store(const MachineFunction& fn, const Instruction& inst) {
-    const auto* store = std::get_if<Store>(&inst);
-    if (!store) {
-        return false;
-    }
-    const auto* address = std::get_if<FrameAddress>(&store->address);
-    if (!address) {
-        return false;
-    }
-    const FrameObject* object = find_frame_object(fn, address->frame);
-    return object && object->kind == FrameObjectKind::OutgoingArg;
-}
-
-bool is_argument_setup(const MachineFunction& fn, const Instruction& inst) {
-    if (const auto* copy = std::get_if<Copy>(&inst)) {
-        const auto* dest = std::get_if<PhysicalRegister>(&copy->dest);
-        return dest && is_argument_register(*dest);
-    }
-    return is_outgoing_arg_store(fn, inst);
-}
-
-bool is_result_extract(const Instruction& inst) {
-    const auto* copy = std::get_if<Copy>(&inst);
-    if (!copy) {
-        return false;
-    }
-    const auto* src = std::get_if<PhysicalRegister>(&copy->src);
-    return src && is_argument_register(*src);
-}
-
-std::optional<PhysicalRegister> argument_setup_register(const Instruction& inst) {
-    const auto* copy = std::get_if<Copy>(&inst);
-    if (!copy) {
-        return std::nullopt;
-    }
-    const auto* dest = std::get_if<PhysicalRegister>(&copy->dest);
-    if (!dest || !is_argument_register(*dest) || !is_allocatable_register(*dest)) {
-        return std::nullopt;
-    }
-    return *dest;
-}
-
-std::optional<PhysicalRegister> result_extract_register(const Instruction& inst) {
-    const auto* copy = std::get_if<Copy>(&inst);
-    if (!copy) {
-        return std::nullopt;
-    }
-    const auto* src = std::get_if<PhysicalRegister>(&copy->src);
-    if (!src || !is_argument_register(*src) || !is_allocatable_register(*src)) {
-        return std::nullopt;
-    }
-    return *src;
 }
 
 std::optional<MachineValueId> copy_src_vreg(const Instruction& inst) {
@@ -354,31 +224,6 @@ std::optional<MachineValueId> copy_dest_vreg(const Instruction& inst) {
         return std::nullopt;
     }
     return dest->id;
-}
-
-BlockInstructionLiveness compute_block_instruction_liveness(
-    const MachineBlock& block,
-    const std::unordered_set<MachineValueId>& block_live_out) {
-    BlockInstructionLiveness info;
-    info.live_before.resize(block.instructions.size());
-    info.live_after.resize(block.instructions.size());
-
-    auto current = block_live_out;
-    if (block.terminator) {
-        for_each_terminator_vreg_use(*block.terminator,
-                                     [&](VirtualRegister reg) { current.insert(reg.id); });
-    }
-
-    for (std::size_t index = block.instructions.size(); index-- > 0;) {
-        info.live_after[index] = current;
-        for_each_instruction_vreg_def(block.instructions[index],
-                                      [&](VirtualRegister reg) { current.erase(reg.id); });
-        for_each_instruction_vreg_use(block.instructions[index],
-                                      [&](VirtualRegister reg) { current.insert(reg.id); });
-        info.live_before[index] = current;
-    }
-
-    return info;
 }
 
 std::optional<int> node_for(const NodeTable& table, const RegisterRef& reg) {
@@ -538,8 +383,7 @@ GraphInput build_graph(const MachineFunction& fn) {
         for (const auto& inst : block.instructions) {
             for_each_instruction_def(inst, [&](const auto& reg) { bump_weight(input.table, reg); });
             for_each_instruction_use(inst, [&](const auto& reg) { bump_weight(input.table, reg); });
-            if (const auto* copy = std::get_if<Copy>(&inst);
-                copy && !is_argument_setup(fn, inst) && !is_result_extract(inst)) {
+            if (const auto* copy = std::get_if<Copy>(&inst)) {
                 const auto dest = node_for(input.table, copy->dest);
                 const auto src = node_for(input.table, copy->src);
                 if (dest && src) {
@@ -606,6 +450,60 @@ GraphInput build_graph(const MachineFunction& fn) {
 
         for (auto it = block.instructions.rbegin(); it != block.instructions.rend(); ++it) {
             const Instruction& inst = *it;
+            if (std::holds_alternative<Copy>(inst)) {
+                std::vector<MachineValueId> defs;
+                std::vector<MachineValueId> uses;
+                std::vector<PhysicalRegister> phys_defs;
+                std::vector<PhysicalRegister> phys_uses;
+
+                for_each_instruction_def(inst, [&](const auto& reg) {
+                    using T = std::decay_t<decltype(reg)>;
+                    if constexpr (std::is_same_v<T, VirtualRegister>) {
+                        defs.push_back(reg.id);
+                    } else if constexpr (std::is_same_v<T, PhysicalRegister>) {
+                        phys_defs.push_back(reg);
+                    }
+                });
+                for_each_instruction_use(inst, [&](const auto& reg) {
+                    using T = std::decay_t<decltype(reg)>;
+                    if constexpr (std::is_same_v<T, VirtualRegister>) {
+                        uses.push_back(reg.id);
+                    } else if constexpr (std::is_same_v<T, PhysicalRegister>) {
+                        phys_uses.push_back(reg);
+                    }
+                });
+
+                const auto src_vreg = copy_src_vreg(inst);
+                const auto dest_vreg = copy_dest_vreg(inst);
+                for (const auto phys : phys_defs) {
+                    add_single_phys_live_edges(phys, current_live, src_vreg);
+                }
+                for (const auto phys : phys_uses) {
+                    add_single_phys_live_edges(phys, current_live, dest_vreg);
+                }
+
+                for (const auto def : defs) {
+                    const int def_node = input.table.vreg_nodes.at(def);
+                    for (const auto live_vreg : current_live) {
+                        if (def == live_vreg) {
+                            continue;
+                        }
+                        if (src_vreg && *src_vreg == live_vreg) {
+                            continue;
+                        }
+                        add_edge(input.adjacency, def_node, input.table.vreg_nodes.at(live_vreg));
+                    }
+                }
+
+                for (const auto def : defs) {
+                    current_live.erase(def);
+                }
+                for (const auto use : uses) {
+                    current_live.insert(use);
+                }
+                continue;
+            }
+
             std::vector<MachineValueId> defs;
             std::vector<MachineValueId> uses;
             std::vector<PhysicalRegister> phys_defs;
@@ -633,20 +531,10 @@ GraphInput build_graph(const MachineFunction& fn) {
             add_phys_live_edges(phys_defs, current_live);
             add_phys_live_edges(phys_uses, current_live);
 
-            std::optional<MachineValueId> copy_src_vreg;
-            if (const auto* copy = std::get_if<Copy>(&inst)) {
-                if (const auto* src_vreg = std::get_if<VirtualRegister>(&copy->src)) {
-                    copy_src_vreg = src_vreg->id;
-                }
-            }
-
             for (const auto def : defs) {
                 const int def_node = input.table.vreg_nodes.at(def);
                 for (const auto live_vreg : current_live) {
                     if (def == live_vreg) {
-                        continue;
-                    }
-                    if (copy_src_vreg && *copy_src_vreg == live_vreg) {
                         continue;
                     }
                     add_edge(input.adjacency, def_node, input.table.vreg_nodes.at(live_vreg));
@@ -692,92 +580,15 @@ GraphInput build_graph(const MachineFunction& fn) {
         }
     }
 
-    for (std::size_t block_index = 0; block_index < fn.blocks.size(); ++block_index) {
-        const auto& block = fn.blocks[block_index];
-        const auto instruction_live =
-            compute_block_instruction_liveness(block, live.live_out[block_index]);
-
-        for (std::size_t index = 0; index < block.instructions.size(); ++index) {
-            if (!std::holds_alternative<Call>(block.instructions[index])) {
-                continue;
-            }
-
-            for (const auto phys : kCallerSaved) {
-                add_single_phys_live_edges(phys, instruction_live.live_after[index]);
-            }
-
-            std::size_t start = index;
-            while (start > 0 && is_argument_setup(fn, block.instructions[start - 1])) {
-                --start;
-            }
-            for (std::size_t setup = start; setup < index; ++setup) {
-                const auto phys = argument_setup_register(block.instructions[setup]);
-                if (!phys) {
-                    continue;
-                }
-                if (const auto* copy = std::get_if<Copy>(&block.instructions[setup])) {
-                    const auto src_node = node_for(input.table, copy->src);
-                    if (src_node) {
-                        add_affinity_edge(
-                            input,
-                            input.table.phys_nodes.at(*phys),
-                            *src_node,
-                            GraphInput::AffinitySource::AbiArg);
-                    }
-                }
-                const auto source = copy_src_vreg(block.instructions[setup]);
-                // ABI arg registers are reserved for the whole setup bundle, not only
-                // after their own copy executes. Excluding the lane's own source still
-                // permits identity coalescing onto that fixed argument register.
-                add_single_phys_live_edges(*phys, instruction_live.live_before[start], source);
-                for (std::size_t live_index = start; live_index < index; ++live_index) {
-                    add_single_phys_live_edges(
-                        *phys, instruction_live.live_after[live_index], source);
-                }
-            }
-
-            std::size_t end = index;
-            while (end + 1 < block.instructions.size() &&
-                   is_result_extract(block.instructions[end + 1])) {
-                ++end;
-            }
-            for (std::size_t extract = index + 1; extract <= end; ++extract) {
-                const auto phys = result_extract_register(block.instructions[extract]);
-                if (!phys) {
-                    continue;
-                }
-                if (const auto* copy = std::get_if<Copy>(&block.instructions[extract])) {
-                    const auto dest_node = node_for(input.table, copy->dest);
-                    if (dest_node) {
-                        add_affinity_edge(
-                            input,
-                            input.table.phys_nodes.at(*phys),
-                            *dest_node,
-                            GraphInput::AffinitySource::AbiRet);
-                    }
-                }
-                const auto dest = copy_dest_vreg(block.instructions[extract]);
-                for (std::size_t live_index = index; live_index < extract; ++live_index) {
-                    add_single_phys_live_edges(*phys,
-                                               instruction_live.live_after[live_index],
-                                               dest);
-                }
-            }
-        }
-    }
-
     std::stable_sort(input.affinity_edges.begin(),
                      input.affinity_edges.end(),
                      [](const GraphInput::AffinityEdge& lhs, const GraphInput::AffinityEdge& rhs) {
                          auto priority = [](GraphInput::AffinitySource source) {
                              switch (source) {
-                             case GraphInput::AffinitySource::AbiArg:
-                             case GraphInput::AffinitySource::AbiRet:
-                                 return 0;
                              case GraphInput::AffinitySource::Phi:
-                                 return 1;
+                                 return 0;
                              case GraphInput::AffinitySource::Copy:
-                                 return 2;
+                                 return 1;
                              }
                              return 3;
                          };

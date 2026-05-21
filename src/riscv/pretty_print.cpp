@@ -50,6 +50,17 @@ std::string register_name(const RegisterRef& reg) {
         reg);
 }
 
+std::string physical_register_list(const std::vector<PhysicalRegister>& regs) {
+    std::ostringstream out;
+    for (std::size_t i = 0; i < regs.size(); ++i) {
+        if (i != 0) {
+            out << ", ";
+        }
+        out << physical_register_name(regs[i]);
+    }
+    return out.str();
+}
+
 std::string type_name(semantic::TypeId type) {
     if (!type) {
         return "<invalid>";
@@ -245,7 +256,14 @@ void print_instruction(std::ostream& out, const Instruction& inst) {
                 out << "  store " << address_name(value.address) << ", "
                     << register_name(value.src) << "\n";
             } else if constexpr (std::is_same_v<T, Call>) {
-                out << "  call @" << value.callee << "\n";
+                out << "  call @" << value.callee;
+                if (!value.uses.empty()) {
+                    out << " uses(" << physical_register_list(value.uses) << ")";
+                }
+                if (!value.defs.empty()) {
+                    out << " defs(" << physical_register_list(value.defs) << ")";
+                }
+                out << "\n";
             }
         },
         inst);

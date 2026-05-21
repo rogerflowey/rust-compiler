@@ -2,6 +2,7 @@
 
 #include "riscv/layout.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -34,6 +35,17 @@ constexpr std::array kArgumentRegisters = {
     PhysicalRegister::A6,
     PhysicalRegister::A7,
 };
+
+std::vector<PhysicalRegister> call_arg_uses(std::size_t arg_count) {
+    arg_count = std::min(arg_count, kArgumentRegisters.size());
+    return std::vector<PhysicalRegister>(kArgumentRegisters.begin(),
+                                         kArgumentRegisters.begin() +
+                                             static_cast<std::ptrdiff_t>(arg_count));
+}
+
+std::vector<PhysicalRegister> allocatable_call_defs() {
+    return std::vector<PhysicalRegister>(kArgumentRegisters.begin(), kArgumentRegisters.end());
+}
 
 bool fits_i32(std::int64_t value) {
     return value >= std::numeric_limits<std::int32_t>::min() &&
@@ -396,7 +408,12 @@ private:
         emit(dest, Copy{.dest = PhysicalRegister::A0, .src = dest_ptr});
         emit(dest, Copy{.dest = PhysicalRegister::A1, .src = src_ptr});
         emit(dest, Copy{.dest = PhysicalRegister::A2, .src = size_reg});
-        emit(dest, Call{.callee = "__rcomp_memmove"});
+        emit(dest,
+             Call{
+                 .callee = "__rcomp_memmove",
+                 .uses = call_arg_uses(3),
+                 .defs = allocatable_call_defs(),
+             });
     }
 
     void lower_borrow(MachineBlock& dest, const ir3::Borrow& borrow) {
@@ -556,7 +573,12 @@ private:
                  });
         }
 
-        emit(dest, Call{.callee = lower_callee_symbol(call.callee)});
+        emit(dest,
+             Call{
+                 .callee = lower_callee_symbol(call.callee),
+                 .uses = call_arg_uses(call.args.size()),
+                 .defs = allocatable_call_defs(),
+             });
 
         if (call.result) {
             emit(dest,

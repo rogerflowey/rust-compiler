@@ -139,7 +139,7 @@ Machine IR instructions are:
 - `frame_addr dest, frame, offset`
 - `load dest, address`
 - `store address, src`
-- `call @symbol`
+- `call @symbol uses(...) defs(...)`
 
 ### Copy
 `copy` is the generic move primitive. It may target a vreg before register
@@ -179,8 +179,17 @@ currently implied by the RV32IM backend contract and the origin of the lowered
 operation.
 
 ### Calls
-`call @symbol` represents a direct call. Argument/result movement through
-`a0`..`a7` and stack argument areas is made explicit in surrounding Machine IR.
+`call @symbol uses(...) defs(...)` represents a direct call.
+
+- `uses(...)` lists the consumed ABI argument registers for this call
+- `defs(...)` lists the allocatable caller-clobbered registers the call
+  overwrites
+- argument setup/result extraction copies and outgoing stack stores remain
+  explicit surrounding Machine IR instructions
+
+For the current RV32 backend, lowering emits:
+- `uses(a0..aN)` for register-passed arguments
+- `defs(a0..a7)` for the allocatable caller-clobbered pool
 
 ## Terminators
 Machine IR terminators are:
@@ -262,7 +271,7 @@ The IR3 -> Machine IR lowering performs these structural changes:
 - IR3 `i32`/`ptr` SSA values -> `gpr32` machine values
 - IR3 places -> explicit frame/register addresses
 - IR3 slots -> frame objects
-- IR3 calls -> explicit ABI shuffle code plus `call @symbol`
+- IR3 calls -> explicit ABI shuffle code plus `call @symbol uses(...) defs(...)`
 - IR3 aggregate movement -> explicit memory traffic or helper calls
 
 Machine IR therefore keeps the CFG shape of IR3, but is already committed to
