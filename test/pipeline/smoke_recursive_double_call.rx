@@ -1,0 +1,14 @@
+fn fib_like(n: i32) -> i32 {
+    if (n <= 1i32) {
+        return n;
+    } else {
+        let left: i32 = fib_like(n - 1i32);
+        let right: i32 = fib_like(n - 2i32);
+        return left + right + 1i32;
+    }
+}
+
+fn main() {
+    printlnInt(fib_like(5i32));
+    exit(0i32);
+}

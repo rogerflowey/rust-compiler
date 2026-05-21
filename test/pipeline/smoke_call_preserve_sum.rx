@@ -1,0 +1,15 @@
+fn bump(x: i32) -> i32 {
+    return x + 10i32;
+}
+
+fn main() {
+    let a: i32 = 1i32;
+    let b: i32 = 2i32;
+    let c: i32 = 3i32;
+    let d: i32 = 4i32;
+    let e: i32 = 5i32;
+    let left: i32 = bump(a + b);
+    let right: i32 = bump(c + d);
+    printlnInt(left + right + e);
+    exit(0i32);
+}

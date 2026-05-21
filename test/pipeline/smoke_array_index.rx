@@ -1,0 +1,9 @@
+fn read_sum(values: [i32; 4]) -> i32 {
+    return values[0usize] + values[1usize] + values[2usize] + values[3usize];
+}
+
+fn main() {
+    let values: [i32; 4] = [2i32, 4i32, 6i32, 8i32];
+    printlnInt(read_sum(values));
+    exit(0i32);
+}

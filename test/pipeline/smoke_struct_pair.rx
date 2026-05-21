@@ -1,0 +1,14 @@
+struct Pair {
+    left: i32,
+    right: i32,
+}
+
+fn sum_pair(pair: Pair) -> i32 {
+    return pair.left + pair.right;
+}
+
+fn main() {
+    let pair: Pair = Pair { left: 7i32, right: 8i32 };
+    printlnInt(sum_pair(pair));
+    exit(0i32);
+}

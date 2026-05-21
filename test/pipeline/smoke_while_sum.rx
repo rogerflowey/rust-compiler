@@ -1,0 +1,14 @@
+fn sum_to(limit: i32) -> i32 {
+    let mut i: i32 = 0i32;
+    let mut acc: i32 = 0i32;
+    while i < limit {
+        acc = acc + i;
+        i = i + 1i32;
+    }
+    return acc;
+}
+
+fn main() {
+    printlnInt(sum_to(6i32));
+    exit(0i32);
+}

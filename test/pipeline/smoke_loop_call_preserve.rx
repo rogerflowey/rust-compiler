@@ -1,0 +1,15 @@
+fn step(x: i32, bias: i32) -> i32 {
+    return x + bias;
+}
+
+fn main() {
+    let mut i: i32 = 0i32;
+    let mut acc: i32 = 0i32;
+    let bias: i32 = 7i32;
+    while (i < 4i32) {
+        acc = acc + step(i, bias);
+        i = i + 1i32;
+    }
+    printlnInt(acc + bias);
+    exit(0i32);
+}

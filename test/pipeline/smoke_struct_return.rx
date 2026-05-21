@@ -1,0 +1,14 @@
+struct Pair {
+    left: i32,
+    right: i32,
+}
+
+fn make_pair(base: i32) -> Pair {
+    return Pair { left: base, right: base + 3i32 };
+}
+
+fn main() {
+    let pair: Pair = make_pair(4i32);
+    printlnInt(pair.left + pair.right);
+    exit(0i32);
+}

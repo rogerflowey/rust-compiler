@@ -1,0 +1,9 @@
+fn main() {
+    let mut values: [i32; 4] = [0i32, 0i32, 0i32, 0i32];
+    values[0usize] = 3i32;
+    values[1usize] = 4i32;
+    values[2usize] = values[0usize] + values[1usize];
+    values[3usize] = values[2usize] + 5i32;
+    printlnInt(values[3usize]);
+    exit(0i32);
+}

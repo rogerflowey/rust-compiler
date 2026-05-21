@@ -1,0 +1,14 @@
+fn choose(lhs: i32, rhs: i32) -> i32 {
+    if (lhs > rhs) {
+        return lhs - rhs;
+    } else {
+        return lhs + rhs;
+    }
+}
+
+fn main() {
+    let left: i32 = choose(9i32, 4i32);
+    let right: i32 = choose(4i32, 9i32);
+    printlnInt(left + right);
+    exit(0i32);
+}

@@ -1,0 +1,13 @@
+fn rec_sum(n: i32, bias: i32) -> i32 {
+    let local: i32 = bias + 1i32;
+    if (n <= 0i32) {
+        return local;
+    } else {
+        return rec_sum(n - 1i32, bias) + local;
+    }
+}
+
+fn main() {
+    printlnInt(rec_sum(4i32, 3i32));
+    exit(0i32);
+}

@@ -1,0 +1,14 @@
+fn bump(x: i32) -> i32 {
+    return x + 1i32;
+}
+
+fn main() {
+    let mut i: i32 = 0i32;
+    let mut acc: i32 = 0i32;
+    while (i < 5i32) {
+        acc = acc + bump(i);
+        i = i + 1i32;
+    }
+    printlnInt(acc);
+    exit(0i32);
+}
