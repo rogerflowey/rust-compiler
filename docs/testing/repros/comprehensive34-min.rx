@@ -1,0 +1,71 @@
+// Reduced from external/RCompiler-Testcases/IR-1/src/comprehensive34/comprehensive34.rx
+// Repro command:
+//   build/ninja-debug/cmd/riscv_pipeline docs/testing/repros/comprehensive34-min.rx --stage=asm > /tmp/repro.s
+//   cp /tmp/repro.s /tmp/test.s && : > /tmp/builtin.s && : > /tmp/test.in
+//   (cd /tmp && /home/rogerw/project/rcomp/compiler.git/ir3-impl/external/REIMU/build/linux/x86_64/release/reimu -s=1M -i=test.in -o actual.out)
+//
+// Current symptom:
+//   REIMU aborts with a misaligned/out-of-bounds load.
+
+const NODE_POOL_USIZE: usize = 1;
+
+struct Node {
+    node_type: i32,
+    value: i32,
+    left: i32,
+    right: i32,
+}
+
+struct Tree {
+    pool: [Node; NODE_POOL_USIZE],
+    root: i32,
+    next_free: i32,
+}
+
+fn main() {
+    let mut tree: Tree = Tree {
+        pool: [Node { node_type: 0, value: 0, left: -1, right: -1 }; NODE_POOL_USIZE],
+        root: -1,
+        next_free: 0,
+    };
+    tree.pool[0].left = -1;
+    tree.next_free = 0;
+    tree.root = build_leaf(&mut tree, 7);
+
+    let root: i32 = tree.root;
+    mirror_tree(&mut tree, root);
+
+    let node: &Node = &tree.pool[root as usize];
+    printlnInt(node.value);
+    exit(0);
+}
+
+fn alloc_node(tree: &mut Tree) -> i32 {
+    let new_node_idx: i32 = tree.next_free;
+    tree.next_free = tree.pool[new_node_idx as usize].left;
+    tree.pool[new_node_idx as usize].left = -1;
+    tree.pool[new_node_idx as usize].right = -1;
+    return new_node_idx;
+}
+
+fn build_leaf(tree: &mut Tree, value: i32) -> i32 {
+    let leaf_idx: i32 = alloc_node(tree);
+    if (leaf_idx != -1) {
+    }
+    return leaf_idx;
+}
+
+fn mirror_tree(tree: &mut Tree, node_idx: i32) {
+    if (node_idx == -1) {
+        return;
+    }
+    let node: &mut Node = &mut tree.pool[node_idx as usize];
+    let temp: i32 = node.left;
+    node.left = node.right;
+    node.right = temp;
+
+    let left: i32 = node.left;
+    let right: i32 = node.right;
+    mirror_tree(tree, left);
+    mirror_tree(tree, right);
+}

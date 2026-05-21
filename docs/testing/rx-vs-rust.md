@@ -37,7 +37,16 @@ let x = 1;
 Integer literals still have some limited inference behavior, but the safe rule
 for testcase authoring is: write the type you mean.
 
-### 3. Builtin I/O is via free functions, not Rust std APIs
+### 3. `if` conditions require parentheses and braces
+
+The grammar is currently strict:
+
+```rust
+if (cond) {
+}
+```
+
+### 4. Builtin I/O is via free functions, not Rust std APIs
 
 The current testcase/runtime contract uses these builtins:
 
@@ -49,7 +58,7 @@ The current testcase/runtime contract uses these builtins:
 This is different from standard Rust, which would normally use macros or std
 library facilities such as `println!` and process-exit APIs.
 
-### 4. The language subset is smaller than Rust
+### 5. The language subset is smaller than Rust
 
 The current compiler is a mini-Rust subset. When writing `.rx` tests, avoid
 assuming support for the full Rust language or standard library. In particular,
