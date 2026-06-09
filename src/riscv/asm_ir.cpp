@@ -142,6 +142,14 @@ const char* asm_opcode_name(AsmOpcode opcode) {
         return "beq";
     case AsmOpcode::Bne:
         return "bne";
+    case AsmOpcode::Blt:
+        return "blt";
+    case AsmOpcode::Bge:
+        return "bge";
+    case AsmOpcode::Bltu:
+        return "bltu";
+    case AsmOpcode::Bgeu:
+        return "bgeu";
     case AsmOpcode::Jal:
         return "jal";
     case AsmOpcode::Jalr:

@@ -157,9 +157,74 @@ AsmOpcode invert_branch_opcode(const MachineFunction& fn, AsmOpcode opcode) {
         return AsmOpcode::Bne;
     case AsmOpcode::Bne:
         return AsmOpcode::Beq;
+    case AsmOpcode::Blt:
+        return AsmOpcode::Bge;
+    case AsmOpcode::Bge:
+        return AsmOpcode::Blt;
+    case AsmOpcode::Bltu:
+        return AsmOpcode::Bgeu;
+    case AsmOpcode::Bgeu:
+        return AsmOpcode::Bltu;
     default:
-        fail(fn, "branch relaxation only supports beq/bne");
+        fail(fn, "branch relaxation only supports branch opcodes");
     }
+}
+
+struct BranchInfo {
+    AsmOpcode opcode = AsmOpcode::Beq;
+    bool swap_operands = false;
+};
+
+BranchInfo compare_to_branch_opcode(CompareOp op) {
+    switch (op) {
+    case CompareOp::Eq:
+        return {AsmOpcode::Beq, false};
+    case CompareOp::Ne:
+        return {AsmOpcode::Bne, false};
+    case CompareOp::LtS:
+        return {AsmOpcode::Blt, false};
+    case CompareOp::LeS:
+        return {AsmOpcode::Bge, true};
+    case CompareOp::GtS:
+        return {AsmOpcode::Blt, true};
+    case CompareOp::GeS:
+        return {AsmOpcode::Bge, false};
+    case CompareOp::LtU:
+        return {AsmOpcode::Bltu, false};
+    case CompareOp::LeU:
+        return {AsmOpcode::Bgeu, true};
+    case CompareOp::GtU:
+        return {AsmOpcode::Bltu, true};
+    case CompareOp::GeU:
+        return {AsmOpcode::Bgeu, false};
+    }
+    __builtin_unreachable();
+}
+
+BranchInfo compare_to_inverted_branch_opcode(CompareOp op) {
+    switch (op) {
+    case CompareOp::Eq:
+        return {AsmOpcode::Bne, false};
+    case CompareOp::Ne:
+        return {AsmOpcode::Beq, false};
+    case CompareOp::LtS:
+        return {AsmOpcode::Bge, false};
+    case CompareOp::LeS:
+        return {AsmOpcode::Blt, true};
+    case CompareOp::GtS:
+        return {AsmOpcode::Bge, true};
+    case CompareOp::GeS:
+        return {AsmOpcode::Blt, false};
+    case CompareOp::LtU:
+        return {AsmOpcode::Bgeu, false};
+    case CompareOp::LeU:
+        return {AsmOpcode::Bltu, true};
+    case CompareOp::GtU:
+        return {AsmOpcode::Bgeu, true};
+    case CompareOp::GeU:
+        return {AsmOpcode::Bltu, false};
+    }
+    __builtin_unreachable();
 }
 
 void relax_conditional_branches(const MachineFunction& fn, AsmFunction& asm_fn) {
@@ -546,6 +611,40 @@ void lower_terminator(std::vector<AsmInst>& out,
                     .opcode = AsmOpcode::Bne,
                     .rs1 = cond,
                     .rs2 = PhysicalRegister::Zero,
+                    .target = ctx.block_label(value.then_block),
+                });
+                out.push_back(AsmJalInst{
+                    .rd = PhysicalRegister::Zero,
+                    .target = ctx.block_label(value.else_block),
+                });
+            } else if constexpr (std::is_same_v<T, BranchCond>) {
+                const auto lhs = expect_phys_reg(ctx, value.lhs, "branch lhs");
+                const auto rhs = expect_phys_reg(ctx, value.rhs, "branch rhs");
+                if (next_block && *next_block == value.else_block) {
+                    const auto info = compare_to_branch_opcode(value.op);
+                    out.push_back(AsmBranchInst{
+                        .opcode = info.opcode,
+                        .rs1 = info.swap_operands ? rhs : lhs,
+                        .rs2 = info.swap_operands ? lhs : rhs,
+                        .target = ctx.block_label(value.then_block),
+                    });
+                    return;
+                }
+                if (next_block && *next_block == value.then_block) {
+                    const auto info = compare_to_inverted_branch_opcode(value.op);
+                    out.push_back(AsmBranchInst{
+                        .opcode = info.opcode,
+                        .rs1 = info.swap_operands ? rhs : lhs,
+                        .rs2 = info.swap_operands ? lhs : rhs,
+                        .target = ctx.block_label(value.else_block),
+                    });
+                    return;
+                }
+                const auto info = compare_to_branch_opcode(value.op);
+                out.push_back(AsmBranchInst{
+                    .opcode = info.opcode,
+                    .rs1 = info.swap_operands ? rhs : lhs,
+                    .rs2 = info.swap_operands ? lhs : rhs,
                     .target = ctx.block_label(value.then_block),
                 });
                 out.push_back(AsmJalInst{

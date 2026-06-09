@@ -35,9 +35,21 @@ constexpr std::array<PhysicalRegister, 19> kAllocatable = {
 constexpr PhysicalRegister kScratch0 = PhysicalRegister::T0;
 constexpr PhysicalRegister kScratch1 = PhysicalRegister::T1;
 
+struct RematInfo {
+    enum class Kind {
+        Li,
+        FrameAddr,
+    };
+    Kind kind;
+    int32_t imm = 0;
+    FrameId frame = 0;
+    int32_t offset = 0;
+};
+
 struct Allocation {
     std::unordered_map<MachineValueId, PhysicalRegister> assigned;
     std::unordered_map<MachineValueId, FrameId> spilled;
+    std::unordered_map<MachineValueId, RematInfo> rematerialized;
 };
 
 struct OriginalNode {
@@ -193,6 +205,9 @@ void for_each_terminator_use(const Terminator& term, Fn&& fn) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, BranchNonZero>) {
                 for_each_register_ref(value.condition, fn);
+            } else if constexpr (std::is_same_v<T, BranchCond>) {
+                for_each_register_ref(value.lhs, fn);
+                for_each_register_ref(value.rhs, fn);
             } else if constexpr (std::is_same_v<T, Return>) {
                 if (value.value) {
                     for_each_register_ref(*value.value, fn);
@@ -320,6 +335,24 @@ NodeTable collect_nodes(const MachineFunction& fn) {
         }
     }
     return table;
+}
+
+std::unordered_map<MachineValueId, RematInfo> build_remat_map(const MachineFunction& fn) {
+    std::unordered_map<MachineValueId, RematInfo> map;
+    for (const auto& block : fn.blocks) {
+        for (const auto& inst : block.instructions) {
+            if (const auto* li = std::get_if<Li>(&inst)) {
+                const auto& vreg = std::get<VirtualRegister>(li->dest);
+                map[vreg.id] = RematInfo{.kind = RematInfo::Kind::Li, .imm = li->value};
+            } else if (const auto* fa = std::get_if<FrameAddr>(&inst)) {
+                const auto& vreg = std::get<VirtualRegister>(fa->dest);
+                map[vreg.id] = RematInfo{.kind = RematInfo::Kind::FrameAddr,
+                                         .frame = fa->frame,
+                                         .offset = fa->offset};
+            }
+        }
+    }
+    return map;
 }
 
 void bump_weight(NodeTable& table, const RegisterRef& reg) {
@@ -712,7 +745,9 @@ bool can_coalesce(const CoalescedGraph& graph, int lhs, int rhs) {
     return high_degree < kAllocatable.size();
 }
 
-Allocation color_graph(MachineFunction& fn, const GraphInput& input) {
+Allocation color_graph(MachineFunction& fn,
+                       const GraphInput& input,
+                       const std::unordered_map<MachineValueId, RematInfo>& remat_map) {
     Dsu dsu(input.table.nodes.size());
     CoalescedGraph graph = build_coalesced_graph(input, dsu);
 
@@ -813,20 +848,24 @@ Allocation color_graph(MachineFunction& fn, const GraphInput& input) {
     for (const auto& [rep, node] : graph.nodes) {
         if (spilled_reps.contains(rep)) {
             for (const auto vreg : node.members) {
-                const FrameId frame = fn.frame_objects.size();
-                fn.frame_objects.push_back(FrameObject{
-                    .id = frame,
-                    .kind = FrameObjectKind::Spill,
-                    .size = 4,
-                    .align = 4,
-                    .host_type = semantic::invalid_type_id,
-                    .spill_class = RegisterClass::Gpr32,
-                    .source_slot = std::nullopt,
-                    .debug_name = "",
-                    .saved_reg = std::nullopt,
-                    .materialized_offset = std::nullopt,
-                });
-                alloc.spilled.emplace(vreg, frame);
+                if (const auto rit = remat_map.find(vreg); rit != remat_map.end()) {
+                    alloc.rematerialized.emplace(vreg, rit->second);
+                } else {
+                    const FrameId frame = fn.frame_objects.size();
+                    fn.frame_objects.push_back(FrameObject{
+                        .id = frame,
+                        .kind = FrameObjectKind::Spill,
+                        .size = 4,
+                        .align = 4,
+                        .host_type = semantic::invalid_type_id,
+                        .spill_class = RegisterClass::Gpr32,
+                        .source_slot = std::nullopt,
+                        .debug_name = "",
+                        .saved_reg = std::nullopt,
+                        .materialized_offset = std::nullopt,
+                    });
+                    alloc.spilled.emplace(vreg, frame);
+                }
             }
             continue;
         }
@@ -870,6 +909,28 @@ RegisterRef rewrite_src(const RegisterRef& reg,
         return *phys;
     }
 
+    if (const auto rit = alloc.rematerialized.find(vreg.id); rit != alloc.rematerialized.end()) {
+        PhysicalRegister scratch;
+        if (!scratch0_used) {
+            scratch = kScratch0;
+            scratch0_used = true;
+        } else if (!scratch1_used) {
+            scratch = kScratch1;
+            scratch1_used = true;
+        } else {
+            throw std::runtime_error(
+                "Exceeded 2-scratch-register budget in instruction rewrite");
+        }
+
+        if (rit->second.kind == RematInfo::Kind::Li) {
+            pre.push_back(Li{.dest = scratch, .value = rit->second.imm});
+        } else {
+            pre.push_back(FrameAddr{
+                .dest = scratch, .frame = rit->second.frame, .offset = rit->second.offset});
+        }
+        return scratch;
+    }
+
     PhysicalRegister scratch;
     if (!scratch0_used) {
         scratch = kScratch0;
@@ -893,6 +954,9 @@ RegisterRef rewrite_dest(MachineValueId id,
                          std::vector<Instruction>& post) {
     if (const auto phys = lookup(id, alloc)) {
         return *phys;
+    }
+    if (alloc.rematerialized.contains(id)) {
+        return kScratch0;
     }
     post.push_back(Store{
         .address = FrameAddress{.frame = alloc.spilled.at(id), .offset = 0},
@@ -920,12 +984,12 @@ Address rewrite_address(const Address& addr,
         addr);
 }
 
-Instruction rewrite_instruction(const Instruction& inst,
-                                const Allocation& alloc,
-                                std::vector<Instruction>& pre,
-                                std::vector<Instruction>& post) {
+std::optional<Instruction> rewrite_instruction(const Instruction& inst,
+                                             const Allocation& alloc,
+                                             std::vector<Instruction>& pre,
+                                             std::vector<Instruction>& post) {
     return std::visit(
-        [&](const auto& value) -> Instruction {
+        [&](const auto& value) -> std::optional<Instruction> {
             using T = std::decay_t<decltype(value)>;
             bool scratch0_used = false;
             bool scratch1_used = false;
@@ -939,7 +1003,11 @@ Instruction rewrite_instruction(const Instruction& inst,
                 }
                 return Copy{.dest = new_dest, .src = new_src};
             } else if constexpr (std::is_same_v<T, Li>) {
-                return Li{.dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
+                const auto vreg_id = std::get<VirtualRegister>(value.dest).id;
+                if (alloc.rematerialized.contains(vreg_id)) {
+                    return std::nullopt;
+                }
+                return Li{.dest = rewrite_dest(vreg_id, alloc, post),
                           .value = value.value};
             } else if constexpr (std::is_same_v<T, Binary>) {
                 return Binary{
@@ -956,8 +1024,12 @@ Instruction rewrite_instruction(const Instruction& inst,
                     .rhs = rewrite_src(value.rhs, alloc, pre, scratch0_used, scratch1_used),
                 };
             } else if constexpr (std::is_same_v<T, FrameAddr>) {
+                const auto vreg_id = std::get<VirtualRegister>(value.dest).id;
+                if (alloc.rematerialized.contains(vreg_id)) {
+                    return std::nullopt;
+                }
                 return FrameAddr{
-                    .dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
+                    .dest = rewrite_dest(vreg_id, alloc, post),
                     .frame = value.frame,
                     .offset = value.offset,
                 };
@@ -1011,13 +1083,15 @@ void rewrite_block(MachineBlock& block, const Allocation& alloc) {
     for (const auto& inst : block.instructions) {
         std::vector<Instruction> pre;
         std::vector<Instruction> post;
-        Instruction body = rewrite_instruction(inst, alloc, pre, post);
+        std::optional<Instruction> body = rewrite_instruction(inst, alloc, pre, post);
         rewritten.insert(rewritten.end(),
                          std::make_move_iterator(pre.begin()),
                          std::make_move_iterator(pre.end()));
-        if (const auto* copy = std::get_if<Copy>(&body);
-            !copy || copy->dest != copy->src) {
-            rewritten.push_back(std::move(body));
+        if (body) {
+            if (const auto* copy = std::get_if<Copy>(&*body);
+                !copy || copy->dest != copy->src) {
+                rewritten.push_back(std::move(*body));
+            }
         }
         rewritten.insert(rewritten.end(),
                          std::make_move_iterator(post.begin()),
@@ -1034,10 +1108,24 @@ void rewrite_block(MachineBlock& block, const Allocation& alloc) {
                     const RegisterRef condition =
                         rewrite_register_ref(term.condition, alloc, loads);
                     block.instructions.insert(block.instructions.end(),
-                                              std::make_move_iterator(loads.begin()),
-                                              std::make_move_iterator(loads.end()));
+                                               std::make_move_iterator(loads.begin()),
+                                               std::make_move_iterator(loads.end()));
                     return BranchNonZero{
                         .condition = condition,
+                        .then_block = term.then_block,
+                        .else_block = term.else_block,
+                    };
+                } else if constexpr (std::is_same_v<T, BranchCond>) {
+                    std::vector<Instruction> loads;
+                    const RegisterRef lhs = rewrite_register_ref(term.lhs, alloc, loads);
+                    const RegisterRef rhs = rewrite_register_ref(term.rhs, alloc, loads);
+                    block.instructions.insert(block.instructions.end(),
+                                               std::make_move_iterator(loads.begin()),
+                                               std::make_move_iterator(loads.end()));
+                    return BranchCond{
+                        .op = term.op,
+                        .lhs = lhs,
+                        .rhs = rhs,
                         .then_block = term.then_block,
                         .else_block = term.else_block,
                     };
@@ -1065,11 +1153,95 @@ void rewrite_block(MachineBlock& block, const Allocation& alloc) {
     }
 }
 
+void fixup_remat_phi_operands(MachineFunction& fn, const Allocation& alloc) {
+    if (alloc.rematerialized.empty()) {
+        return;
+    }
+
+    std::unordered_map<BlockId, std::size_t> block_index;
+    for (std::size_t i = 0; i < fn.blocks.size(); ++i) {
+        block_index[fn.blocks[i].id] = i;
+    }
+
+    struct RematKey {
+        RematInfo::Kind kind;
+        int32_t imm = 0;
+        FrameId frame = 0;
+        int32_t offset = 0;
+        bool operator==(const RematKey& other) const {
+            return kind == other.kind && imm == other.imm && frame == other.frame &&
+                   offset == other.offset;
+        }
+    };
+    struct RematKeyHash {
+        std::size_t operator()(const RematKey& key) const {
+            auto h = std::hash<int>{}(static_cast<int>(key.kind));
+            h ^= std::hash<int32_t>{}(key.imm) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<FrameId>{}(key.frame) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<int32_t>{}(key.offset) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
+    std::unordered_map<BlockId,
+                       std::unordered_map<RematKey, PhysicalRegister, RematKeyHash>>
+        pred_remat_scratch;
+
+    for (auto& block : fn.blocks) {
+        for (auto& phi : block.phis) {
+            for (auto& incoming : phi.incoming) {
+                const auto* vreg = std::get_if<VirtualRegister>(&incoming.value);
+                if (!vreg) {
+                    continue;
+                }
+                const auto rit = alloc.rematerialized.find(vreg->id);
+                if (rit == alloc.rematerialized.end()) {
+                    continue;
+                }
+
+                const RematKey key{.kind = rit->second.kind,
+                                   .imm = rit->second.imm,
+                                   .frame = rit->second.frame,
+                                   .offset = rit->second.offset};
+                auto& pred_map = pred_remat_scratch[incoming.pred];
+
+                PhysicalRegister scratch;
+                if (auto sit = pred_map.find(key); sit != pred_map.end()) {
+                    scratch = sit->second;
+                } else {
+                    if (pred_map.size() >= 2) {
+                        throw std::runtime_error(
+                            "Exceeded 2-scratch-register budget in remat phi fixup");
+                    }
+                    scratch = pred_map.empty() ? kScratch0 : kScratch1;
+                    pred_map[key] = scratch;
+
+                    auto& pred_block = fn.blocks[block_index.at(incoming.pred)];
+                    if (rit->second.kind == RematInfo::Kind::Li) {
+                        pred_block.instructions.push_back(
+                            Li{.dest = scratch, .value = rit->second.imm});
+                    } else {
+                        pred_block.instructions.push_back(
+                            FrameAddr{.dest = scratch,
+                                      .frame = rit->second.frame,
+                                      .offset = rit->second.offset});
+                    }
+                }
+
+                incoming.value = scratch;
+            }
+        }
+    }
+}
+
 } // namespace
 
 AllocationStats allocate_registers(MachineFunction& fn) {
     const auto graph = build_graph(fn);
-    Allocation alloc = color_graph(fn, graph);
+    const auto remat_map = build_remat_map(fn);
+    Allocation alloc = color_graph(fn, graph, remat_map);
+
+    fixup_remat_phi_operands(fn, alloc);
 
     for (auto& block : fn.blocks) {
         rewrite_block(block, alloc);

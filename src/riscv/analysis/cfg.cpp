@@ -44,6 +44,9 @@ CfgInfo compute_cfg(const MachineFunction& fn) {
                 } else if constexpr (std::is_same_v<T, BranchNonZero>) {
                     add_edge(i, term.then_block);
                     add_edge(i, term.else_block);
+                } else if constexpr (std::is_same_v<T, BranchCond>) {
+                    add_edge(i, term.then_block);
+                    add_edge(i, term.else_block);
                 }
                 // Return and Unreachable have no successors
             },

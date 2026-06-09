@@ -61,6 +61,9 @@ void for_each_terminator_use(const Terminator& term, Fn&& fn) {
             };
             if constexpr (std::is_same_v<T, BranchNonZero>) {
                 use(value.condition);
+            } else if constexpr (std::is_same_v<T, BranchCond>) {
+                use(value.lhs);
+                use(value.rhs);
             } else if constexpr (std::is_same_v<T, Return>) {
                 if (value.value) {
                     use(*value.value);

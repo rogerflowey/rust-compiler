@@ -281,6 +281,12 @@ void print_terminator(std::ostream& out,
                 out << "  brnz " << register_name(value.condition) << ", "
                     << block_name(function, value.then_block) << ", "
                     << block_name(function, value.else_block) << "\n";
+            } else if constexpr (std::is_same_v<T, BranchCond>) {
+                out << "  br." << compare_name(value.op) << " "
+                    << register_name(value.lhs) << ", "
+                    << register_name(value.rhs) << ", "
+                    << block_name(function, value.then_block) << ", "
+                    << block_name(function, value.else_block) << "\n";
             } else if constexpr (std::is_same_v<T, Return>) {
                 out << "  ret";
                 if (value.value) {

@@ -154,6 +154,9 @@ PrologueEpiloguePlan compute_prologue_epilogue_plan(const MachineFunction& fn) {
                 using T = std::decay_t<decltype(term)>;
                 if constexpr (std::is_same_v<T, BranchNonZero>) {
                     record_used_register(term.condition, used_allocatable);
+                } else if constexpr (std::is_same_v<T, BranchCond>) {
+                    record_used_register(term.lhs, used_allocatable);
+                    record_used_register(term.rhs, used_allocatable);
                 } else if constexpr (std::is_same_v<T, Return>) {
                     if (term.value) {
                         record_used_register(*term.value, used_allocatable);

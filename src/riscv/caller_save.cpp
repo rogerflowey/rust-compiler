@@ -100,6 +100,9 @@ void for_each_terminator_use(const Terminator& term, Fn&& fn) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, BranchNonZero>) {
                 for_each_register_ref(value.condition, fn);
+            } else if constexpr (std::is_same_v<T, BranchCond>) {
+                for_each_register_ref(value.lhs, fn);
+                for_each_register_ref(value.rhs, fn);
             } else if constexpr (std::is_same_v<T, Return>) {
                 if (value.value) {
                     for_each_register_ref(*value.value, fn);

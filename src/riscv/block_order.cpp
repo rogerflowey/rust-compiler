@@ -20,6 +20,8 @@ std::vector<BlockId> successor_order(const MachineBlock& block) {
                 return {term.target};
             } else if constexpr (std::is_same_v<T, BranchNonZero>) {
                 return {term.else_block, term.then_block};
+            } else if constexpr (std::is_same_v<T, BranchCond>) {
+                return {term.else_block, term.then_block};
             } else {
                 return {};
             }

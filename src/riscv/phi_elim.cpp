@@ -88,6 +88,8 @@ std::size_t successor_count(const Terminator& terminator) {
                 return 1;
             } else if constexpr (std::is_same_v<T, BranchNonZero>) {
                 return term.then_block == term.else_block ? 1u : 2u;
+            } else if constexpr (std::is_same_v<T, BranchCond>) {
+                return term.then_block == term.else_block ? 1u : 2u;
             } else {
                 return 0;
             }
@@ -106,6 +108,15 @@ void rewrite_edge_target(Terminator& terminator, BlockId old_target, BlockId new
                     rewritten = true;
                 }
             } else if constexpr (std::is_same_v<T, BranchNonZero>) {
+                if (term.then_block == old_target) {
+                    term.then_block = new_target;
+                    rewritten = true;
+                }
+                if (term.else_block == old_target) {
+                    term.else_block = new_target;
+                    rewritten = true;
+                }
+            } else if constexpr (std::is_same_v<T, BranchCond>) {
                 if (term.then_block == old_target) {
                     term.then_block = new_target;
                     rewritten = true;

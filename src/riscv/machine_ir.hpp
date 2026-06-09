@@ -183,13 +183,21 @@ struct BranchNonZero {
     BlockId else_block = 0;
 };
 
+struct BranchCond {
+    CompareOp op = CompareOp::Eq;
+    RegisterRef lhs;
+    RegisterRef rhs;
+    BlockId then_block = 0;
+    BlockId else_block = 0;
+};
+
 struct Return {
     std::optional<RegisterRef> value;
 };
 
 struct Unreachable {};
 
-using Terminator = std::variant<Jump, BranchNonZero, Return, Unreachable>;
+using Terminator = std::variant<Jump, BranchNonZero, BranchCond, Return, Unreachable>;
 
 struct MachinePhiIncoming {
     BlockId pred = 0;
