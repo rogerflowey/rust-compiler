@@ -16,7 +16,9 @@
 #include "src/parser/parser.hpp"
 #include "src/riscv/frame_materialize.hpp"
 #include "src/riscv/lower.hpp"
+#include "src/riscv/passes/cfg_cleanup.hpp"
 #include "src/riscv/passes/compare_branch_fusion.hpp"
+#include "src/riscv/passes/strength_reduction.hpp"
 #include "src/riscv/phi_elim.hpp"
 #include "src/riscv/prologue_epilogue.hpp"
 #include "src/riscv/pretty_print.hpp"
@@ -168,6 +170,7 @@ int main(int argc, char* argv[]) {
         auto ir3_module = ir3::lower_program(*hir_program);
         ir3::optimize_module(ir3_module);
         auto machine_module = riscv::lower_module(ir3_module);
+        riscv::optimize_strength_reduction(machine_module);
         riscv::optimize_compare_branch_fusion(machine_module);
         if (stage == OutputStage::Mir) {
             riscv::print_module(std::cout, machine_module);
@@ -181,6 +184,7 @@ int main(int argc, char* argv[]) {
         }
 
         riscv::eliminate_phis(machine_module);
+        riscv::optimize_cfg_cleanup(machine_module);
         if (stage == OutputStage::PostPhi) {
             riscv::print_module(std::cout, machine_module);
             return 0;

@@ -142,6 +142,13 @@ struct Binary {
     RegisterRef rhs;
 };
 
+struct ShiftImm {
+    RegisterRef dest;
+    BinaryOp op = BinaryOp::Sll;
+    RegisterRef lhs;
+    std::uint8_t amount = 0;
+};
+
 struct Compare {
     RegisterRef dest;
     CompareOp op = CompareOp::Eq;
@@ -171,7 +178,8 @@ struct Call {
     std::vector<PhysicalRegister> defs;
 };
 
-using Instruction = std::variant<Copy, Li, Binary, Compare, FrameAddr, Load, Store, Call>;
+using Instruction =
+    std::variant<Copy, Li, Binary, ShiftImm, Compare, FrameAddr, Load, Store, Call>;
 
 struct Jump {
     BlockId target = 0;

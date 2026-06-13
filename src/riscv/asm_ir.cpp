@@ -110,10 +110,16 @@ const char* asm_opcode_name(AsmOpcode opcode) {
         return "xori";
     case AsmOpcode::Sll:
         return "sll";
+    case AsmOpcode::Slli:
+        return "slli";
     case AsmOpcode::Srl:
         return "srl";
+    case AsmOpcode::Srli:
+        return "srli";
     case AsmOpcode::Sra:
         return "sra";
+    case AsmOpcode::Srai:
+        return "srai";
     case AsmOpcode::Slt:
         return "slt";
     case AsmOpcode::Sltu:

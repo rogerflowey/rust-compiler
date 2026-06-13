@@ -134,6 +134,9 @@ PrologueEpiloguePlan compute_prologue_epilogue_plan(const MachineFunction& fn) {
                         record_used_register(value.dest, used_allocatable);
                         record_used_register(value.lhs, used_allocatable);
                         record_used_register(value.rhs, used_allocatable);
+                    } else if constexpr (std::is_same_v<T, ShiftImm>) {
+                        record_used_register(value.dest, used_allocatable);
+                        record_used_register(value.lhs, used_allocatable);
                     } else if constexpr (std::is_same_v<T, FrameAddr>) {
                         record_used_register(value.dest, used_allocatable);
                     } else if constexpr (std::is_same_v<T, Load>) {

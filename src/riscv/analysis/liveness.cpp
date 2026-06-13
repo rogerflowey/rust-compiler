@@ -23,6 +23,8 @@ void for_each_use(const Instruction& inst, Fn&& fn) {
             } else if constexpr (std::is_same_v<T, Binary>) {
                 use(value.lhs);
                 use(value.rhs);
+            } else if constexpr (std::is_same_v<T, ShiftImm>) {
+                use(value.lhs);
             } else if constexpr (std::is_same_v<T, Compare>) {
                 use(value.lhs);
                 use(value.rhs);
@@ -83,6 +85,7 @@ std::optional<MachineValueId> def_vreg(const Instruction& inst) {
                 }
                 return std::nullopt;
             } else if constexpr (std::is_same_v<T, Li> || std::is_same_v<T, Binary> ||
+                                 std::is_same_v<T, ShiftImm> ||
                                  std::is_same_v<T, Compare> || std::is_same_v<T, FrameAddr> ||
                                  std::is_same_v<T, Load>) {
                 if (const auto* vr = std::get_if<VirtualRegister>(&value.dest)) {

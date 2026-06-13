@@ -393,6 +393,19 @@ AsmOpcode lower_binary_opcode(BinaryOp op) {
     return AsmOpcode::Add;
 }
 
+AsmOpcode lower_shift_imm_opcode(BinaryOp op) {
+    switch (op) {
+    case BinaryOp::Sll:
+        return AsmOpcode::Slli;
+    case BinaryOp::Srl:
+        return AsmOpcode::Srli;
+    case BinaryOp::Sra:
+        return AsmOpcode::Srai;
+    default:
+        return AsmOpcode::Slli;
+    }
+}
+
 void lower_compare(std::vector<AsmInst>& out,
                    PhysicalRegister dest,
                    CompareOp op,
@@ -537,6 +550,13 @@ void lower_instruction(std::vector<AsmInst>& out,
                     .rd = expect_phys_reg(ctx, value.dest, "binary destination"),
                     .rs1 = expect_phys_reg(ctx, value.lhs, "binary lhs"),
                     .rs2 = expect_phys_reg(ctx, value.rhs, "binary rhs"),
+                });
+            } else if constexpr (std::is_same_v<T, ShiftImm>) {
+                out.push_back(AsmIInst{
+                    .opcode = lower_shift_imm_opcode(value.op),
+                    .rd = expect_phys_reg(ctx, value.dest, "shift destination"),
+                    .rs1 = expect_phys_reg(ctx, value.lhs, "shift lhs"),
+                    .imm = static_cast<std::int32_t>(value.amount),
                 });
             } else if constexpr (std::is_same_v<T, Compare>) {
                 lower_compare(out,

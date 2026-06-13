@@ -237,6 +237,10 @@ void print_instruction(std::ostream& out, const Instruction& inst) {
                 out << "  " << register_name(value.dest) << " = " << binary_name(value.op)
                     << " " << register_name(value.lhs) << ", "
                     << register_name(value.rhs) << "\n";
+            } else if constexpr (std::is_same_v<T, ShiftImm>) {
+                out << "  " << register_name(value.dest) << " = " << binary_name(value.op)
+                    << " " << register_name(value.lhs) << ", "
+                    << static_cast<int>(value.amount) << "\n";
             } else if constexpr (std::is_same_v<T, Compare>) {
                 out << "  " << register_name(value.dest) << " = " << compare_name(value.op)
                     << " " << register_name(value.lhs) << ", "

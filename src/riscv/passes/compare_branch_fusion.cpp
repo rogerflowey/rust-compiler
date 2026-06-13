@@ -43,6 +43,8 @@ bool is_register_used_in_instruction(const Instruction& inst, const RegisterRef&
                 return value.dest == target;
             } else if constexpr (std::is_same_v<T, Binary>) {
                 return value.dest == target || value.lhs == target || value.rhs == target;
+            } else if constexpr (std::is_same_v<T, ShiftImm>) {
+                return value.dest == target || value.lhs == target;
             } else if constexpr (std::is_same_v<T, FrameAddr>) {
                 return value.dest == target;
             } else if constexpr (std::is_same_v<T, Load>) {

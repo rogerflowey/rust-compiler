@@ -163,6 +163,8 @@ void for_each_instruction_use(const Instruction& inst, Fn&& fn) {
             } else if constexpr (std::is_same_v<T, Binary>) {
                 for_each_register_ref(value.lhs, fn);
                 for_each_register_ref(value.rhs, fn);
+            } else if constexpr (std::is_same_v<T, ShiftImm>) {
+                for_each_register_ref(value.lhs, fn);
             } else if constexpr (std::is_same_v<T, Compare>) {
                 for_each_register_ref(value.lhs, fn);
                 for_each_register_ref(value.rhs, fn);
@@ -186,8 +188,9 @@ void for_each_instruction_def(const Instruction& inst, Fn&& fn) {
         [&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, Copy> || std::is_same_v<T, Li> ||
-                          std::is_same_v<T, Binary> || std::is_same_v<T, Compare> ||
-                          std::is_same_v<T, FrameAddr> || std::is_same_v<T, Load>) {
+                          std::is_same_v<T, Binary> || std::is_same_v<T, ShiftImm> ||
+                          std::is_same_v<T, Compare> || std::is_same_v<T, FrameAddr> ||
+                          std::is_same_v<T, Load>) {
                 for_each_register_ref(value.dest, fn);
             } else if constexpr (std::is_same_v<T, Call>) {
                 for (const auto reg : value.defs) {
@@ -1015,6 +1018,13 @@ std::optional<Instruction> rewrite_instruction(const Instruction& inst,
                     .op = value.op,
                     .lhs = rewrite_src(value.lhs, alloc, pre, scratch0_used, scratch1_used),
                     .rhs = rewrite_src(value.rhs, alloc, pre, scratch0_used, scratch1_used),
+                };
+            } else if constexpr (std::is_same_v<T, ShiftImm>) {
+                return ShiftImm{
+                    .dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
+                    .op = value.op,
+                    .lhs = rewrite_src(value.lhs, alloc, pre, scratch0_used, scratch1_used),
+                    .amount = value.amount,
                 };
             } else if constexpr (std::is_same_v<T, Compare>) {
                 return Compare{
