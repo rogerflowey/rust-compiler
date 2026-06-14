@@ -1,6 +1,8 @@
 # cmd/CMakeLists.txt
 # Build the semantic pipeline executable
 
+find_package(Threads REQUIRED)
+
 add_executable(semantic_pipeline semantic_pipeline.cpp)
 
 # Set include directories
@@ -74,6 +76,7 @@ target_link_libraries(submission_pipeline PRIVATE
     semantic
     ir3
     riscv
+    Threads::Threads
 )
 
 set_property(TARGET submission_pipeline PROPERTY CXX_STANDARD 23)

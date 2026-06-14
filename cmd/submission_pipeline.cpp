@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include <pthread.h>
 #include <sys/resource.h>
 
 #include "src/ast/ast.hpp"
@@ -92,11 +93,7 @@ void raise_stack_limit() {
     (void)setrlimit(RLIMIT_STACK, &limit);
 }
 
-} // namespace
-
-int main(int argc, char* argv[]) {
-    raise_stack_limit();
-
+int run_submission(int argc, char* argv[]) {
     if (argc != 1) {
         std::cerr << "Usage: " << argv[0] << " < source.rx\n";
         return 0;
@@ -223,4 +220,40 @@ int main(int argc, char* argv[]) {
         emit_codegen_fallback();
         return 0;
     }
+}
+
+struct SubmissionWorkerArgs {
+    int argc;
+    char** argv;
+    int exit_code = 0;
+};
+
+void* run_submission_worker(void* raw_args) {
+    auto* args = static_cast<SubmissionWorkerArgs*>(raw_args);
+    args->exit_code = run_submission(args->argc, args->argv);
+    return nullptr;
+}
+
+} // namespace
+
+int main(int argc, char* argv[]) {
+    raise_stack_limit();
+
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) == 0) {
+        constexpr std::size_t kWorkerStackBytes = 128ull * 1024ull * 1024ull;
+        if (pthread_attr_setstacksize(&attr, kWorkerStackBytes) == 0) {
+            SubmissionWorkerArgs args{.argc = argc, .argv = argv};
+            pthread_t worker{};
+            if (pthread_create(&worker, &attr, run_submission_worker, &args) == 0) {
+                (void)pthread_attr_destroy(&attr);
+                if (pthread_join(worker, nullptr) == 0) {
+                    return args.exit_code;
+                }
+            }
+        }
+        (void)pthread_attr_destroy(&attr);
+    }
+
+    return run_submission(argc, argv);
 }
