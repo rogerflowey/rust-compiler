@@ -72,7 +72,7 @@ void print_semantic_error(const SemanticError& error,
 int main(int argc, char* argv[]) {
     if (argc != 1) {
         std::cerr << "Usage: " << argv[0] << " < source.rx\n";
-        return 1;
+        return 0;
     }
 
     span::SourceManager sources;
@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
         if (!std::holds_alternative<std::vector<ast::ItemPtr>>(result)) {
             emit_diagnostics();
             print_parse_error(std::get<parsec::ParseError>(result), tokens, sources);
-            return 1;
+            return 0;
         }
 
         AstToHirConverter converter;
@@ -115,7 +115,7 @@ int main(int argc, char* argv[]) {
         if (!hir_program) {
             emit_diagnostics();
             std::cerr << "Error: HIR conversion failed\n";
-            return 1;
+            return 0;
         }
 
         semantic::ImplTable impl_table;
@@ -159,7 +159,7 @@ int main(int argc, char* argv[]) {
     } catch (const LexerError& error) {
         emit_diagnostics();
         std::cerr << "Error: " << error.what() << "\n";
-        return 1;
+        return 0;
     } catch (const SemanticError& error) {
         emit_diagnostics();
         print_semantic_error(error, sources);
@@ -167,18 +167,18 @@ int main(int argc, char* argv[]) {
     } catch (const ir3::LoweringError& error) {
         emit_diagnostics();
         std::cerr << "IR3 lowering error: " << error.what() << "\n";
-        return 1;
+        return 0;
     } catch (const riscv::LoweringError& error) {
         emit_diagnostics();
         std::cerr << "Machine IR lowering error: " << error.what() << "\n";
-        return 1;
+        return 0;
     } catch (const riscv::AsmLoweringError& error) {
         emit_diagnostics();
         std::cerr << "Asm lowering error: " << error.what() << "\n";
-        return 1;
+        return 0;
     } catch (const std::exception& error) {
         emit_diagnostics();
         std::cerr << "Error: " << error.what() << "\n";
-        return 1;
+        return 0;
     }
 }
