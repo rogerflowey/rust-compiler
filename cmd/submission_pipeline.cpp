@@ -76,6 +76,7 @@ int main(int argc, char* argv[]) {
     }
 
     span::SourceManager sources;
+    bool in_semantic_phase = false;
     std::ostringstream diagnostics;
     auto* original_cerr = std::cerr.rdbuf(diagnostics.rdbuf());
     bool cerr_restored = false;
@@ -118,6 +119,8 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
+        in_semantic_phase = true;
+
         semantic::ImplTable impl_table;
         semantic::inject_predefined_methods(impl_table);
         semantic::NameResolver name_resolver(impl_table);
@@ -135,6 +138,8 @@ int main(int argc, char* argv[]) {
 
         semantic::ExitCheckVisitor exit_checker;
         exit_checker.check_program(*hir_program);
+
+        in_semantic_phase = false;
 
         auto ir3_module = ir3::lower_program(*hir_program);
         ir3::optimize_module(ir3_module);
@@ -179,6 +184,6 @@ int main(int argc, char* argv[]) {
     } catch (const std::exception& error) {
         emit_diagnostics();
         std::cerr << "Error: " << error.what() << "\n";
-        return 0;
+        return in_semantic_phase ? 1 : 0;
     }
 }
