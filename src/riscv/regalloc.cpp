@@ -1105,6 +1105,18 @@ RegisterRef rewrite_register_ref(const RegisterRef& reg,
     return rewrite_src(reg, alloc, spill_loads, scratch0_used, scratch1_used);
 }
 
+std::pair<RegisterRef, RegisterRef> rewrite_register_ref_pair(
+    const RegisterRef& lhs,
+    const RegisterRef& rhs,
+    const Allocation& alloc,
+    std::vector<Instruction>& spill_loads) {
+    bool scratch0_used = false;
+    bool scratch1_used = false;
+    const RegisterRef new_lhs = rewrite_src(lhs, alloc, spill_loads, scratch0_used, scratch1_used);
+    const RegisterRef new_rhs = rewrite_src(rhs, alloc, spill_loads, scratch0_used, scratch1_used);
+    return {new_lhs, new_rhs};
+}
+
 RegisterRef rewrite_phi_ref(const RegisterRef& reg, const Allocation& alloc) {
     return std::visit(
         [&](const auto& value) -> RegisterRef {
@@ -1162,8 +1174,8 @@ void rewrite_block(MachineBlock& block, const Allocation& alloc) {
                     };
                 } else if constexpr (std::is_same_v<T, BranchCond>) {
                     std::vector<Instruction> loads;
-                    const RegisterRef lhs = rewrite_register_ref(term.lhs, alloc, loads);
-                    const RegisterRef rhs = rewrite_register_ref(term.rhs, alloc, loads);
+                    const auto [lhs, rhs] =
+                        rewrite_register_ref_pair(term.lhs, term.rhs, alloc, loads);
                     block.instructions.insert(block.instructions.end(),
                                                std::make_move_iterator(loads.begin()),
                                                std::make_move_iterator(loads.end()));
