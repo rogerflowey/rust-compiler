@@ -34,6 +34,7 @@ constexpr std::array<PhysicalRegister, 19> kAllocatable = {
 
 constexpr PhysicalRegister kScratch0 = PhysicalRegister::T0;
 constexpr PhysicalRegister kScratch1 = PhysicalRegister::T1;
+constexpr std::size_t kFastSpillVregThreshold = 1200;
 
 struct RematInfo {
     enum class Kind {
@@ -356,6 +357,34 @@ std::unordered_map<MachineValueId, RematInfo> build_remat_map(const MachineFunct
         }
     }
     return map;
+}
+
+Allocation spill_all_virtual_registers(MachineFunction& fn,
+                                       const NodeTable& table,
+                                       const std::unordered_map<MachineValueId, RematInfo>& remat_map) {
+    Allocation alloc;
+    for (const auto& [vreg, _] : table.vreg_nodes) {
+        if (const auto rit = remat_map.find(vreg); rit != remat_map.end()) {
+            alloc.rematerialized.emplace(vreg, rit->second);
+            continue;
+        }
+
+        const FrameId frame = fn.frame_objects.size();
+        fn.frame_objects.push_back(FrameObject{
+            .id = frame,
+            .kind = FrameObjectKind::Spill,
+            .size = 8,
+            .align = 8,
+            .host_type = semantic::invalid_type_id,
+            .spill_class = RegisterClass::Gpr64,
+            .source_slot = std::nullopt,
+            .debug_name = "",
+            .saved_reg = std::nullopt,
+            .materialized_offset = std::nullopt,
+        });
+        alloc.spilled.emplace(vreg, frame);
+    }
+    return alloc;
 }
 
 void bump_weight(NodeTable& table, const RegisterRef& reg) {
@@ -1253,9 +1282,15 @@ void fixup_remat_phi_operands(MachineFunction& fn, const Allocation& alloc) {
 } // namespace
 
 AllocationStats allocate_registers(MachineFunction& fn) {
-    const auto graph = build_graph(fn);
+    const auto table = collect_nodes(fn);
     const auto remat_map = build_remat_map(fn);
-    Allocation alloc = color_graph(fn, graph, remat_map);
+    Allocation alloc;
+    if (table.vreg_nodes.size() > kFastSpillVregThreshold) {
+        alloc = spill_all_virtual_registers(fn, table, remat_map);
+    } else {
+        auto graph = build_graph(fn);
+        alloc = color_graph(fn, graph, remat_map);
+    }
 
     fixup_remat_phi_operands(fn, alloc);
 
