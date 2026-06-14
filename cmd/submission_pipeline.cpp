@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -6,6 +7,8 @@
 #include <string_view>
 #include <unordered_set>
 #include <vector>
+
+#include <sys/resource.h>
 
 #include "src/ast/ast.hpp"
 #include "src/ir3/lower.hpp"
@@ -77,9 +80,23 @@ void emit_empty_success_asm() {
     std::cerr << ".text\n";
 }
 
+void raise_stack_limit() {
+    constexpr rlim_t kDesiredStackBytes = 64ull * 1024ull * 1024ull;
+    rlimit limit{};
+    if (getrlimit(RLIMIT_STACK, &limit) != 0 || limit.rlim_cur >= kDesiredStackBytes) {
+        return;
+    }
+    const rlim_t hard =
+        limit.rlim_max == RLIM_INFINITY ? kDesiredStackBytes : limit.rlim_max;
+    limit.rlim_cur = std::min(kDesiredStackBytes, hard);
+    (void)setrlimit(RLIMIT_STACK, &limit);
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
+    raise_stack_limit();
+
     if (argc != 1) {
         std::cerr << "Usage: " << argv[0] << " < source.rx\n";
         return 0;
