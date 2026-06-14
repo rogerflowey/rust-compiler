@@ -18,4 +18,5 @@ regression_failures.log
 .kilocode/
 RCompiler-Testcases/
 external/
-scripts/
+scripts/*
+!scripts/run_ir1_qemu_sweep.sh

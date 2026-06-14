@@ -1,5 +1,5 @@
-# RV32IM Machine IR Reference
-Machine IR is the machine-facing IR between IR3 and final RV32IM assembly
+# RV64IM Machine IR Reference
+Machine IR is the machine-facing IR between IR3 and final RV64IM assembly
 lowering. This document is the central reference for its current shape in this
 checkout.
 
@@ -17,7 +17,7 @@ Machine IR keeps CFG structure and a small SSA-like model, but replaces IR3
 places with explicit backend-facing addresses.
 
 Its defining choices are:
-- one virtual register class: `gpr32`
+- one virtual register class: `gpr64`
 - explicit physical registers at ABI boundaries
 - explicit frame objects instead of IR3 slots/places
 - explicit loads, stores, compares, and calls
@@ -54,9 +54,9 @@ A block contains:
 
 ### Registers
 Machine IR uses three register reference forms:
-- `VirtualRegister(id, gpr32)`
+- `VirtualRegister(id, gpr64)`
 - `PhysicalRegister`
-- `SpillRef(frame, gpr32)`
+- `SpillRef(frame, gpr64)`
 
 `SpillRef` appears only after register allocation rewrites virtual registers
 that were spilled.
@@ -64,12 +64,14 @@ that were spilled.
 ## Register Policy
 ### Register Class
 There is exactly one virtual register class:
-- `gpr32`
+- `gpr64`
 
-Both IR3 `i32` and IR3 `ptr` values lower into `gpr32`.
+Both IR3 `i32` and IR3 `ptr` values lower into `gpr64`. Machine operations
+carry explicit `word` or `xlen` width tags so integer arithmetic can use RV64
+word instructions while pointer arithmetic remains full-width.
 
 ### Physical Registers
-The IR knows these RV32IM registers:
+The IR knows these RV64IM registers:
 - fixed: `zero`, `ra`, `sp`, `gp`, `tp`, `s0`
 - reserved scratch: `t0`..`t6`
 - allocatable pool: `s1`..`s11`
@@ -134,11 +136,11 @@ Expected pass-state:
 Machine IR instructions are:
 - `copy dest, src`
 - `li dest, imm32`
-- `binary dest, op, lhs, rhs`
+- `binary.width dest, op, lhs, rhs`
 - `compare dest, op, lhs, rhs`
 - `frame_addr dest, frame, offset`
-- `load dest, address`
-- `store address, src`
+- `load.width dest, address`
+- `store.width address, src`
 - `call @symbol uses(...) defs(...)`
 
 ### Copy
@@ -164,7 +166,7 @@ Supported compare ops:
 - `gt.s`, `gt.u`
 - `ge.s`, `ge.u`
 
-The result is a `gpr32` boolean conventionally interpreted as `0` or `1`.
+The result is a `gpr64` boolean conventionally interpreted as `0` or `1`.
 
 ### Frame Address Materialization
 `frame_addr` materializes the address of a frame object plus constant offset
@@ -174,9 +176,10 @@ into a register.
 - `load` reads from a `FrameAddress` or `RegisterAddress`
 - `store` writes to a `FrameAddress` or `RegisterAddress`
 
-Machine IR memory operations are untyped at the instruction level. Width is
-currently implied by the RV32IM backend contract and the origin of the lowered
-operation.
+Machine IR memory operations carry an explicit width:
+- `word`: 32-bit integer loads/stores, emitted as `lw`/`sw`
+- `xlen`: pointer, ABI stack argument, saved-register, and spill loads/stores,
+  emitted as `ld`/`sd`
 
 ### Calls
 `call @symbol uses(...) defs(...)` represents a direct call.
@@ -187,7 +190,7 @@ operation.
 - argument setup/result extraction copies and outgoing stack stores remain
   explicit surrounding Machine IR instructions
 
-For the current RV32 backend, lowering emits:
+For the current RV64 backend, lowering emits:
 - `uses(a0..aN)` for register-passed arguments
 - `defs(a0..a7)` for the allocatable caller-clobbered pool
 
@@ -207,12 +210,12 @@ The pretty-printer uses this form:
 mfn @foo
 frame:
   fi0: slot i32 size 4 align 4 x
-  fi1: spill gpr32 size 4 align 4
+  fi1: spill gpr64 size 8 align 8
 
 bb0:
   v0 = li 1
   v1 = frame_addr fi0
-  store [fi0 + 0], v0
+  store.word [fi0 + 0], v0
   brnz v0, bb1, bb2
 ```
 Naming conventions:
@@ -259,7 +262,7 @@ after the relevant passes run.
 Well-formed Machine IR in this checkout follows these rules:
 - block and edge ids are valid
 - blocks are terminated
-- only `gpr32` virtual registers exist
+- only `gpr64` virtual registers exist
 - scratch registers `t0` and `t1` remain reserved for late passes
 - `SpillRef` does not appear before register allocation
 - `VirtualRegister` does not survive phi elimination
@@ -268,11 +271,11 @@ Well-formed Machine IR in this checkout follows these rules:
 
 ## Boundary From IR3
 The IR3 -> Machine IR lowering performs these structural changes:
-- IR3 `i32`/`ptr` SSA values -> `gpr32` machine values
+- IR3 `i32`/`ptr` SSA values -> `gpr64` machine values
 - IR3 places -> explicit frame/register addresses
 - IR3 slots -> frame objects
 - IR3 calls -> explicit ABI shuffle code plus `call @symbol uses(...) defs(...)`
 - IR3 aggregate movement -> explicit memory traffic or helper calls
 
 Machine IR therefore keeps the CFG shape of IR3, but is already committed to
-the RV32IM register file, stack model, and calling convention.
+the RV64IM register file, stack model, and calling convention.

@@ -59,8 +59,8 @@ std::unordered_map<PhysicalRegister, FrameId> append_missing_save_slots(
         fn.frame_objects.push_back(FrameObject{
             .id = id,
             .kind = FrameObjectKind::CalleeSave,
-            .size = 4,
-            .align = 4,
+            .size = 8,
+            .align = 8,
             .host_type = semantic::invalid_type_id,
             .spill_class = std::nullopt,
             .source_slot = std::nullopt,
@@ -82,6 +82,7 @@ std::vector<Instruction> save_instructions(
     for (const auto reg : saved_regs) {
         instructions.push_back(Store{
             .address = FrameAddress{.frame = save_slots.at(reg), .offset = 0},
+            .width = MachineWidth::XLen,
             .src = reg,
         });
     }
@@ -96,6 +97,7 @@ std::vector<Instruction> restore_instructions(
     for (auto it = saved_regs.rbegin(); it != saved_regs.rend(); ++it) {
         instructions.push_back(Load{
             .dest = *it,
+            .width = MachineWidth::XLen,
             .address = FrameAddress{.frame = save_slots.at(*it), .offset = 0},
         });
     }

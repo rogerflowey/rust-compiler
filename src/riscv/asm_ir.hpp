@@ -13,29 +13,45 @@ namespace riscv {
 enum class AsmOpcode {
     Add,
     Addi,
+    Addw,
+    Addiw,
     Sub,
+    Subw,
     And,
     Or,
     Xor,
     Xori,
     Sll,
     Slli,
+    Sllw,
+    Slliw,
     Srl,
     Srli,
+    Srlw,
+    Srliw,
     Sra,
     Srai,
+    Sraw,
+    Sraiw,
     Slt,
     Sltu,
     Sltiu,
     Mul,
+    Mulw,
     Div,
     Divu,
+    Divw,
+    Divuw,
     Rem,
     Remu,
+    Remw,
+    Remuw,
     Lui,
     Auipc,
     Lw,
+    Ld,
     Sw,
+    Sd,
     Beq,
     Bne,
     Blt,
@@ -77,12 +93,14 @@ struct AsmUInst {
 };
 
 struct AsmLoadInst {
+    MachineWidth width = MachineWidth::Word;
     PhysicalRegister rd = PhysicalRegister::Zero;
     PhysicalRegister base = PhysicalRegister::Zero;
     std::int32_t offset = 0;
 };
 
 struct AsmStoreInst {
+    MachineWidth width = MachineWidth::Word;
     PhysicalRegister rs = PhysicalRegister::Zero;
     PhysicalRegister base = PhysicalRegister::Zero;
     std::int32_t offset = 0;

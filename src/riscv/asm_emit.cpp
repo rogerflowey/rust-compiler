@@ -69,7 +69,7 @@ void emit_li(std::vector<AsmInst>& out, PhysicalRegister dest, std::int32_t valu
     });
     if (lo != 0) {
         out.push_back(AsmIInst{
-            .opcode = AsmOpcode::Addi,
+            .opcode = AsmOpcode::Addiw,
             .rd = dest,
             .rs1 = dest,
             .imm = lo,

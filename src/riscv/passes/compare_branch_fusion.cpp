@@ -62,7 +62,7 @@ bool is_register_used_in_instruction(const Instruction& inst, const RegisterRef&
 bool is_compare_dest_dead_outside_use(const MachineFunction& fn,
                                       MachineValueId dest_id,
                                       BlockId source_block_id) {
-    VirtualRegister target{dest_id, RegisterClass::Gpr32};
+    VirtualRegister target{dest_id, RegisterClass::Gpr64};
 
     for (const auto& block : fn.blocks) {
         for (const auto& inst : block.instructions) {

@@ -83,6 +83,7 @@ void reduce_block(MachineBlock& block) {
                         if (const auto amount = shift_amount(it->second)) {
                             inst = ShiftImm{.dest = binary->dest,
                                             .op = binary->op,
+                                            .width = binary->width,
                                             .lhs = binary->lhs,
                                             .amount = *amount};
                         }
@@ -105,6 +106,7 @@ void reduce_block(MachineBlock& block) {
                     }
                     inst = ShiftImm{.dest = binary->dest,
                                     .op = BinaryOp::Sll,
+                                    .width = binary->width,
                                     .lhs = value,
                                     .amount = *amount};
                     return true;

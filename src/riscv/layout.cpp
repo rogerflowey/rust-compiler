@@ -10,10 +10,10 @@ namespace {
 
 semantic::TypeId struct_field_type(const hir::StructDef& def, std::size_t index) {
     if (index >= def.fields.size()) {
-        throw LayoutError("struct field index out of range during RV32 layout computation");
+        throw LayoutError("struct field index out of range during RV64 layout computation");
     }
     if (!def.fields[index].type) {
-        throw LayoutError("struct field type is unresolved during RV32 layout computation");
+        throw LayoutError("struct field type is unresolved during RV64 layout computation");
     }
     return *def.fields[index].type;
 }
@@ -29,7 +29,7 @@ std::uint32_t align_to(std::uint32_t value, std::uint32_t align) {
 
 Layout layout_of(semantic::TypeId type) {
     if (!type) {
-        throw LayoutError("invalid host type during RV32 layout computation");
+        throw LayoutError("invalid host type during RV64 layout computation");
     }
 
     return std::visit(
@@ -38,7 +38,7 @@ Layout layout_of(semantic::TypeId type) {
             if constexpr (std::is_same_v<T, semantic::PrimitiveKind>) {
                 switch (value) {
                 case semantic::PrimitiveKind::STRING:
-                    return Layout{.size = 8, .align = 4};
+                    return Layout{.size = 16, .align = 8};
                 case semantic::PrimitiveKind::I32:
                 case semantic::PrimitiveKind::U32:
                 case semantic::PrimitiveKind::ISIZE:
@@ -67,7 +67,7 @@ Layout layout_of(semantic::TypeId type) {
             } else if constexpr (std::is_same_v<T, semantic::EnumType>) {
                 return Layout{.size = 4, .align = 4};
             } else if constexpr (std::is_same_v<T, semantic::ReferenceType>) {
-                return Layout{.size = 4, .align = 4};
+                return Layout{.size = 8, .align = 8};
             } else if constexpr (std::is_same_v<T, semantic::ArrayType>) {
                 const auto element = layout_of(value.element_type);
                 const auto stride = align_to(element.size, element.align);
@@ -79,7 +79,7 @@ Layout layout_of(semantic::TypeId type) {
                                  std::is_same_v<T, semantic::NeverType>) {
                 return Layout{.size = 0, .align = 1};
             } else if constexpr (std::is_same_v<T, semantic::UnderscoreType>) {
-                throw LayoutError("underscore type reached RV32 layout computation");
+                throw LayoutError("underscore type reached RV64 layout computation");
             } else {
                 return Layout{};
             }

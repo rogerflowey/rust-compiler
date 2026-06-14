@@ -61,6 +61,16 @@ std::string physical_register_list(const std::vector<PhysicalRegister>& regs) {
     return out.str();
 }
 
+const char* width_name(MachineWidth width) {
+    switch (width) {
+    case MachineWidth::Word:
+        return "word";
+    case MachineWidth::XLen:
+        return "xlen";
+    }
+    return "<width>";
+}
+
 std::string type_name(semantic::TypeId type) {
     if (!type) {
         return "<invalid>";
@@ -235,11 +245,13 @@ void print_instruction(std::ostream& out, const Instruction& inst) {
                 out << "  " << register_name(value.dest) << " = li " << value.value << "\n";
             } else if constexpr (std::is_same_v<T, Binary>) {
                 out << "  " << register_name(value.dest) << " = " << binary_name(value.op)
-                    << " " << register_name(value.lhs) << ", "
+                    << "." << width_name(value.width) << " "
+                    << register_name(value.lhs) << ", "
                     << register_name(value.rhs) << "\n";
             } else if constexpr (std::is_same_v<T, ShiftImm>) {
                 out << "  " << register_name(value.dest) << " = " << binary_name(value.op)
-                    << " " << register_name(value.lhs) << ", "
+                    << "." << width_name(value.width) << " "
+                    << register_name(value.lhs) << ", "
                     << static_cast<int>(value.amount) << "\n";
             } else if constexpr (std::is_same_v<T, Compare>) {
                 out << "  " << register_name(value.dest) << " = " << compare_name(value.op)
@@ -254,10 +266,12 @@ void print_instruction(std::ostream& out, const Instruction& inst) {
                 }
                 out << "\n";
             } else if constexpr (std::is_same_v<T, Load>) {
-                out << "  " << register_name(value.dest) << " = load "
+                out << "  " << register_name(value.dest) << " = load."
+                    << width_name(value.width) << " "
                     << address_name(value.address) << "\n";
             } else if constexpr (std::is_same_v<T, Store>) {
-                out << "  store " << address_name(value.address) << ", "
+                out << "  store." << width_name(value.width) << " "
+                    << address_name(value.address) << ", "
                     << register_name(value.src) << "\n";
             } else if constexpr (std::is_same_v<T, Call>) {
                 out << "  call @" << value.callee;

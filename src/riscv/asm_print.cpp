@@ -54,10 +54,12 @@ void print_instruction(std::ostream& out, const AsmInst& inst) {
                     << physical_register_name(value.rd) << ", "
                     << u_immediate_text(value.imm) << "\n";
             } else if constexpr (std::is_same_v<T, AsmLoadInst>) {
-                out << "  lw " << physical_register_name(value.rd) << ", " << value.offset
+                out << "  " << (value.width == MachineWidth::XLen ? "ld" : "lw") << " "
+                    << physical_register_name(value.rd) << ", " << value.offset
                     << "(" << physical_register_name(value.base) << ")\n";
             } else if constexpr (std::is_same_v<T, AsmStoreInst>) {
-                out << "  sw " << physical_register_name(value.rs) << ", " << value.offset
+                out << "  " << (value.width == MachineWidth::XLen ? "sd" : "sw") << " "
+                    << physical_register_name(value.rs) << ", " << value.offset
                     << "(" << physical_register_name(value.base) << ")\n";
             } else if constexpr (std::is_same_v<T, AsmBranchInst>) {
                 out << "  " << asm_opcode_name(value.opcode) << " "

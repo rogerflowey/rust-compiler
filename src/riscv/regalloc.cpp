@@ -55,7 +55,7 @@ struct Allocation {
 struct OriginalNode {
     std::optional<MachineValueId> vreg;
     std::optional<PhysicalRegister> precolor;
-    RegisterClass reg_class = RegisterClass::Gpr32;
+    RegisterClass reg_class = RegisterClass::Gpr64;
     std::size_t weight = 0;
 };
 
@@ -285,7 +285,7 @@ void ensure_node(NodeTable& table, const RegisterRef& reg) {
                 table.nodes.push_back(OriginalNode{
                     .vreg = std::nullopt,
                     .precolor = value,
-                    .reg_class = RegisterClass::Gpr32,
+                    .reg_class = RegisterClass::Gpr64,
                     .weight = std::numeric_limits<std::size_t>::max() / 4,
                 });
                 table.phys_nodes.emplace(value, id);
@@ -858,10 +858,10 @@ Allocation color_graph(MachineFunction& fn,
                     fn.frame_objects.push_back(FrameObject{
                         .id = frame,
                         .kind = FrameObjectKind::Spill,
-                        .size = 4,
-                        .align = 4,
+                        .size = 8,
+                        .align = 8,
                         .host_type = semantic::invalid_type_id,
-                        .spill_class = RegisterClass::Gpr32,
+                        .spill_class = RegisterClass::Gpr64,
                         .source_slot = std::nullopt,
                         .debug_name = "",
                         .saved_reg = std::nullopt,
@@ -947,6 +947,7 @@ RegisterRef rewrite_src(const RegisterRef& reg,
 
     pre.push_back(Load{
         .dest = scratch,
+        .width = MachineWidth::XLen,
         .address = FrameAddress{.frame = alloc.spilled.at(vreg.id), .offset = 0},
     });
     return scratch;
@@ -963,6 +964,7 @@ RegisterRef rewrite_dest(MachineValueId id,
     }
     post.push_back(Store{
         .address = FrameAddress{.frame = alloc.spilled.at(id), .offset = 0},
+        .width = MachineWidth::XLen,
         .src = kScratch0,
     });
     return kScratch0;
@@ -1016,6 +1018,7 @@ std::optional<Instruction> rewrite_instruction(const Instruction& inst,
                 return Binary{
                     .dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
                     .op = value.op,
+                    .width = value.width,
                     .lhs = rewrite_src(value.lhs, alloc, pre, scratch0_used, scratch1_used),
                     .rhs = rewrite_src(value.rhs, alloc, pre, scratch0_used, scratch1_used),
                 };
@@ -1023,6 +1026,7 @@ std::optional<Instruction> rewrite_instruction(const Instruction& inst,
                 return ShiftImm{
                     .dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
                     .op = value.op,
+                    .width = value.width,
                     .lhs = rewrite_src(value.lhs, alloc, pre, scratch0_used, scratch1_used),
                     .amount = value.amount,
                 };
@@ -1046,6 +1050,7 @@ std::optional<Instruction> rewrite_instruction(const Instruction& inst,
             } else if constexpr (std::is_same_v<T, Load>) {
                 return Load{
                     .dest = rewrite_dest(std::get<VirtualRegister>(value.dest).id, alloc, post),
+                    .width = value.width,
                     .address =
                         rewrite_address(value.address, alloc, pre, scratch0_used, scratch1_used),
                 };
@@ -1053,6 +1058,7 @@ std::optional<Instruction> rewrite_instruction(const Instruction& inst,
                 return Store{
                     .address =
                         rewrite_address(value.address, alloc, pre, scratch0_used, scratch1_used),
+                    .width = value.width,
                     .src = rewrite_src(value.src, alloc, pre, scratch0_used, scratch1_used),
                 };
             } else {

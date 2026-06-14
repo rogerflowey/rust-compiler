@@ -4,8 +4,8 @@ namespace riscv {
 
 const char* register_class_name(RegisterClass reg_class) {
     switch (reg_class) {
-    case RegisterClass::Gpr32:
-        return "gpr32";
+    case RegisterClass::Gpr64:
+        return "gpr64";
     }
     return "<reg-class>";
 }

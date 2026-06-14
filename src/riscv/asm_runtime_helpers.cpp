@@ -25,11 +25,7 @@ AsmFunction make_runtime_exit_function() {
         .label = runtime_label(fn.symbol, "entry"),
         .instructions = {},
     };
-    entry.instructions.push_back(AsmJalrInst{
-        .rd = PhysicalRegister::Zero,
-        .base = PhysicalRegister::Zero,
-        .offset = std::int32_t{4},
-    });
+    emit_symbol_call(entry.instructions, "exit");
     fn.blocks.push_back(std::move(entry));
     return fn;
 }
@@ -56,7 +52,7 @@ AsmFunction make_runtime_memmove_function() {
 AsmFunction make_runtime_print_int_function() {
     AsmFunction fn{
         .symbol = "__rcomp_printInt",
-        .frame_size = 64,
+        .frame_size = 80,
         .blocks = {},
     };
 
@@ -68,27 +64,31 @@ AsmFunction make_runtime_print_int_function() {
         .opcode = AsmOpcode::Addi,
         .rd = PhysicalRegister::Sp,
         .rs1 = PhysicalRegister::Sp,
-        .imm = std::int32_t{-64},
+        .imm = std::int32_t{-80},
     });
     entry.instructions.push_back(AsmStoreInst{
+        .width = MachineWidth::XLen,
         .rs = PhysicalRegister::Ra,
         .base = PhysicalRegister::Sp,
         .offset = 0,
     });
     entry.instructions.push_back(AsmStoreInst{
+        .width = MachineWidth::XLen,
         .rs = PhysicalRegister::S0,
-        .base = PhysicalRegister::Sp,
-        .offset = 4,
-    });
-    entry.instructions.push_back(AsmStoreInst{
-        .rs = PhysicalRegister::S1,
         .base = PhysicalRegister::Sp,
         .offset = 8,
     });
     entry.instructions.push_back(AsmStoreInst{
+        .width = MachineWidth::XLen,
+        .rs = PhysicalRegister::S1,
+        .base = PhysicalRegister::Sp,
+        .offset = 16,
+    });
+    entry.instructions.push_back(AsmStoreInst{
+        .width = MachineWidth::XLen,
         .rs = PhysicalRegister::S2,
         .base = PhysicalRegister::Sp,
-        .offset = 12,
+        .offset = 24,
     });
     entry.instructions.push_back(AsmIInst{
         .opcode = AsmOpcode::Addi,
@@ -100,7 +100,7 @@ AsmFunction make_runtime_print_int_function() {
         .opcode = AsmOpcode::Addi,
         .rd = PhysicalRegister::S1,
         .rs1 = PhysicalRegister::Sp,
-        .imm = std::int32_t{16},
+        .imm = std::int32_t{32},
     });
     entry.instructions.push_back(AsmIInst{
         .opcode = AsmOpcode::Addi,
@@ -177,13 +177,13 @@ AsmFunction make_runtime_print_int_function() {
         .imm = std::int32_t{10},
     });
     loop.instructions.push_back(AsmRInst{
-        .opcode = AsmOpcode::Div,
+        .opcode = AsmOpcode::Divw,
         .rd = PhysicalRegister::T1,
         .rs1 = PhysicalRegister::S0,
         .rs2 = PhysicalRegister::T0,
     });
     loop.instructions.push_back(AsmRInst{
-        .opcode = AsmOpcode::Rem,
+        .opcode = AsmOpcode::Remw,
         .rd = PhysicalRegister::T2,
         .rs1 = PhysicalRegister::S0,
         .rs2 = PhysicalRegister::T0,
@@ -211,7 +211,7 @@ AsmFunction make_runtime_print_int_function() {
         .instructions = {},
     };
     negate_digit.instructions.push_back(AsmRInst{
-        .opcode = AsmOpcode::Sub,
+        .opcode = AsmOpcode::Subw,
         .rd = PhysicalRegister::T2,
         .rs1 = PhysicalRegister::Zero,
         .rs2 = PhysicalRegister::T2,
@@ -306,21 +306,25 @@ AsmFunction make_runtime_print_int_function() {
         .instructions = {},
     };
     done.instructions.push_back(AsmLoadInst{
+        .width = MachineWidth::XLen,
         .rd = PhysicalRegister::S2,
         .base = PhysicalRegister::Sp,
-        .offset = 12,
+        .offset = 24,
     });
     done.instructions.push_back(AsmLoadInst{
+        .width = MachineWidth::XLen,
         .rd = PhysicalRegister::S1,
+        .base = PhysicalRegister::Sp,
+        .offset = 16,
+    });
+    done.instructions.push_back(AsmLoadInst{
+        .width = MachineWidth::XLen,
+        .rd = PhysicalRegister::S0,
         .base = PhysicalRegister::Sp,
         .offset = 8,
     });
     done.instructions.push_back(AsmLoadInst{
-        .rd = PhysicalRegister::S0,
-        .base = PhysicalRegister::Sp,
-        .offset = 4,
-    });
-    done.instructions.push_back(AsmLoadInst{
+        .width = MachineWidth::XLen,
         .rd = PhysicalRegister::Ra,
         .base = PhysicalRegister::Sp,
         .offset = 0,
@@ -329,7 +333,7 @@ AsmFunction make_runtime_print_int_function() {
         .opcode = AsmOpcode::Addi,
         .rd = PhysicalRegister::Sp,
         .rs1 = PhysicalRegister::Sp,
-        .imm = std::int32_t{64},
+        .imm = std::int32_t{80},
     });
     done.instructions.push_back(AsmJalrInst{
         .rd = PhysicalRegister::Zero,
@@ -359,6 +363,7 @@ AsmFunction make_runtime_println_int_function() {
         .imm = std::int32_t{-16},
     });
     entry.instructions.push_back(AsmStoreInst{
+        .width = MachineWidth::XLen,
         .rs = PhysicalRegister::Ra,
         .base = PhysicalRegister::Sp,
         .offset = 0,
@@ -372,6 +377,7 @@ AsmFunction make_runtime_println_int_function() {
     });
     emit_symbol_call(entry.instructions, "putchar");
     entry.instructions.push_back(AsmLoadInst{
+        .width = MachineWidth::XLen,
         .rd = PhysicalRegister::Ra,
         .base = PhysicalRegister::Sp,
         .offset = 0,
@@ -394,7 +400,7 @@ AsmFunction make_runtime_println_int_function() {
 AsmFunction make_runtime_get_int_function() {
     AsmFunction fn{
         .symbol = "__rcomp_getInt",
-        .frame_size = 16,
+        .frame_size = 32,
         .blocks = {},
     };
 
@@ -406,22 +412,25 @@ AsmFunction make_runtime_get_int_function() {
         .opcode = AsmOpcode::Addi,
         .rd = PhysicalRegister::Sp,
         .rs1 = PhysicalRegister::Sp,
-        .imm = std::int32_t{-16},
+        .imm = std::int32_t{-32},
     });
     entry.instructions.push_back(AsmStoreInst{
+        .width = MachineWidth::XLen,
         .rs = PhysicalRegister::Ra,
         .base = PhysicalRegister::Sp,
         .offset = 0,
     });
     entry.instructions.push_back(AsmStoreInst{
+        .width = MachineWidth::XLen,
         .rs = PhysicalRegister::S0,
         .base = PhysicalRegister::Sp,
-        .offset = 4,
+        .offset = 8,
     });
     entry.instructions.push_back(AsmStoreInst{
+        .width = MachineWidth::XLen,
         .rs = PhysicalRegister::S1,
         .base = PhysicalRegister::Sp,
-        .offset = 8,
+        .offset = 16,
     });
     entry.instructions.push_back(AsmIInst{
         .opcode = AsmOpcode::Addi,
@@ -577,13 +586,13 @@ AsmFunction make_runtime_get_int_function() {
         .imm = std::int32_t{10},
     });
     read_loop.instructions.push_back(AsmRInst{
-        .opcode = AsmOpcode::Mul,
+        .opcode = AsmOpcode::Mulw,
         .rd = PhysicalRegister::S0,
         .rs1 = PhysicalRegister::S0,
         .rs2 = PhysicalRegister::T3,
     });
     read_loop.instructions.push_back(AsmRInst{
-        .opcode = AsmOpcode::Add,
+        .opcode = AsmOpcode::Addw,
         .rd = PhysicalRegister::S0,
         .rs1 = PhysicalRegister::S0,
         .rs2 = PhysicalRegister::T1,
@@ -605,7 +614,7 @@ AsmFunction make_runtime_get_int_function() {
         .target = runtime_label(fn.symbol, "finish"),
     });
     apply_sign.instructions.push_back(AsmRInst{
-        .opcode = AsmOpcode::Sub,
+        .opcode = AsmOpcode::Subw,
         .rd = PhysicalRegister::S0,
         .rs1 = PhysicalRegister::Zero,
         .rs2 = PhysicalRegister::S0,
@@ -627,16 +636,19 @@ AsmFunction make_runtime_get_int_function() {
         .imm = std::int32_t{0},
     });
     finish.instructions.push_back(AsmLoadInst{
+        .width = MachineWidth::XLen,
         .rd = PhysicalRegister::S1,
+        .base = PhysicalRegister::Sp,
+        .offset = 16,
+    });
+    finish.instructions.push_back(AsmLoadInst{
+        .width = MachineWidth::XLen,
+        .rd = PhysicalRegister::S0,
         .base = PhysicalRegister::Sp,
         .offset = 8,
     });
     finish.instructions.push_back(AsmLoadInst{
-        .rd = PhysicalRegister::S0,
-        .base = PhysicalRegister::Sp,
-        .offset = 4,
-    });
-    finish.instructions.push_back(AsmLoadInst{
+        .width = MachineWidth::XLen,
         .rd = PhysicalRegister::Ra,
         .base = PhysicalRegister::Sp,
         .offset = 0,
@@ -645,7 +657,7 @@ AsmFunction make_runtime_get_int_function() {
         .opcode = AsmOpcode::Addi,
         .rd = PhysicalRegister::Sp,
         .rs1 = PhysicalRegister::Sp,
-        .imm = std::int32_t{16},
+        .imm = std::int32_t{32},
     });
     finish.instructions.push_back(AsmJalrInst{
         .rd = PhysicalRegister::Zero,

@@ -97,7 +97,7 @@ std::int32_t checked_frame_size_i32(const MachineFunction& fn,
                                     std::uint32_t frame_size,
                                     std::string_view context) {
     if (frame_size > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
-        fail(fn, std::string(context) + " exceeds RV32 addressable range");
+        fail(fn, std::string(context) + " exceeds 32-bit addressable frame range");
     }
     return static_cast<std::int32_t>(frame_size);
 }
@@ -284,6 +284,7 @@ void lower_frame_addr(std::vector<AsmInst>& out,
 void lower_load(std::vector<AsmInst>& out,
                 const FunctionLoweringContext& ctx,
                 PhysicalRegister dest,
+                MachineWidth width,
                 const Address& address,
                 std::optional<PhysicalRegister> frame_base_override) {
     PhysicalRegister base = PhysicalRegister::Zero;
@@ -304,6 +305,7 @@ void lower_load(std::vector<AsmInst>& out,
 
     if (fits_imm12(offset)) {
         out.push_back(AsmLoadInst{
+            .width = width,
             .rd = dest,
             .base = base,
             .offset = offset,
@@ -313,6 +315,7 @@ void lower_load(std::vector<AsmInst>& out,
 
     emit_add_imm(out, PhysicalRegister::T2, base, offset);
     out.push_back(AsmLoadInst{
+        .width = width,
         .rd = dest,
         .base = PhysicalRegister::T2,
         .offset = 0,
@@ -322,6 +325,7 @@ void lower_load(std::vector<AsmInst>& out,
 void lower_store(std::vector<AsmInst>& out,
                  const FunctionLoweringContext& ctx,
                  const Address& address,
+                 MachineWidth width,
                  PhysicalRegister src,
                  std::optional<PhysicalRegister> frame_base_override) {
     PhysicalRegister base = PhysicalRegister::Zero;
@@ -342,6 +346,7 @@ void lower_store(std::vector<AsmInst>& out,
 
     if (fits_imm12(offset)) {
         out.push_back(AsmStoreInst{
+            .width = width,
             .rs = src,
             .base = base,
             .offset = offset,
@@ -351,28 +356,30 @@ void lower_store(std::vector<AsmInst>& out,
 
     emit_add_imm(out, PhysicalRegister::T2, base, offset);
     out.push_back(AsmStoreInst{
+        .width = width,
         .rs = src,
         .base = PhysicalRegister::T2,
         .offset = 0,
     });
 }
 
-AsmOpcode lower_binary_opcode(BinaryOp op) {
+AsmOpcode lower_binary_opcode(BinaryOp op, MachineWidth width) {
+    const bool word = width == MachineWidth::Word;
     switch (op) {
     case BinaryOp::Add:
-        return AsmOpcode::Add;
+        return word ? AsmOpcode::Addw : AsmOpcode::Add;
     case BinaryOp::Sub:
-        return AsmOpcode::Sub;
+        return word ? AsmOpcode::Subw : AsmOpcode::Sub;
     case BinaryOp::Mul:
-        return AsmOpcode::Mul;
+        return word ? AsmOpcode::Mulw : AsmOpcode::Mul;
     case BinaryOp::Div:
-        return AsmOpcode::Div;
+        return word ? AsmOpcode::Divw : AsmOpcode::Div;
     case BinaryOp::DivU:
-        return AsmOpcode::Divu;
+        return word ? AsmOpcode::Divuw : AsmOpcode::Divu;
     case BinaryOp::Rem:
-        return AsmOpcode::Rem;
+        return word ? AsmOpcode::Remw : AsmOpcode::Rem;
     case BinaryOp::RemU:
-        return AsmOpcode::Remu;
+        return word ? AsmOpcode::Remuw : AsmOpcode::Remu;
     case BinaryOp::And:
         return AsmOpcode::And;
     case BinaryOp::Or:
@@ -380,11 +387,11 @@ AsmOpcode lower_binary_opcode(BinaryOp op) {
     case BinaryOp::Xor:
         return AsmOpcode::Xor;
     case BinaryOp::Sll:
-        return AsmOpcode::Sll;
+        return word ? AsmOpcode::Sllw : AsmOpcode::Sll;
     case BinaryOp::Srl:
-        return AsmOpcode::Srl;
+        return word ? AsmOpcode::Srlw : AsmOpcode::Srl;
     case BinaryOp::Sra:
-        return AsmOpcode::Sra;
+        return word ? AsmOpcode::Sraw : AsmOpcode::Sra;
     case BinaryOp::Slt:
         return AsmOpcode::Slt;
     case BinaryOp::SltU:
@@ -393,16 +400,17 @@ AsmOpcode lower_binary_opcode(BinaryOp op) {
     return AsmOpcode::Add;
 }
 
-AsmOpcode lower_shift_imm_opcode(BinaryOp op) {
+AsmOpcode lower_shift_imm_opcode(BinaryOp op, MachineWidth width) {
+    const bool word = width == MachineWidth::Word;
     switch (op) {
     case BinaryOp::Sll:
-        return AsmOpcode::Slli;
+        return word ? AsmOpcode::Slliw : AsmOpcode::Slli;
     case BinaryOp::Srl:
-        return AsmOpcode::Srli;
+        return word ? AsmOpcode::Srliw : AsmOpcode::Srli;
     case BinaryOp::Sra:
-        return AsmOpcode::Srai;
+        return word ? AsmOpcode::Sraiw : AsmOpcode::Srai;
     default:
-        return AsmOpcode::Slli;
+        return word ? AsmOpcode::Slliw : AsmOpcode::Slli;
     }
 }
 
@@ -546,14 +554,14 @@ void lower_instruction(std::vector<AsmInst>& out,
                 emit_li(out, expect_phys_reg(ctx, value.dest, "li destination"), value.value);
             } else if constexpr (std::is_same_v<T, Binary>) {
                 out.push_back(AsmRInst{
-                    .opcode = lower_binary_opcode(value.op),
+                    .opcode = lower_binary_opcode(value.op, value.width),
                     .rd = expect_phys_reg(ctx, value.dest, "binary destination"),
                     .rs1 = expect_phys_reg(ctx, value.lhs, "binary lhs"),
                     .rs2 = expect_phys_reg(ctx, value.rhs, "binary rhs"),
                 });
             } else if constexpr (std::is_same_v<T, ShiftImm>) {
                 out.push_back(AsmIInst{
-                    .opcode = lower_shift_imm_opcode(value.op),
+                    .opcode = lower_shift_imm_opcode(value.op, value.width),
                     .rd = expect_phys_reg(ctx, value.dest, "shift destination"),
                     .rs1 = expect_phys_reg(ctx, value.lhs, "shift lhs"),
                     .imm = static_cast<std::int32_t>(value.amount),
@@ -577,12 +585,14 @@ void lower_instruction(std::vector<AsmInst>& out,
                 lower_load(out,
                            ctx,
                            expect_phys_reg(ctx, value.dest, "load destination"),
+                           value.width,
                            value.address,
                            frame_base_override);
             } else if constexpr (std::is_same_v<T, Store>) {
                 lower_store(out,
                             ctx,
                             value.address,
+                            value.width,
                             expect_phys_reg(ctx, value.src, "store source"),
                             frame_base_override);
             } else if constexpr (std::is_same_v<T, Call>) {

@@ -277,8 +277,8 @@ std::unordered_map<PhysicalRegister, FrameId> ensure_caller_save_slots(
         fn.frame_objects.push_back(FrameObject{
             .id = id,
             .kind = FrameObjectKind::CallerSave,
-            .size = 4,
-            .align = 4,
+            .size = 8,
+            .align = 8,
             .host_type = semantic::invalid_type_id,
             .spill_class = std::nullopt,
             .source_slot = std::nullopt,
@@ -377,6 +377,7 @@ void preserve_caller_saved(MachineFunction& fn) {
                 for (const auto reg : regions[next_region].preserved) {
                     rewritten.push_back(Store{
                         .address = FrameAddress{.frame = slots.at(reg), .offset = 0},
+                        .width = MachineWidth::XLen,
                         .src = reg,
                     });
                 }
@@ -390,6 +391,7 @@ void preserve_caller_saved(MachineFunction& fn) {
                      ++it) {
                     rewritten.push_back(Load{
                         .dest = *it,
+                        .width = MachineWidth::XLen,
                         .address = FrameAddress{.frame = slots.at(*it), .offset = 0},
                     });
                 }

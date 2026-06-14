@@ -12,6 +12,7 @@ namespace riscv {
 namespace {
 
 constexpr std::uint32_t kCallFrameAlign = 16;
+constexpr std::uint32_t kXLenBytes = 8;
 
 std::string frame_name(FrameId frame) {
     return "fi" + std::to_string(frame);
@@ -151,7 +152,7 @@ void assign_incoming_args(MachineFunction& fn, std::uint32_t frame_size) {
     });
     for (std::size_t i = 0; i < incoming.size(); ++i) {
         incoming[i]->materialized_offset =
-            static_cast<std::int32_t>(frame_size + static_cast<std::uint32_t>(i * 4));
+            static_cast<std::int32_t>(frame_size + static_cast<std::uint32_t>(i * kXLenBytes));
     }
 }
 

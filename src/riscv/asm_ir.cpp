@@ -54,10 +54,12 @@ void print_instruction(std::ostream& out, const AsmInst& inst) {
                     << physical_register_name(value.rd) << ", "
                     << u_immediate_text(value.imm) << "\n";
             } else if constexpr (std::is_same_v<T, AsmLoadInst>) {
-                out << "  lw " << physical_register_name(value.rd) << ", " << value.offset
+                out << "  " << (value.width == MachineWidth::XLen ? "ld" : "lw") << " "
+                    << physical_register_name(value.rd) << ", " << value.offset
                     << "(" << physical_register_name(value.base) << ")\n";
             } else if constexpr (std::is_same_v<T, AsmStoreInst>) {
-                out << "  sw " << physical_register_name(value.rs) << ", " << value.offset
+                out << "  " << (value.width == MachineWidth::XLen ? "sd" : "sw") << " "
+                    << physical_register_name(value.rs) << ", " << value.offset
                     << "(" << physical_register_name(value.base) << ")\n";
             } else if constexpr (std::is_same_v<T, AsmBranchInst>) {
                 out << "  " << asm_opcode_name(value.opcode) << " "
@@ -98,8 +100,14 @@ const char* asm_opcode_name(AsmOpcode opcode) {
         return "add";
     case AsmOpcode::Addi:
         return "addi";
+    case AsmOpcode::Addw:
+        return "addw";
+    case AsmOpcode::Addiw:
+        return "addiw";
     case AsmOpcode::Sub:
         return "sub";
+    case AsmOpcode::Subw:
+        return "subw";
     case AsmOpcode::And:
         return "and";
     case AsmOpcode::Or:
@@ -112,14 +120,26 @@ const char* asm_opcode_name(AsmOpcode opcode) {
         return "sll";
     case AsmOpcode::Slli:
         return "slli";
+    case AsmOpcode::Sllw:
+        return "sllw";
+    case AsmOpcode::Slliw:
+        return "slliw";
     case AsmOpcode::Srl:
         return "srl";
     case AsmOpcode::Srli:
         return "srli";
+    case AsmOpcode::Srlw:
+        return "srlw";
+    case AsmOpcode::Srliw:
+        return "srliw";
     case AsmOpcode::Sra:
         return "sra";
     case AsmOpcode::Srai:
         return "srai";
+    case AsmOpcode::Sraw:
+        return "sraw";
+    case AsmOpcode::Sraiw:
+        return "sraiw";
     case AsmOpcode::Slt:
         return "slt";
     case AsmOpcode::Sltu:
@@ -128,22 +148,36 @@ const char* asm_opcode_name(AsmOpcode opcode) {
         return "sltiu";
     case AsmOpcode::Mul:
         return "mul";
+    case AsmOpcode::Mulw:
+        return "mulw";
     case AsmOpcode::Div:
         return "div";
     case AsmOpcode::Divu:
         return "divu";
+    case AsmOpcode::Divw:
+        return "divw";
+    case AsmOpcode::Divuw:
+        return "divuw";
     case AsmOpcode::Rem:
         return "rem";
     case AsmOpcode::Remu:
         return "remu";
+    case AsmOpcode::Remw:
+        return "remw";
+    case AsmOpcode::Remuw:
+        return "remuw";
     case AsmOpcode::Lui:
         return "lui";
     case AsmOpcode::Auipc:
         return "auipc";
     case AsmOpcode::Lw:
         return "lw";
+    case AsmOpcode::Ld:
+        return "ld";
     case AsmOpcode::Sw:
         return "sw";
+    case AsmOpcode::Sd:
+        return "sd";
     case AsmOpcode::Beq:
         return "beq";
     case AsmOpcode::Bne:

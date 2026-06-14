@@ -36,6 +36,8 @@ constexpr std::array kArgumentRegisters = {
     PhysicalRegister::A7,
 };
 
+constexpr std::uint32_t kXLenBytes = 8;
+
 std::vector<PhysicalRegister> call_arg_uses(std::size_t arg_count) {
     arg_count = std::min(arg_count, kArgumentRegisters.size());
     return std::vector<PhysicalRegister>(kArgumentRegisters.begin(),
@@ -59,7 +61,7 @@ bool fits_u32(std::int64_t value) {
 
 std::int32_t checked_i32(std::int64_t value, std::string_view what) {
     if (!fits_i32(value)) {
-        throw LoweringError(std::string(what) + " does not fit in RV32 immediate");
+        throw LoweringError(std::string(what) + " does not fit in 32-bit immediate");
     }
     return static_cast<std::int32_t>(value);
 }
@@ -75,7 +77,18 @@ std::int32_t checked_rv32_word(std::int64_t value, std::string_view what) {
     if (fits_u32(value)) {
         return std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(value));
     }
-    throw LoweringError(std::string(what) + " does not fit in RV32 immediate");
+    throw LoweringError(std::string(what) + " does not fit in 32-bit immediate");
+}
+
+MachineWidth width_for_ssa_class(ir3::SsaClass klass) {
+    return klass == ir3::SsaClass::Ptr ? MachineWidth::XLen : MachineWidth::Word;
+}
+
+MachineWidth width_for_host_type(semantic::TypeId type) {
+    if (const auto klass = ir3::ssa_class_for(type)) {
+        return width_for_ssa_class(*klass);
+    }
+    return MachineWidth::Word;
 }
 
 semantic::TypeId array_element_type(semantic::TypeId type) {
@@ -133,7 +146,7 @@ std::string lower_callee_symbol(const std::string& callee) {
     }
     if (is_unsupported_runtime_builtin_symbol(callee)) {
         throw LoweringError("builtin @" + callee +
-                            " requires runtime support that the RV32 backend does not "
+                            " requires runtime support that the RV64 backend does not "
                             "implement yet");
     }
     return callee;
@@ -248,8 +261,8 @@ private:
         for (std::size_t i = kArgumentRegisters.size(); i < source_.params.size(); ++i) {
             const auto frame = add_frame_object(FrameObject{
                 .kind = FrameObjectKind::IncomingArg,
-                .size = 4,
-                .align = 4,
+                .size = kXLenBytes,
+                .align = kXLenBytes,
                 .host_type = semantic::invalid_type_id,
                 .spill_class = std::nullopt,
                 .source_slot = std::nullopt,
@@ -279,7 +292,7 @@ private:
             return;
         }
 
-        const auto raw_size = static_cast<std::uint32_t>(max_overflow_args * 4);
+        const auto raw_size = static_cast<std::uint32_t>(max_overflow_args * kXLenBytes);
         const auto rounded_size = align_to(raw_size, 16);
         outgoing_arg_area_ = add_frame_object(FrameObject{
                 .kind = FrameObjectKind::OutgoingArg,
@@ -322,6 +335,7 @@ private:
             emit(dest,
                  Load{
                      .dest = param_vreg,
+                     .width = MachineWidth::XLen,
                      .address = FrameAddress{
                          .frame = incoming_arg_frames_.at(i),
                          .offset = 0,
@@ -344,6 +358,7 @@ private:
                     emit(dest,
                          Load{
                              .dest = vreg(load.result.id),
+                             .width = width_for_ssa_class(load.result.klass),
                              .address = lower_place_address(dest, load.source).address,
                          });
                 },
@@ -351,6 +366,7 @@ private:
                     emit(dest,
                          Store{
                              .address = lower_place_address(dest, store.dest).address,
+                             .width = width_for_ssa_class(store.klass),
                              .src = vreg(store.value),
                          });
                 },
@@ -388,11 +404,13 @@ private:
             emit(dest,
                  Load{
                      .dest = tmp,
+                     .width = width_for_host_type(copy.source.host_type),
                      .address = lowered_source.address,
                  });
             emit(dest,
                  Store{
                      .address = lowered_dest.address,
+                     .width = width_for_host_type(copy.dest.host_type),
                      .src = tmp,
                  });
             return;
@@ -434,6 +452,7 @@ private:
                  Binary{
                      .dest = result,
                      .op = BinaryOp::Sub,
+                     .width = MachineWidth::Word,
                      .lhs = zero,
                      .rhs = input,
                  });
@@ -471,49 +490,50 @@ private:
         const auto lhs = vreg(binary.lhs);
         const auto rhs = vreg(binary.rhs);
         const auto out = vreg(binary.result.id);
+        const auto width = width_for_ssa_class(binary.result.klass);
         switch (binary.op) {
         case ir3::BinaryOp::SAdd:
         case ir3::BinaryOp::UAdd:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Add, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Add, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::SSub:
         case ir3::BinaryOp::USub:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Sub, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Sub, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::SMul:
         case ir3::BinaryOp::UMul:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Mul, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Mul, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::SDiv:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Div, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Div, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::UDiv:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::DivU, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::DivU, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::SRem:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Rem, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Rem, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::URem:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::RemU, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::RemU, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::BitAnd:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::And, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::And, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::BitXor:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Xor, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Xor, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::BitOr:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Or, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Or, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::SShl:
         case ir3::BinaryOp::UShl:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Sll, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Sll, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::AShr:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Sra, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Sra, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::LShr:
-            emit(dest, Binary{.dest = out, .op = BinaryOp::Srl, .lhs = lhs, .rhs = rhs});
+            emit(dest, Binary{.dest = out, .op = BinaryOp::Srl, .width = width, .lhs = lhs, .rhs = rhs});
             return;
         case ir3::BinaryOp::Eq:
             emit(dest, Compare{.dest = out, .op = CompareOp::Eq, .lhs = lhs, .rhs = rhs});
@@ -566,9 +586,10 @@ private:
                          .address = FrameAddress{
                          .frame = *outgoing_arg_area_,
                          .offset = checked_i32(static_cast<std::uint32_t>(
-                                                   (i - kArgumentRegisters.size()) * 4),
+                                                   (i - kArgumentRegisters.size()) * kXLenBytes),
                                                "outgoing argument offset"),
                      },
+                     .width = MachineWidth::XLen,
                      .src = arg,
                  });
         }
@@ -703,6 +724,7 @@ private:
                                  Binary{
                                      .dest = scaled,
                                      .op = BinaryOp::Mul,
+                                     .width = MachineWidth::Word,
                                      .lhs = index_reg,
                                      .rhs = stride_reg,
                                  });
@@ -713,6 +735,7 @@ private:
                              Binary{
                                  .dest = added,
                                  .op = BinaryOp::Add,
+                                 .width = MachineWidth::XLen,
                                  .lhs = base_ptr,
                                  .rhs = scaled,
                              });
@@ -769,6 +792,7 @@ private:
              Binary{
                  .dest = out,
                  .op = BinaryOp::Add,
+                 .width = MachineWidth::XLen,
                  .lhs = base,
                  .rhs = imm,
              });

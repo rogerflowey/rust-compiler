@@ -16,7 +16,12 @@ using MachineValueId = std::size_t;
 using BlockId = std::size_t;
 using FrameId = std::size_t;
 
-enum class RegisterClass { Gpr32 };
+enum class RegisterClass { Gpr64 };
+
+enum class MachineWidth {
+    Word,
+    XLen,
+};
 
 enum class PhysicalRegister {
     Zero,
@@ -86,14 +91,14 @@ enum class CompareOp { Eq, Ne, LtS, LtU, LeS, LeU, GtS, GtU, GeS, GeU };
 
 struct VirtualRegister {
     MachineValueId id = 0;
-    RegisterClass reg_class = RegisterClass::Gpr32;
+    RegisterClass reg_class = RegisterClass::Gpr64;
 
     bool operator==(const VirtualRegister&) const = default;
 };
 
 struct SpillRef {
     FrameId frame = 0;
-    RegisterClass reg_class = RegisterClass::Gpr32;
+    RegisterClass reg_class = RegisterClass::Gpr64;
 
     bool operator==(const SpillRef&) const = default;
 };
@@ -138,6 +143,7 @@ struct Li {
 struct Binary {
     RegisterRef dest;
     BinaryOp op = BinaryOp::Add;
+    MachineWidth width = MachineWidth::Word;
     RegisterRef lhs;
     RegisterRef rhs;
 };
@@ -145,6 +151,7 @@ struct Binary {
 struct ShiftImm {
     RegisterRef dest;
     BinaryOp op = BinaryOp::Sll;
+    MachineWidth width = MachineWidth::Word;
     RegisterRef lhs;
     std::uint8_t amount = 0;
 };
@@ -164,11 +171,13 @@ struct FrameAddr {
 
 struct Load {
     RegisterRef dest;
+    MachineWidth width = MachineWidth::Word;
     Address address;
 };
 
 struct Store {
     Address address;
+    MachineWidth width = MachineWidth::Word;
     RegisterRef src;
 };
 

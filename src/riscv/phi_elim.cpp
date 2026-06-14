@@ -150,6 +150,7 @@ void emit_move(std::vector<Instruction>& out,
     if (is_register(dest) && !is_register(src)) {
         out.push_back(Load{
             .dest = as_register(dest),
+            .width = MachineWidth::XLen,
             .address = FrameAddress{.frame = as_spill_frame(src), .offset = 0},
         });
         return;
@@ -158,6 +159,7 @@ void emit_move(std::vector<Instruction>& out,
     if (!is_register(dest) && is_register(src)) {
         out.push_back(Store{
             .address = FrameAddress{.frame = as_spill_frame(dest), .offset = 0},
+            .width = MachineWidth::XLen,
             .src = as_register(src),
         });
         return;
@@ -165,10 +167,12 @@ void emit_move(std::vector<Instruction>& out,
 
     out.push_back(Load{
         .dest = spill_scratch,
+        .width = MachineWidth::XLen,
         .address = FrameAddress{.frame = as_spill_frame(src), .offset = 0},
     });
     out.push_back(Store{
         .address = FrameAddress{.frame = as_spill_frame(dest), .offset = 0},
+        .width = MachineWidth::XLen,
         .src = spill_scratch,
     });
 }
@@ -181,6 +185,7 @@ void save_cycle_value(std::vector<Instruction>& out, const CopyLocation& locatio
 
     out.push_back(Load{
         .dest = kCycleScratch,
+        .width = MachineWidth::XLen,
         .address = FrameAddress{.frame = as_spill_frame(location), .offset = 0},
     });
 }
