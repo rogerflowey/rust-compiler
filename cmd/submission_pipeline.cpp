@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "src/ast/ast.hpp"
@@ -153,7 +154,9 @@ int main(int argc, char* argv[]) {
         riscv::materialize_frame(machine_module);
 
         auto asm_module = riscv::lower_functions_to_asm(machine_module);
-        riscv::print_gnu_as(std::cout, asm_module);
+        riscv::print_gnu_as(std::cout,
+                            asm_module,
+                            std::unordered_set<std::string>{"main"});
 
         riscv::AsmModule builtin_module;
         riscv::append_runtime_helpers(builtin_module,

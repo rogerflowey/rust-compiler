@@ -81,8 +81,10 @@ void print_instruction(std::ostream& out, const AsmInst& inst) {
         inst);
 }
 
-void print_function(std::ostream& out, const AsmFunction& function) {
-    out << ".globl " << function.symbol << "\n";
+void print_function(std::ostream& out, const AsmFunction& function, bool global) {
+    if (global) {
+        out << ".globl " << function.symbol << "\n";
+    }
     out << function.symbol << ":\n";
     for (const auto& block : function.blocks) {
         out << block.label << ":\n";
@@ -100,7 +102,20 @@ void print_gnu_as(std::ostream& out, const AsmModule& module) {
         if (i != 0) {
             out << "\n";
         }
-        print_function(out, module.functions[i]);
+        print_function(out, module.functions[i], true);
+    }
+}
+
+void print_gnu_as(std::ostream& out,
+                  const AsmModule& module,
+                  const std::unordered_set<std::string>& global_symbols) {
+    out << ".text\n";
+    for (std::size_t i = 0; i < module.functions.size(); ++i) {
+        if (i != 0) {
+            out << "\n";
+        }
+        const auto& function = module.functions[i];
+        print_function(out, function, global_symbols.contains(function.symbol));
     }
 }
 
