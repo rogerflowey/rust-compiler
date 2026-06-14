@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
         if (!std::holds_alternative<std::vector<ast::ItemPtr>>(result)) {
             emit_diagnostics();
             print_parse_error(std::get<parsec::ParseError>(result), tokens, sources);
-            return 0;
+            return 1;
         }
 
         AstToHirConverter converter;
@@ -159,7 +159,7 @@ int main(int argc, char* argv[]) {
     } catch (const LexerError& error) {
         emit_diagnostics();
         std::cerr << "Error: " << error.what() << "\n";
-        return 0;
+        return 1;
     } catch (const SemanticError& error) {
         emit_diagnostics();
         print_semantic_error(error, sources);
