@@ -3,16 +3,18 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: scripts/run_ir1_qemu_sweep.sh [--out-dir DIR] [--pipeline PATH] [--cc PATH] [--qemu PATH] [--sysroot DIR] [--no-static] [--allow-compile-fail CASE]
+Usage: scripts/run_ir1_qemu_sweep.sh [--out-dir DIR] [--compiler PATH] [--cc PATH] [--qemu PATH] [--sysroot DIR] [--no-static] [--allow-compile-fail CASE]
 
-Compile all `external/RCompiler-Testcases/IR-1/src/*/*.rx` cases to RV64 asm,
-link them into Linux ELF executables, run them under qemu-riscv64, and compare
-stdout with testcase `*.out` files. Per-case artifacts and a summary are
-written under the output directory.
+Compile all `external/RCompiler-Testcases/IR-1/src/*/*.rx` cases through the
+submission interface, link stdout `test.s` plus stderr `builtin.s` into RV64
+Linux ELF executables, run them under qemu-riscv64, and compare stdout with
+testcase `*.out` files. Per-case artifacts and a summary are written under
+the output directory.
 
 Options:
   --out-dir DIR            Output directory for artifacts and summary
-  --pipeline PATH          Pipeline binary to run
+  --compiler PATH          Submission compiler binary to run
+  --pipeline PATH          Alias for --compiler
   --cc PATH                RV64 Linux compiler, default riscv64-linux-gnu-gcc
   --qemu PATH              QEMU user-mode binary, default qemu-riscv64
   --march VALUE            GCC -march value, default rv64gc
@@ -27,11 +29,11 @@ EOF
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 
-default_pipeline() {
-    if [[ -x "$repo_root/build/cmd/riscv_pipeline" ]]; then
-        printf '%s\n' "$repo_root/build/cmd/riscv_pipeline"
+default_compiler() {
+    if [[ -x "$repo_root/build/cmd/submission_pipeline" ]]; then
+        printf '%s\n' "$repo_root/build/cmd/submission_pipeline"
     else
-        printf '%s\n' "$repo_root/build/ninja-debug/cmd/riscv_pipeline"
+        printf '%s\n' "$repo_root/build/ninja-debug/cmd/submission_pipeline"
     fi
 }
 
@@ -45,7 +47,7 @@ is_executable_command() {
 }
 
 out_dir=""
-pipeline=$(default_pipeline)
+compiler=$(default_compiler)
 cc="riscv64-linux-gnu-gcc"
 qemu="qemu-riscv64"
 march="rv64gc"
@@ -60,8 +62,8 @@ while [[ $# -gt 0 ]]; do
             out_dir="${2:?missing value for --out-dir}"
             shift 2
             ;;
-        --pipeline)
-            pipeline="${2:?missing value for --pipeline}"
+        --compiler|--pipeline)
+            compiler="${2:?missing value for $1}"
             shift 2
             ;;
         --cc)
@@ -108,8 +110,8 @@ if [[ -z "$out_dir" ]]; then
     out_dir="$repo_root/external/test-results/ir1-qemu-runtime-$(date +%F-%H%M%S)"
 fi
 
-if [[ ! -x "$pipeline" ]]; then
-    echo "Pipeline binary not found or not executable: $pipeline" >&2
+if [[ ! -x "$compiler" ]]; then
+    echo "Submission compiler not found or not executable: $compiler" >&2
     exit 1
 fi
 if ! is_executable_command "$cc"; then
@@ -158,7 +160,7 @@ link_case() {
     if [[ "$static_link" -eq 1 ]]; then
         cc_args+=("-static")
     fi
-    cc_args+=("test.s" "-o" "test.elf")
+    cc_args+=("test.s" "builtin.s" "-o" "test.elf")
     (cd "$case_out_dir" && "$cc" "${cc_args[@]}" >link.stdout 2>link.stderr)
 }
 
@@ -186,7 +188,7 @@ while IFS= read -r rx; do
     case_out_dir="$out_dir/$name"
     mkdir -p "$case_out_dir"
 
-    if "$pipeline" "$rx" --stage=asm >"$case_out_dir/test.s" 2>"$case_out_dir/compile.err"; then
+    if "$compiler" <"$rx" >"$case_out_dir/test.s" 2>"$case_out_dir/builtin.s"; then
         :
     elif is_allowed_compile_fail "$name"; then
         expected_compile_fail=$((expected_compile_fail + 1))
@@ -225,8 +227,8 @@ summary="$out_dir/README.md"
 {
     printf 'IR-1 QEMU runtime sweep\n\n'
     printf -- '- Corpus: `%s`\n' "${case_root#$repo_root/}"
-    printf -- '- Driver: `%s --stage=asm` + `%s -march=%s -mabi=%s%s` + `%s%s`\n' \
-        "${pipeline#$repo_root/}" "$cc" "$march" "$mabi" \
+    printf -- '- Driver: `%s < source.rx > test.s 2> builtin.s` + `%s -march=%s -mabi=%s%s test.s builtin.s` + `%s%s`\n' \
+        "${compiler#$repo_root/}" "$cc" "$march" "$mabi" \
         "$([[ "$static_link" -eq 1 ]] && printf ' -static')" \
         "$qemu" "$([[ -n "$sysroot" ]] && printf ' -L %s' "$sysroot")"
     printf -- '- Total cases: `%d`\n' "$total"

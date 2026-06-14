@@ -64,3 +64,19 @@ set_property(TARGET riscv_pipeline PROPERTY CXX_STANDARD 23)
 set_property(TARGET riscv_pipeline PROPERTY CXX_STANDARD_REQUIRED ON)
 
 target_compile_options(riscv_pipeline PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(submission_pipeline submission_pipeline.cpp)
+
+target_include_directories(submission_pipeline PRIVATE .. src)
+
+target_link_libraries(submission_pipeline PRIVATE
+    parser
+    semantic
+    ir3
+    riscv
+)
+
+set_property(TARGET submission_pipeline PROPERTY CXX_STANDARD 23)
+set_property(TARGET submission_pipeline PROPERTY CXX_STANDARD_REQUIRED ON)
+
+target_compile_options(submission_pipeline PRIVATE -Wall -Wextra -Wpedantic)

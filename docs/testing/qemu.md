@@ -11,8 +11,8 @@ Required tools:
 ## Single Smoke Case
 
 ```bash
-build/cmd/riscv_pipeline test/pipeline/smoke_print_exit.rx --stage=asm > test.s
-riscv64-linux-gnu-gcc -march=rv64gc -mabi=lp64d -static test.s -o test.elf
+make run < test/pipeline/smoke_print_exit.rx > test.s 2> builtin.s
+riscv64-linux-gnu-gcc -march=rv64gc -mabi=lp64d -static test.s builtin.s -o test.elf
 qemu-riscv64 ./test.elf < test/pipeline/smoke_print_exit.in > test.out
 diff -u test/pipeline/smoke_print_exit.out test.out
 ```
@@ -20,7 +20,7 @@ diff -u test/pipeline/smoke_print_exit.out test.out
 If static linking is unavailable, use dynamic linking with a sysroot:
 
 ```bash
-riscv64-linux-gnu-gcc -march=rv64gc -mabi=lp64d test.s -o test.elf
+riscv64-linux-gnu-gcc -march=rv64gc -mabi=lp64d test.s builtin.s -o test.elf
 qemu-riscv64 -L /usr/riscv64-linux-gnu ./test.elf
 ```
 

@@ -14,6 +14,7 @@ public:
 };
 
 AsmFunction lower_to_asm(const MachineFunction& fn);
+AsmModule lower_functions_to_asm(const MachineModule& module);
 AsmModule lower_to_asm(const MachineModule& module);
 
 } // namespace riscv

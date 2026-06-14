@@ -19,8 +19,8 @@ Files in this folder follow the testcase convention:
 Suggested usage:
 
 ```bash
-build/cmd/riscv_pipeline test/pipeline/smoke_print_exit.rx --stage=asm > test.s
-riscv64-linux-gnu-gcc -march=rv64gc -mabi=lp64d -static test.s -o test.elf
+make run < test/pipeline/smoke_print_exit.rx > test.s 2> builtin.s
+riscv64-linux-gnu-gcc -march=rv64gc -mabi=lp64d -static test.s builtin.s -o test.elf
 qemu-riscv64 ./test.elf < test/pipeline/smoke_print_exit.in > test.out
 diff -u test/pipeline/smoke_print_exit.out test.out
 ```

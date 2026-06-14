@@ -794,15 +794,21 @@ AsmFunction lower_to_asm(const MachineFunction& fn) {
     return asm_fn;
 }
 
-AsmModule lower_to_asm(const MachineModule& module) {
+AsmModule lower_functions_to_asm(const MachineModule& module) {
     AsmModule asm_module;
-    const auto helpers = collect_runtime_helpers(module);
-    asm_module.functions.reserve(
-        module.functions.size() + helpers.memmove + helpers.print_int + helpers.println_int +
-        helpers.get_int + helpers.exit);
+    asm_module.functions.reserve(module.functions.size());
     for (const auto& fn : module.functions) {
         asm_module.functions.push_back(lower_to_asm(fn));
     }
+    return asm_module;
+}
+
+AsmModule lower_to_asm(const MachineModule& module) {
+    AsmModule asm_module = lower_functions_to_asm(module);
+    const auto helpers = collect_runtime_helpers(module);
+    asm_module.functions.reserve(
+        asm_module.functions.size() + helpers.memmove + helpers.print_int +
+        helpers.println_int + helpers.get_int + helpers.exit);
     append_runtime_helpers(asm_module, helpers);
     return asm_module;
 }
