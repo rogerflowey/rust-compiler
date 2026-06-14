@@ -40,18 +40,98 @@ std::unordered_map<ValueId, std::size_t> phi_index_by_result(const BasicBlock& b
     return result;
 }
 
+bool promote_single_block_slots(Function& fn, const SlotUseInfo& slot_use) {
+    if (fn.blocks.size() != 1 || fn.blocks.front().id != fn.entry_block ||
+        !fn.blocks.front().phis.empty()) {
+        return false;
+    }
+
+    std::vector<bool> promotable(fn.slots.size(), false);
+    bool has_promotable_slot = false;
+    const auto entry = fn.entry_block;
+    for (SlotId slot = 0; slot < fn.slots.size(); ++slot) {
+        const auto& use = slot_use.slot(slot);
+        if (!use.has_promotable_shape() || use.use_before_def[entry]) {
+            continue;
+        }
+        if (!ssa_class_for(fn.slots[slot].host_type)) {
+            continue;
+        }
+        promotable[slot] = true;
+        has_promotable_slot = true;
+    }
+
+    if (!has_promotable_slot) {
+        return false;
+    }
+
+    auto& block = fn.blocks.front();
+    std::vector<std::optional<ValueId>> current(fn.slots.size());
+    std::unordered_map<ValueId, ValueId> replacements;
+    std::vector<bool> erase_mask(block.instructions.size(), false);
+    bool changed = false;
+
+    for (std::size_t ii = 0; ii < block.instructions.size(); ++ii) {
+        auto& inst = block.instructions[ii];
+        if (auto* load = std::get_if<Load>(&inst)) {
+            const auto slot_ref = exact_root_slot(load->source);
+            if (!slot_ref || !promotable[*slot_ref]) {
+                continue;
+            }
+            if (!current[*slot_ref]) {
+                throw std::runtime_error("IR3 single-block slot-to-SSA found load-before-def for slot %" +
+                                         std::to_string(*slot_ref) + " in @" + fn.symbol);
+            }
+            replacements[load->result.id] =
+                detail::resolve_replacement(replacements, *current[*slot_ref]);
+            erase_mask[ii] = true;
+            changed = true;
+        } else if (auto* store = std::get_if<Store>(&inst)) {
+            const auto slot_ref = exact_root_slot(store->dest);
+            if (!slot_ref || !promotable[*slot_ref]) {
+                continue;
+            }
+            current[*slot_ref] = detail::resolve_replacement(replacements, store->value);
+            erase_mask[ii] = true;
+            changed = true;
+        }
+    }
+
+    if (!changed) {
+        return false;
+    }
+
+    detail::rewrite_all_uses(fn, replacements);
+
+    std::vector<Instruction> kept;
+    kept.reserve(block.instructions.size());
+    for (std::size_t ii = 0; ii < block.instructions.size(); ++ii) {
+        if (!erase_mask[ii]) {
+            kept.push_back(std::move(block.instructions[ii]));
+        }
+    }
+    block.instructions = std::move(kept);
+
+    compact_slots(fn, promotable);
+    return true;
+}
+
 } // namespace
 
 PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
-    const auto& cfg = am.get<CfgAnalysis>(fn);
-    const auto& dom = am.get<DomTreeAnalysis>(fn);
-    const auto& frontier = am.get<DominanceFrontierAnalysis>(fn);
-    const auto& slot_use = am.get<SlotUseAnalysis>(fn);
-    const auto& slot_live = am.get<SlotLivenessAnalysis>(fn);
-
     if (fn.blocks.empty() || fn.slots.empty()) {
         return PreservedAnalyses::all();
     }
+
+    const auto& slot_use = am.get<SlotUseAnalysis>(fn);
+    if (promote_single_block_slots(fn, slot_use)) {
+        return PreservedAnalyses::none();
+    }
+
+    const auto& cfg = am.get<CfgAnalysis>(fn);
+    const auto& dom = am.get<DomTreeAnalysis>(fn);
+    const auto& frontier = am.get<DominanceFrontierAnalysis>(fn);
+    const auto& slot_live = am.get<SlotLivenessAnalysis>(fn);
 
     std::vector<std::vector<bool>> erase_mask;
     erase_mask.reserve(fn.blocks.size());
