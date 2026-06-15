@@ -35,7 +35,6 @@ constexpr std::array<PhysicalRegister, 19> kAllocatable = {
 constexpr PhysicalRegister kScratch0 = PhysicalRegister::T0;
 constexpr PhysicalRegister kScratch1 = PhysicalRegister::T1;
 constexpr std::size_t kFastSpillVregThreshold = 1200;
-constexpr std::size_t kFastSpillLiveThreshold = 768;
 
 struct RematInfo {
     enum class Kind {
@@ -386,46 +385,6 @@ Allocation spill_all_virtual_registers(MachineFunction& fn,
         alloc.spilled.emplace(vreg, frame);
     }
     return alloc;
-}
-
-std::size_t estimate_max_live_vregs(const MachineFunction& fn) {
-    const auto cfg = compute_cfg(fn);
-    const auto live = compute_liveness(fn, cfg);
-    std::size_t max_live = 0;
-
-    for (std::size_t block_index = 0; block_index < fn.blocks.size(); ++block_index) {
-        const auto& block = fn.blocks[block_index];
-        auto current_live = live.live_out[block_index];
-        max_live = std::max(max_live, current_live.size());
-
-        if (block.terminator) {
-            for_each_terminator_use(*block.terminator, [&](const auto& reg) {
-                using T = std::decay_t<decltype(reg)>;
-                if constexpr (std::is_same_v<T, VirtualRegister>) {
-                    current_live.insert(reg.id);
-                }
-            });
-            max_live = std::max(max_live, current_live.size());
-        }
-
-        for (auto it = block.instructions.rbegin(); it != block.instructions.rend(); ++it) {
-            for_each_instruction_def(*it, [&](const auto& reg) {
-                using T = std::decay_t<decltype(reg)>;
-                if constexpr (std::is_same_v<T, VirtualRegister>) {
-                    current_live.erase(reg.id);
-                }
-            });
-            for_each_instruction_use(*it, [&](const auto& reg) {
-                using T = std::decay_t<decltype(reg)>;
-                if constexpr (std::is_same_v<T, VirtualRegister>) {
-                    current_live.insert(reg.id);
-                }
-            });
-            max_live = std::max(max_live, current_live.size());
-        }
-    }
-
-    return max_live;
 }
 
 void bump_weight(NodeTable& table, const RegisterRef& reg) {
@@ -1338,8 +1297,7 @@ AllocationStats allocate_registers(MachineFunction& fn) {
     const auto table = collect_nodes(fn);
     const auto remat_map = build_remat_map(fn);
     Allocation alloc;
-    if (table.vreg_nodes.size() > kFastSpillVregThreshold &&
-        estimate_max_live_vregs(fn) > kFastSpillLiveThreshold) {
+    if (table.vreg_nodes.size() > kFastSpillVregThreshold) {
         alloc = spill_all_virtual_registers(fn, table, remat_map);
     } else {
         auto graph = build_graph(fn);
