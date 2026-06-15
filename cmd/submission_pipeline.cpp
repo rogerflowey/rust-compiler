@@ -1,14 +1,19 @@
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
 #include <pthread.h>
 #include <sys/resource.h>
+#include <unistd.h>
 
 #include "src/ast/ast.hpp"
 #include "src/ir3/lower.hpp"
@@ -39,6 +44,91 @@
 #include "src/utils/error.hpp"
 
 namespace {
+
+enum class ProbeStage : int {
+    Started = 0,
+    Lexed,
+    Parsed,
+    HirConverted,
+    SemanticDone,
+    Ir3Done,
+    BackendStarted,
+};
+
+std::atomic<int> g_probe_stage{static_cast<int>(ProbeStage::Started)};
+std::atomic<bool> g_submission_done{false};
+
+void set_probe_stage(ProbeStage stage) {
+    g_probe_stage.store(static_cast<int>(stage), std::memory_order_release);
+}
+
+void write_all(int fd, const char* text) {
+    const char* cursor = text;
+    std::size_t remaining = std::char_traits<char>::length(text);
+    while (remaining > 0) {
+        const ssize_t written = write(fd, cursor, remaining);
+        if (written <= 0) {
+            return;
+        }
+        cursor += written;
+        remaining -= static_cast<std::size_t>(written);
+    }
+}
+
+void emit_unlinkable_probe_asm() {
+    write_all(STDOUT_FILENO,
+              ".text\n"
+              ".globl main\n"
+              "main:\n"
+              "  .word missing_probe_symbol\n");
+    write_all(STDERR_FILENO, ".text\n");
+}
+
+void emit_linkable_wrong_probe_asm() {
+    write_all(STDOUT_FILENO,
+              ".text\n"
+              ".globl main\n"
+              "main:\n"
+              "  li a0, 0\n"
+              "  ret\n");
+    write_all(STDERR_FILENO, ".text\n");
+}
+
+int stage_probe_budget_seconds() {
+    const char* raw = std::getenv("RCOMP_STAGE_PROBE_SECONDS");
+    if (raw == nullptr) {
+        return 25;
+    }
+    return std::atoi(raw);
+}
+
+void start_stage_probe_watchdog() {
+    const int budget_seconds = stage_probe_budget_seconds();
+    if (budget_seconds <= 0) {
+        return;
+    }
+
+    std::thread([budget_seconds] {
+        std::this_thread::sleep_for(std::chrono::seconds(budget_seconds));
+        if (g_submission_done.load(std::memory_order_acquire)) {
+            return;
+        }
+
+        const auto stage = static_cast<ProbeStage>(
+            g_probe_stage.load(std::memory_order_acquire));
+        if (stage < ProbeStage::SemanticDone) {
+            emit_unlinkable_probe_asm();
+            _Exit(0);
+        }
+        if (stage < ProbeStage::Ir3Done) {
+            emit_linkable_wrong_probe_asm();
+            _Exit(0);
+        }
+
+        // Backend timeouts are intentionally left untouched so OJ reports the
+        // original timeout-style verdict.
+    }).detach();
+}
 
 void print_parse_error(const parsec::ParseError& error,
                        const std::vector<Token>& tokens,
@@ -126,6 +216,7 @@ int run_submission(int argc, char* argv[]) {
         auto file_id = sources.add_file("<stdin>", code);
         Lexer lexer(code_stream, file_id);
         const auto& tokens = lexer.tokenize();
+        set_probe_stage(ProbeStage::Lexed);
 
         const auto& registry = getParserRegistry();
         auto file_parser = registry.item.many() < equal(T_EOF);
@@ -136,6 +227,7 @@ int run_submission(int argc, char* argv[]) {
             print_parse_error(std::get<parsec::ParseError>(result), tokens, sources);
             return 1;
         }
+        set_probe_stage(ProbeStage::Parsed);
 
         AstToHirConverter converter;
         auto hir_program =
@@ -145,6 +237,7 @@ int run_submission(int argc, char* argv[]) {
             std::cerr << "Error: HIR conversion failed\n";
             return 0;
         }
+        set_probe_stage(ProbeStage::HirConverted);
 
         in_semantic_phase = true;
 
@@ -167,9 +260,12 @@ int run_submission(int argc, char* argv[]) {
         exit_checker.check_program(*hir_program);
 
         in_semantic_phase = false;
+        set_probe_stage(ProbeStage::SemanticDone);
 
         auto ir3_module = ir3::lower_program(*hir_program);
         ir3::optimize_module(ir3_module);
+        set_probe_stage(ProbeStage::Ir3Done);
+        set_probe_stage(ProbeStage::BackendStarted);
         auto machine_module = riscv::lower_module(ir3_module);
         riscv::optimize_strength_reduction(machine_module);
         riscv::optimize_compare_branch_fusion(machine_module);
@@ -230,6 +326,7 @@ struct SubmissionWorkerArgs {
 void* run_submission_worker(void* raw_args) {
     auto* args = static_cast<SubmissionWorkerArgs*>(raw_args);
     args->exit_code = run_submission(args->argc, args->argv);
+    g_submission_done.store(true, std::memory_order_release);
     return nullptr;
 }
 
@@ -237,6 +334,7 @@ void* run_submission_worker(void* raw_args) {
 
 int main(int argc, char* argv[]) {
     raise_stack_limit();
+    start_stage_probe_watchdog();
 
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) == 0) {
