@@ -9,6 +9,20 @@
 using namespace parsec;
 using namespace ast;
 
+namespace {
+
+bool is_primitive_type_token(const Token& token) {
+    if (token.type != TokenType::TOKEN_IDENTIFIER) {
+        return false;
+    }
+    return token.value == "i32" || token.value == "u32" ||
+           token.value == "isize" || token.value == "usize" ||
+           token.value == "bool" || token.value == "char" ||
+           token.value == "str";
+}
+
+} // namespace
+
 void TypeParserBuilder::finalize(const ParserRegistry& registry, std::function<void(TypeParser)> set_type_parser) {
     const auto& exprParser = registry.expr;
     const auto& pathParser = registry.path;
@@ -20,7 +34,45 @@ void TypeParserBuilder::finalize(const ParserRegistry& registry, std::function<v
     auto arrayParser = buildArrayParser(selfParser, exprParser);
     auto referenceParser = buildReferenceParser(selfParser);
 
-    auto core = referenceParser | arrayParser | unitParser | primitiveParser | pathTypeParser;
+    auto core = parsec::Parser<TypePtr, Token>(
+        [referenceParser,
+         arrayParser,
+         unitParser,
+         primitiveParser,
+         pathTypeParser](parsec::ParseContext<Token>& context) -> parsec::ParseResult<TypePtr> {
+            if (context.isEOF()) {
+                return parsec::ParseError{context.position, {"a type"}, {}, true};
+            }
+
+            const auto& token = context.tokens[context.position];
+            if (token.type == TOKEN_OPERATOR && token.value == "&") {
+                return referenceParser.parse(context);
+            }
+            if (token.type == TOKEN_DELIMITER) {
+                if (token.value == "[") {
+                    return arrayParser.parse(context);
+                }
+                if (token.value == "(") {
+                    return unitParser.parse(context);
+                }
+            }
+            if (is_primitive_type_token(token)) {
+                return primitiveParser.parse(context);
+            }
+            if (token.type == TOKEN_IDENTIFIER ||
+                (token.type == TOKEN_KEYWORD &&
+                 (token.value == "self" || token.value == "Self"))) {
+                return pathTypeParser.parse(context);
+            }
+
+            return parsec::ParseError{
+                context.position,
+                {"a type"},
+                {},
+                true,
+                token.span,
+            };
+        }).label("a type");
     set_type_parser(core);
 }
 

@@ -27,22 +27,108 @@ void StmtParserBuilder::finalize(const ParserRegistry& registry, std::function<v
     auto emptyStmtParser = buildEmptyStmt();
     auto itemStmtParser = buildItemStmt(itemParser);
 
-    StmtParser core = emptyStmtParser | letStmtParser | itemStmtParser | exprStmtParser;
+    StmtParser core = parsec::Parser<StmtPtr, Token>(
+        [emptyStmtParser,
+         letStmtParser,
+         itemStmtParser,
+         exprStmtParser](parsec::ParseContext<Token>& context) -> parsec::ParseResult<StmtPtr> {
+            if (context.isEOF()) {
+                return parsec::ParseError{context.position, {"a statement"}, {}, true};
+            }
+
+            const auto& token = context.tokens[context.position];
+            if (token.type == TOKEN_SEPARATOR && token.value == ";") {
+                return emptyStmtParser.parse(context);
+            }
+            if (token.type == TOKEN_KEYWORD) {
+                if (token.value == "let") {
+                    return letStmtParser.parse(context);
+                }
+                if (token.value == "fn" || token.value == "struct" ||
+                    token.value == "enum" || token.value == "const" ||
+                    token.value == "trait" || token.value == "impl") {
+                    return itemStmtParser.parse(context);
+                }
+            }
+            return exprStmtParser.parse(context);
+        }).label("a statement");
     set_stmt_parser(core);
 }
 
 StmtParser StmtParserBuilder::buildLetStmt(const PatternParser& patternParser, const TypeParser& typeParser, const ExprParser& exprParser) const {
-    return (equal({TOKEN_KEYWORD, "let"}) > patternParser)
-        .andThen((equal({TOKEN_SEPARATOR, ":"}) > typeParser).optional())
-        .andThen((equal({TOKEN_OPERATOR, "="}) > exprParser).optional())
-        .keepLeft(equal({TOKEN_SEPARATOR, ";"}))
-        .map([](auto&& t) -> StmtPtr {
-            auto& [pat, type, init] = t;
-            auto stmt = std::make_unique<Statement>(Statement{ LetStmt{std::move(pat), std::move(type), std::move(init)} });
+    return parsec::Parser<StmtPtr, Token>(
+        [patternParser, typeParser, exprParser](
+            parsec::ParseContext<Token>& context) -> parsec::ParseResult<StmtPtr> {
+            auto make_error = [&](std::string expected) {
+                parsec::ParseError error{
+                    context.position,
+                    {std::move(expected)},
+                    {},
+                    false,
+                    context.span_at(context.position),
+                };
+                return error;
+            };
+
+            if (context.isEOF() ||
+                context.tokens[context.position] != Token{TOKEN_KEYWORD, "let"}) {
+                return make_error("'let'");
+            }
+            ++context.position;
+
+            auto pattern_res = patternParser.parse(context);
+            if (std::holds_alternative<parsec::ParseError>(pattern_res)) {
+                return std::get<parsec::ParseError>(pattern_res);
+            }
+            auto pattern = std::move(std::get<PatternPtr>(pattern_res));
+
+            std::optional<TypePtr> type_annotation;
+            if (!context.isEOF() &&
+                context.tokens[context.position] == Token{TOKEN_SEPARATOR, ":"}) {
+                ++context.position;
+                auto type_res = typeParser.parse(context);
+                if (std::holds_alternative<parsec::ParseError>(type_res)) {
+                    return std::get<parsec::ParseError>(type_res);
+                }
+                type_annotation = std::move(std::get<TypePtr>(type_res));
+            }
+
+            std::optional<ExprPtr> initializer;
+            if (!context.isEOF() &&
+                context.tokens[context.position] == Token{TOKEN_OPERATOR, "="}) {
+                ++context.position;
+                auto expr_res = exprParser.parse(context);
+                if (std::holds_alternative<parsec::ParseError>(expr_res)) {
+                    return std::get<parsec::ParseError>(expr_res);
+                }
+                initializer = std::move(std::get<ExprPtr>(expr_res));
+            }
+
+            if (context.isEOF() ||
+                context.tokens[context.position] != Token{TOKEN_SEPARATOR, ";"}) {
+                return make_error("';'");
+            }
+            ++context.position;
+
+            auto stmt = std::make_unique<Statement>(Statement{
+                LetStmt{std::move(pattern), std::move(type_annotation), std::move(initializer)}
+            });
             span::Span merged = span::Span::invalid();
-            if (std::get<LetStmt>(stmt->value).pattern) merged = span::Span::merge(merged, std::get<LetStmt>(stmt->value).pattern->span);
-            if (std::get<LetStmt>(stmt->value).type_annotation) merged = span::Span::merge(merged, (*std::get<LetStmt>(stmt->value).type_annotation)->span);
-            if (std::get<LetStmt>(stmt->value).initializer) merged = span::Span::merge(merged, (*std::get<LetStmt>(stmt->value).initializer)->span);
+            if (std::get<LetStmt>(stmt->value).pattern) {
+                merged = span::Span::merge(
+                    merged,
+                    std::get<LetStmt>(stmt->value).pattern->span);
+            }
+            if (std::get<LetStmt>(stmt->value).type_annotation) {
+                merged = span::Span::merge(
+                    merged,
+                    (*std::get<LetStmt>(stmt->value).type_annotation)->span);
+            }
+            if (std::get<LetStmt>(stmt->value).initializer) {
+                merged = span::Span::merge(
+                    merged,
+                    (*std::get<LetStmt>(stmt->value).initializer)->span);
+            }
             return annotate_stmt<LetStmt>(std::move(stmt), merged);
         }).label("a let statement");
 }

@@ -19,8 +19,58 @@ void PatternParserBuilder::finalize(const ParserRegistry& registry, std::functio
     auto pathPattern = buildPathPattern(pathParser);
     auto refPattern = buildRefPattern(selfParser);
 
-    auto single_pattern = refPattern | literalPattern |
-                   wildcardPattern | identifierPattern | pathPattern;
+    auto single_pattern = parsec::Parser<PatternPtr, Token>(
+        [refPattern,
+         literalPattern,
+         wildcardPattern,
+         identifierPattern,
+         pathPattern](parsec::ParseContext<Token>& context) -> parsec::ParseResult<PatternPtr> {
+            if (context.isEOF()) {
+                return parsec::ParseError{context.position, {"a pattern"}, {}, true};
+            }
+
+            const auto& token = context.tokens[context.position];
+            if (token.type == TOKEN_OPERATOR) {
+                if (token.value == "&") {
+                    return refPattern.parse(context);
+                }
+                if (token.value == "-") {
+                    return literalPattern.parse(context);
+                }
+            }
+            if (token.type == TOKEN_NUMBER || token.type == TOKEN_STRING ||
+                token.type == TOKEN_CHAR ||
+                (token.type == TOKEN_KEYWORD &&
+                 (token.value == "true" || token.value == "false"))) {
+                return literalPattern.parse(context);
+            }
+            if (token.value == "_") {
+                return wildcardPattern.parse(context);
+            }
+            if (token.type == TOKEN_KEYWORD &&
+                (token.value == "self" || token.value == "Self")) {
+                return pathPattern.parse(context);
+            }
+            if (token.type == TOKEN_IDENTIFIER) {
+                const bool is_path =
+                    context.position + 1 < context.tokens.size() &&
+                    context.tokens[context.position + 1].type == TOKEN_SEPARATOR &&
+                    context.tokens[context.position + 1].value == "::";
+                return is_path ? pathPattern.parse(context) : identifierPattern.parse(context);
+            }
+            if (token.type == TOKEN_KEYWORD &&
+                (token.value == "ref" || token.value == "mut")) {
+                return identifierPattern.parse(context);
+            }
+
+            return parsec::ParseError{
+                context.position,
+                {"a pattern"},
+                {},
+                true,
+                token.span,
+            };
+        }).label("a pattern");
     
     set_pattern_parser(single_pattern);
 }
