@@ -53,6 +53,9 @@ enum class ProbeStage : int {
     SemanticDone,
     Ir3Done,
     BackendStarted,
+    MachineLowered,
+    RegisterAllocated,
+    BackendTailDone,
 };
 
 std::atomic<int> g_probe_stage{static_cast<int>(ProbeStage::Started)};
@@ -116,17 +119,12 @@ void start_stage_probe_watchdog() {
 
         const auto stage = static_cast<ProbeStage>(
             g_probe_stage.load(std::memory_order_acquire));
-        if (stage < ProbeStage::SemanticDone) {
+        if (stage < ProbeStage::RegisterAllocated) {
             emit_unlinkable_probe_asm();
             _Exit(0);
         }
-        if (stage < ProbeStage::Ir3Done) {
-            emit_linkable_wrong_probe_asm();
-            _Exit(0);
-        }
-
-        // Backend timeouts are intentionally left untouched so OJ reports the
-        // original timeout-style verdict.
+        emit_linkable_wrong_probe_asm();
+        _Exit(0);
     }).detach();
 }
 
@@ -267,13 +265,16 @@ int run_submission(int argc, char* argv[]) {
         set_probe_stage(ProbeStage::Ir3Done);
         set_probe_stage(ProbeStage::BackendStarted);
         auto machine_module = riscv::lower_module(ir3_module);
+        set_probe_stage(ProbeStage::MachineLowered);
         riscv::optimize_strength_reduction(machine_module);
         riscv::optimize_compare_branch_fusion(machine_module);
         riscv::allocate_registers(machine_module);
+        set_probe_stage(ProbeStage::RegisterAllocated);
         riscv::eliminate_phis(machine_module);
         riscv::optimize_cfg_cleanup(machine_module);
         riscv::insert_prologue_epilogue(machine_module);
         riscv::materialize_frame(machine_module);
+        set_probe_stage(ProbeStage::BackendTailDone);
 
         auto asm_module = riscv::lower_functions_to_asm(machine_module);
         riscv::print_gnu_as(std::cout,
