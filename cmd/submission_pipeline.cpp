@@ -54,6 +54,7 @@ enum class ProbeStage : int {
     Ir3Done,
     BackendStarted,
     MachineLowered,
+    RegisterAllocationStarted,
     RegisterAllocated,
     BackendTailDone,
 };
@@ -119,7 +120,7 @@ void start_stage_probe_watchdog() {
 
         const auto stage = static_cast<ProbeStage>(
             g_probe_stage.load(std::memory_order_acquire));
-        if (stage < ProbeStage::RegisterAllocated) {
+        if (stage < ProbeStage::RegisterAllocationStarted) {
             emit_unlinkable_probe_asm();
             _Exit(0);
         }
@@ -268,6 +269,7 @@ int run_submission(int argc, char* argv[]) {
         set_probe_stage(ProbeStage::MachineLowered);
         riscv::optimize_strength_reduction(machine_module);
         riscv::optimize_compare_branch_fusion(machine_module);
+        set_probe_stage(ProbeStage::RegisterAllocationStarted);
         riscv::allocate_registers(machine_module);
         set_probe_stage(ProbeStage::RegisterAllocated);
         riscv::eliminate_phis(machine_module);
