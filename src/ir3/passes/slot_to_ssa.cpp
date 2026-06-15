@@ -18,10 +18,10 @@
 namespace ir3 {
 namespace {
 
-struct PromotedSlot {
+struct PhiPlacement {
     SlotId slot = 0;
-    SsaClass klass = SsaClass::I32;
-    std::unordered_map<BlockId, ValueId> phi_results;
+    std::size_t phi_index = 0;
+    ValueId result = 0;
 };
 
 std::optional<SlotId> exact_root_slot(const Place& place) {
@@ -30,14 +30,6 @@ std::optional<SlotId> exact_root_slot(const Place& place) {
         return std::nullopt;
     }
     return base->slot;
-}
-
-std::unordered_map<ValueId, std::size_t> phi_index_by_result(const BasicBlock& block) {
-    std::unordered_map<ValueId, std::size_t> result;
-    for (std::size_t i = 0; i < block.phis.size(); ++i) {
-        result.emplace(block.phis[i].result.id, i);
-    }
-    return result;
 }
 
 } // namespace
@@ -61,6 +53,7 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
 
     std::unordered_map<ValueId, ValueId> replacements;
     std::vector<bool> promoted_slots(fn.slots.size(), false);
+    std::vector<std::vector<PhiPlacement>> phis_by_block(fn.blocks.size());
     bool changed = false;
 
     for (SlotId slot = 0; slot < fn.slots.size(); ++slot) {
@@ -77,10 +70,6 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
             continue;
         }
 
-        PromotedSlot promoted;
-        promoted.slot = slot;
-        promoted.klass = *klass;
-        bool slot_changed = true;
         std::vector<bool> has_phi(fn.blocks.size(), false);
         std::vector<BlockId> worklist = use.def_blocks;
 
@@ -92,19 +81,34 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
                 }
                 has_phi[target] = true;
                 auto result = Value{.id = fn.next_value++, .klass = *klass};
+                const auto phi_index = fn.blocks[target].phis.size();
                 fn.blocks[target].phis.push_back(Phi{
                     .result = result,
                     .incoming = {},
                 });
-                promoted.phi_results.emplace(target, result.id);
+                phis_by_block[target].push_back(PhiPlacement{
+                    .slot = slot,
+                    .phi_index = phi_index,
+                    .result = result.id,
+                });
                 worklist.push_back(target);
             }
         }
 
-        auto rename_block =
-            [&](auto&& self, BlockId block, std::optional<ValueId> current) -> void {
-            if (const auto it = promoted.phi_results.find(block); it != promoted.phi_results.end()) {
-                current = it->second;
+        promoted_slots[slot] = true;
+        changed = true;
+    }
+
+    if (!changed) {
+        return PreservedAnalyses::all();
+    }
+
+    auto rename_block =
+        [&](auto&& self,
+            BlockId block,
+            std::vector<std::optional<ValueId>> current) -> void {
+            for (const auto& phi : phis_by_block[block]) {
+                current[phi.slot] = phi.result;
             }
 
             auto& instructions = fn.blocks[block].instructions;
@@ -112,48 +116,41 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
                 auto& inst = instructions[ii];
                 if (auto* load = std::get_if<Load>(&inst)) {
                     const auto slot_ref = exact_root_slot(load->source);
-                    if (!slot_ref || *slot_ref != slot) {
+                    if (!slot_ref || !promoted_slots[*slot_ref]) {
                         continue;
                     }
-                    if (!current.has_value()) {
+                    if (!current[*slot_ref].has_value()) {
                         throw std::runtime_error("IR3 slot-to-SSA found reachable load-before-def for slot %" +
-                                                 std::to_string(slot) + " in @" + fn.symbol);
+                                                 std::to_string(*slot_ref) + " in @" + fn.symbol);
                     }
-                    replacements[load->result.id] = detail::resolve_replacement(replacements, *current);
+                    replacements[load->result.id] =
+                        detail::resolve_replacement(replacements, *current[*slot_ref]);
                     erase_mask[block][ii] = true;
-                    slot_changed = true;
                 } else if (auto* store = std::get_if<Store>(&inst)) {
                     const auto slot_ref = exact_root_slot(store->dest);
-                    if (!slot_ref || *slot_ref != slot) {
+                    if (!slot_ref || !promoted_slots[*slot_ref]) {
                         continue;
                     }
-                    current = detail::resolve_replacement(replacements, store->value);
+                    current[*slot_ref] =
+                        detail::resolve_replacement(replacements, store->value);
                     erase_mask[block][ii] = true;
-                    slot_changed = true;
                 }
             }
 
             for (BlockId succ : cfg.successors[block]) {
-                const auto phi_it = promoted.phi_results.find(succ);
-                if (phi_it == promoted.phi_results.end()) {
-                    continue;
+                for (const auto& phi : phis_by_block[succ]) {
+                    if (!current[phi.slot].has_value()) {
+                        throw std::runtime_error("IR3 slot-to-SSA found missing predecessor value for slot %" +
+                                                 std::to_string(phi.slot) + " into bb" +
+                                                 std::to_string(succ) + " in @" + fn.symbol);
+                    }
+                    fn.blocks[succ].phis[phi.phi_index].incoming.push_back(
+                        PhiIncoming{
+                            .pred = block,
+                            .value = detail::resolve_replacement(replacements,
+                                                                  *current[phi.slot]),
+                        });
                 }
-                if (!current.has_value()) {
-                    throw std::runtime_error("IR3 slot-to-SSA found missing predecessor value for slot %" +
-                                             std::to_string(slot) + " into bb" +
-                                             std::to_string(succ) + " in @" + fn.symbol);
-                }
-                auto indices = phi_index_by_result(fn.blocks[succ]);
-                auto index_it = indices.find(phi_it->second);
-                if (index_it == indices.end()) {
-                    throw std::runtime_error("IR3 slot-to-SSA lost inserted phi for slot %" +
-                                             std::to_string(slot) + " in @" + fn.symbol);
-                }
-                fn.blocks[succ].phis[index_it->second].incoming.push_back(
-                    PhiIncoming{
-                        .pred = block,
-                        .value = detail::resolve_replacement(replacements, *current),
-                    });
             }
 
             for (BlockId child : dom.children[block]) {
@@ -161,29 +158,19 @@ PreservedAnalyses SlotToSsaPass::run(Function& fn, AnalysisManager& am) {
             }
         };
 
-        rename_block(rename_block, fn.entry_block, std::nullopt);
-        for (const auto& [block, phi_result] : promoted.phi_results) {
-            auto indices = phi_index_by_result(fn.blocks[block]);
-            const auto index_it = indices.find(phi_result);
-            if (index_it == indices.end()) {
-                throw std::runtime_error("IR3 slot-to-SSA lost inserted phi for slot %" +
-                                         std::to_string(slot) + " in @" + fn.symbol);
-            }
-            auto& incoming = fn.blocks[block].phis[index_it->second].incoming;
+    rename_block(rename_block,
+                 fn.entry_block,
+                 std::vector<std::optional<ValueId>>(fn.slots.size()));
+
+    for (BlockId block = 0; block < phis_by_block.size(); ++block) {
+        for (const auto& phi : phis_by_block[block]) {
+            auto& incoming = fn.blocks[block].phis[phi.phi_index].incoming;
             std::sort(incoming.begin(),
                       incoming.end(),
                       [](const PhiIncoming& lhs, const PhiIncoming& rhs) {
                           return lhs.pred < rhs.pred;
                       });
         }
-        if (slot_changed) {
-            promoted_slots[slot] = true;
-            changed = true;
-        }
-    }
-
-    if (!changed) {
-        return PreservedAnalyses::all();
     }
 
     detail::rewrite_all_uses(fn, replacements);
