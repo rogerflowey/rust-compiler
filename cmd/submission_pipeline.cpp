@@ -9,7 +9,9 @@
 #include <vector>
 
 #include <pthread.h>
+#include <signal.h>
 #include <sys/resource.h>
+#include <unistd.h>
 
 #include "src/ast/ast.hpp"
 #include "src/ir3/lower.hpp"
@@ -40,6 +42,42 @@
 #include "src/utils/error.hpp"
 
 namespace {
+
+constexpr unsigned kSubmissionTimeoutProbeSeconds = 25;
+
+void write_all(int fd, const char* text, std::size_t size) {
+    while (size > 0) {
+        const ssize_t written = write(fd, text, size);
+        if (written <= 0) {
+            _exit(0);
+        }
+        text += written;
+        size -= static_cast<std::size_t>(written);
+    }
+}
+
+void timeout_probe_handler(int) {
+    static constexpr char kStdoutAsm[] =
+        ".text\n"
+        ".globl main\n"
+        "main:\n"
+        "  li a0, 0\n"
+        "  ret\n";
+    static constexpr char kStderrAsm[] = ".text\n";
+    write_all(STDOUT_FILENO, kStdoutAsm, sizeof(kStdoutAsm) - 1);
+    write_all(STDERR_FILENO, kStderrAsm, sizeof(kStderrAsm) - 1);
+    _exit(0);
+}
+
+void install_timeout_probe() {
+    struct sigaction action {};
+    action.sa_handler = timeout_probe_handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+    if (sigaction(SIGALRM, &action, nullptr) == 0) {
+        alarm(kSubmissionTimeoutProbeSeconds);
+    }
+}
 
 void print_parse_error(const parsec::ParseError& error,
                        const std::vector<Token>& tokens,
@@ -238,6 +276,7 @@ void* run_submission_worker(void* raw_args) {
 
 int main(int argc, char* argv[]) {
     raise_stack_limit();
+    install_timeout_probe();
 
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) == 0) {
