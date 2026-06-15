@@ -106,9 +106,8 @@ void ExprParserBuilder::finalize(
     auto literalParser = buildLiteralParser();
     auto groupedParser = buildGroupedParser(selfParser);
     auto arrayParser = buildArrayParser(selfParser);
-    auto pathExprParser = buildPathExprParser(pathParser);
+    auto pathOrStructExprParser = buildPathOrStructExprParser(pathParser, selfParser);
     auto blockParser = buildBlockParser(stmtParser, selfParser);
-    auto structExprParser = buildStructExprParser(pathParser, selfParser);
 
     auto [ifExprParser, whileExprParser, loopExprParser] = buildControlFlowParsers(selfParser, blockParser);
     auto withBlockParser = blockParser | ifExprParser | whileExprParser | loopExprParser;
@@ -116,7 +115,7 @@ void ExprParserBuilder::finalize(
     auto [returnExprParser, breakExprParser, continueExprParser] = buildFlowTerminators(selfParser);
 
     auto prefixAndCastParser = buildPrefixAndCastChain(
-        literalParser, groupedParser, arrayParser, structExprParser, pathExprParser, withBlockParser,
+        literalParser, groupedParser, arrayParser, pathOrStructExprParser, withBlockParser,
         returnExprParser, breakExprParser, continueExprParser,
         selfParser, typeParser
     );
@@ -205,7 +204,7 @@ ExprParser ExprParserBuilder::buildPathExprParser(const PathParser& pathParser) 
     }).label("a path expression");
 }
 
-ExprParser ExprParserBuilder::buildStructExprParser(const PathParser& pathParser, const ExprParser& self) const {
+ExprParser ExprParserBuilder::buildPathOrStructExprParser(const PathParser& pathParser, const ExprParser& self) const {
     auto p_field_init = p_identifier.andThen(equal({TOKEN_SEPARATOR, ":"}) > self)
         .map([](auto&& pair) {
             StructExpr::FieldInit init{std::move(std::get<0>(pair)), std::move(std::get<1>(pair))};
@@ -216,20 +215,40 @@ ExprParser ExprParserBuilder::buildStructExprParser(const PathParser& pathParser
             return init;
         });
     auto p_fields_block = equal({TOKEN_DELIMITER, "{"}) > p_field_init.tuple(equal({TOKEN_SEPARATOR, ","})).optional() < equal({TOKEN_DELIMITER, "}"});
-    return pathParser.andThen(p_fields_block)
-        .map([](auto&& pair) -> ExprPtr {
-            auto path = std::move(std::get<0>(pair));
-            auto maybe_fields = std::move(std::get<1>(pair));
+    return parsec::Parser<ExprPtr, Token>(
+        [pathParser, p_fields_block](parsec::ParseContext<Token>& context) -> parsec::ParseResult<ExprPtr> {
+            auto path_res = pathParser.parse(context);
+            if (std::holds_alternative<parsec::ParseError>(path_res)) {
+                return std::get<parsec::ParseError>(path_res);
+            }
+
+            auto path = std::move(std::get<PathPtr>(path_res));
+            if (context.isEOF() || context.tokens[context.position] != Token{TOKEN_DELIMITER, "{"}) {
+                if (path->segments.size() == 1 && path->segments[0].id && (*path->segments[0].id)->name == "_") {
+                    auto expr = make_expr<UnderscoreExpr>();
+                    return annotate_expr<UnderscoreExpr>(std::move(expr), path->span);
+                }
+                auto expr = make_expr<PathExpr>(std::move(path));
+                auto span = std::get<PathExpr>(expr->value).path ? std::get<PathExpr>(expr->value).path->span : span::Span::invalid();
+                return annotate_expr<PathExpr>(std::move(expr), span);
+            }
+
+            auto fields_res = p_fields_block.parse(context);
+            if (std::holds_alternative<parsec::ParseError>(fields_res)) {
+                return std::get<parsec::ParseError>(fields_res);
+            }
+
+            auto maybe_fields = std::move(std::get<std::optional<std::vector<StructExpr::FieldInit>>>(fields_res));
             std::vector<StructExpr::FieldInit> fields;
             if (maybe_fields) fields = std::move(*maybe_fields);
             auto expr = make_expr<StructExpr>(std::move(path), std::move(fields));
-            auto &node = std::get<StructExpr>(expr->value);
+            auto& node = std::get<StructExpr>(expr->value);
             std::vector<span::Span> spans;
             if (node.path) spans.push_back(node.path->span);
-            for (const auto &f : node.fields) spans.push_back(f.span);
+            for (const auto& f : node.fields) spans.push_back(f.span);
             auto merged = merge_span_list(spans);
             return annotate_expr<StructExpr>(std::move(expr), merged);
-        }).label("a struct expression");
+        }).label("a path or struct expression");
 }
 
 ExprParser ExprParserBuilder::buildBlockParser(const StmtParser& stmtParser, const ExprParser& self) const {
@@ -416,11 +435,65 @@ ExprParser ExprParserBuilder::buildPostfixChainParser(const ExprParser& base, co
 }
 
 ExprParser ExprParserBuilder::buildPrefixAndCastChain(
-    const ExprParser& literal, const ExprParser& grouped, const ExprParser& array, const ExprParser& structExpr, const ExprParser& path,
+    const ExprParser& literal, const ExprParser& grouped, const ExprParser& array, const ExprParser& pathOrStruct,
     const ExprParser& withBlock, const ExprParser& ret, const ExprParser& brk, const ExprParser& cont,
     const ExprParser& self, const TypeParser& typeParser
 ) const {
-    auto p_base_atoms = (literal | grouped | array | structExpr | path | withBlock | ret | brk | cont).label("an atomic expression");
+    auto p_base_atoms = parsec::Parser<ExprPtr, Token>(
+        [literal, grouped, array, pathOrStruct, withBlock, ret, brk, cont](
+            parsec::ParseContext<Token>& context) -> parsec::ParseResult<ExprPtr> {
+            if (context.isEOF()) {
+                return parsec::ParseError{context.position, {"an atomic expression"}, {}, true};
+            }
+
+            const Token& token = context.tokens[context.position];
+            if (token.type == TOKEN_IDENTIFIER) {
+                return pathOrStruct.parse(context);
+            }
+            if (token.type == TOKEN_NUMBER || token.type == TOKEN_STRING ||
+                token.type == TOKEN_CHAR) {
+                return literal.parse(context);
+            }
+            if (token.type == TOKEN_DELIMITER) {
+                if (token.value == "(") {
+                    return grouped.parse(context);
+                }
+                if (token.value == "[") {
+                    return array.parse(context);
+                }
+                if (token.value == "{") {
+                    return withBlock.parse(context);
+                }
+            }
+            if (token.type == TOKEN_KEYWORD) {
+                if (token.value == "true" || token.value == "false") {
+                    return literal.parse(context);
+                }
+                if (token.value == "self" || token.value == "Self") {
+                    return pathOrStruct.parse(context);
+                }
+                if (token.value == "if" || token.value == "while" || token.value == "loop") {
+                    return withBlock.parse(context);
+                }
+                if (token.value == "return") {
+                    return ret.parse(context);
+                }
+                if (token.value == "break") {
+                    return brk.parse(context);
+                }
+                if (token.value == "continue") {
+                    return cont.parse(context);
+                }
+            }
+
+            return parsec::ParseError{
+                context.position,
+                {"an atomic expression"},
+                {},
+                true,
+                token.span,
+            };
+        }).label("an atomic expression");
     auto p_postfix = buildPostfixChainParser(p_base_atoms, self);
     using Wrap = std::function<ExprPtr(ExprPtr)>;
     auto p_not = equal({TOKEN_OPERATOR, "!"}).map([](Token tok) -> Wrap {

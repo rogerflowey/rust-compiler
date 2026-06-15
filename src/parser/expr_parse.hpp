@@ -34,13 +34,13 @@ private:
     ExprParser buildGroupedParser(const ExprParser& self) const;
     ExprParser buildArrayParser(const ExprParser& self) const;
     ExprParser buildPathExprParser(const PathParser& pathParser) const;
-    ExprParser buildStructExprParser(const PathParser& pathParser, const ExprParser& self) const;
+    ExprParser buildPathOrStructExprParser(const PathParser& pathParser, const ExprParser& self) const;
     ExprParser buildBlockParser(const StmtParser& stmtParser, const ExprParser& self) const;
     std::tuple<ExprParser, ExprParser, ExprParser> buildControlFlowParsers(const ExprParser& self, const ExprParser& blockParser) const;
     std::tuple<ExprParser, ExprParser, ExprParser> buildFlowTerminators(const ExprParser& self) const;
     ExprParser buildPostfixChainParser(const ExprParser& base, const ExprParser& self) const;
     ExprParser buildPrefixAndCastChain(
-        const ExprParser& literal, const ExprParser& grouped, const ExprParser& array, const ExprParser& structExpr, const ExprParser& path,
+        const ExprParser& literal, const ExprParser& grouped, const ExprParser& array, const ExprParser& pathOrStruct,
         const ExprParser& withBlock, const ExprParser& ret, const ExprParser& brk, const ExprParser& cont,
         const ExprParser& self, const TypeParser& typeParser
     ) const;
