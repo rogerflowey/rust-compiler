@@ -86,7 +86,6 @@ struct CoalescedNode {
     std::optional<PhysicalRegister> precolor;
     std::size_t weight = 0;
     std::unordered_set<int> neighbors;
-    std::vector<int> originals;
     std::vector<MachineValueId> members;
 };
 
@@ -697,7 +696,6 @@ CoalescedGraph build_coalesced_graph(const GraphInput& input, Dsu& dsu) {
         auto& node = graph.nodes[rep];
         node.rep = rep;
         node.weight += input.table.nodes[i].weight;
-        node.originals.push_back(static_cast<int>(i));
         if (input.table.nodes[i].precolor) {
             node.precolor = input.table.nodes[i].precolor;
         }
@@ -743,9 +741,6 @@ void merge_coalesced_nodes(CoalescedGraph& graph, int lhs, int rhs, int rep) {
     rep_node.members.insert(rep_node.members.end(),
                             std::make_move_iterator(merged_node.members.begin()),
                             std::make_move_iterator(merged_node.members.end()));
-    rep_node.originals.insert(rep_node.originals.end(),
-                              std::make_move_iterator(merged_node.originals.begin()),
-                              std::make_move_iterator(merged_node.originals.end()));
 
     rep_node.neighbors.erase(rep);
     rep_node.neighbors.erase(merged);
@@ -823,51 +818,21 @@ Allocation color_graph(MachineFunction& fn,
     Dsu dsu(input.table.nodes.size());
     CoalescedGraph graph = build_coalesced_graph(input, dsu);
 
-    std::vector<std::vector<std::size_t>> affinity_by_original(input.table.nodes.size());
-    for (std::size_t i = 0; i < input.affinity_edges.size(); ++i) {
-        const auto& edge = input.affinity_edges[i];
-        affinity_by_original[static_cast<std::size_t>(edge.lhs)].push_back(i);
-        affinity_by_original[static_cast<std::size_t>(edge.rhs)].push_back(i);
-    }
-
-    std::vector<std::size_t> coalesce_worklist;
-    coalesce_worklist.reserve(input.affinity_edges.size());
-    std::vector<char> queued(input.affinity_edges.size(), false);
-    auto enqueue_affinity = [&](std::size_t edge_index) {
-        const auto& edge = input.affinity_edges[edge_index];
-        if (dsu.find(edge.lhs) == dsu.find(edge.rhs)) {
-            return;
-        }
-        if (queued[edge_index]) {
-            return;
-        }
-        queued[edge_index] = true;
-        coalesce_worklist.push_back(edge_index);
-    };
-    for (std::size_t i = 0; i < input.affinity_edges.size(); ++i) {
-        enqueue_affinity(i);
-    }
-
     CoalesceScratch coalesce_scratch(input.table.nodes.size());
-    for (std::size_t cursor = 0; cursor < coalesce_worklist.size(); ++cursor) {
-        const std::size_t edge_index = coalesce_worklist[cursor];
-        queued[edge_index] = false;
-        const auto& edge = input.affinity_edges[edge_index];
-        const int lhs = dsu.find(edge.lhs);
-        const int rhs = dsu.find(edge.rhs);
-        if (!can_coalesce(graph, lhs, rhs, coalesce_scratch)) {
-            continue;
-        }
-        const bool prefer_lhs = graph.nodes.at(lhs).precolor.has_value() ||
-                                !graph.nodes.at(rhs).precolor.has_value();
-        const int rep = dsu.unite(lhs, rhs, prefer_lhs);
-        merge_coalesced_nodes(graph, lhs, rhs, rep);
-
-        for (const int original : graph.nodes.at(rep).originals) {
-            const auto& affected_edges = affinity_by_original[static_cast<std::size_t>(original)];
-            for (const std::size_t affected : affected_edges) {
-                enqueue_affinity(affected);
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const auto& edge : input.affinity_edges) {
+            const int lhs = dsu.find(edge.lhs);
+            const int rhs = dsu.find(edge.rhs);
+            if (!can_coalesce(graph, lhs, rhs, coalesce_scratch)) {
+                continue;
             }
+            const bool prefer_lhs = graph.nodes.at(lhs).precolor.has_value() ||
+                                    !graph.nodes.at(rhs).precolor.has_value();
+            const int rep = dsu.unite(lhs, rhs, prefer_lhs);
+            merge_coalesced_nodes(graph, lhs, rhs, rep);
+            changed = true;
         }
     }
     std::unordered_map<int, PhysicalRegister> colors;
@@ -891,26 +856,17 @@ Allocation color_graph(MachineFunction& fn,
     };
     std::vector<StackEntry> stack;
     stack.reserve(active.size());
-    std::vector<int> low_degree_worklist;
-    low_degree_worklist.reserve(active.size());
-    for (const int rep : active) {
-        if (degree.at(rep) < kAllocatable.size()) {
-            low_degree_worklist.push_back(rep);
-        }
-    }
 
     while (!active.empty()) {
+        auto low_degree = std::find_if(active.begin(), active.end(), [&](int rep) {
+            return degree.at(rep) < kAllocatable.size();
+        });
+
         int chosen = -1;
         bool spill_bias = false;
-        while (!low_degree_worklist.empty()) {
-            const int candidate = low_degree_worklist.back();
-            low_degree_worklist.pop_back();
-            if (active.contains(candidate) && degree.at(candidate) < kAllocatable.size()) {
-                chosen = candidate;
-                break;
-            }
-        }
-        if (chosen == -1) {
+        if (low_degree != active.end()) {
+            chosen = *low_degree;
+        } else {
             spill_bias = true;
             chosen = *std::min_element(
                 active.begin(),
@@ -932,10 +888,7 @@ Allocation color_graph(MachineFunction& fn,
         stack.push_back({.rep = chosen, .spill_bias = spill_bias});
         for (const int neighbor : graph.nodes.at(chosen).neighbors) {
             if (active.contains(neighbor)) {
-                const auto new_degree = --degree[neighbor];
-                if (new_degree < kAllocatable.size()) {
-                    low_degree_worklist.push_back(neighbor);
-                }
+                --degree[neighbor];
             }
         }
     }
