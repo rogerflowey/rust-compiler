@@ -148,6 +148,8 @@ const char* binary_name(BinaryOp op) {
         return "sub";
     case BinaryOp::Mul:
         return "mul";
+    case BinaryOp::MulH:
+        return "mulh";
     case BinaryOp::Div:
         return "div";
     case BinaryOp::DivU:

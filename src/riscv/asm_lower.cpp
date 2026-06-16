@@ -381,6 +381,8 @@ AsmOpcode lower_binary_opcode(BinaryOp op, MachineWidth width, const TargetConfi
         return word ? AsmOpcode::Subw : AsmOpcode::Sub;
     case BinaryOp::Mul:
         return word ? AsmOpcode::Mulw : AsmOpcode::Mul;
+    case BinaryOp::MulH:
+        return AsmOpcode::Mulh;
     case BinaryOp::Div:
         return word ? AsmOpcode::Divw : AsmOpcode::Div;
     case BinaryOp::DivU:

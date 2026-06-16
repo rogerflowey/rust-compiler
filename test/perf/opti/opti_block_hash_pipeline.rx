@@ -1,0 +1,46 @@
+fn norm(value: i32) -> i32 {
+    let r: i32 = value % 1000003i32;
+    if (r < 0i32) { return r + 1000003i32; } else { return r; }
+}
+
+fn main() {
+    let seed: i32 = getInt();
+    let mut bytes: [i32; 256] = [0i32; 256usize];
+    let mut prefix: [i32; 257] = [0i32; 257usize];
+    let mut i: i32 = 0i32;
+    while i < 256i32 {
+        bytes[i as usize] = (seed + i * 31i32 + i * i * 5i32) % 251i32;
+        prefix[(i + 1i32) as usize] = norm(prefix[i as usize] * 257i32 + bytes[i as usize] + 1i32);
+        i = i + 1i32;
+    }
+    let mut block_hash: [i32; 64] = [0i32; 64usize];
+    let mut block: i32 = 0i32;
+    while block < 64i32 {
+        let start: i32 = block * 4i32;
+        let mut h: i32 = 0i32;
+        let mut j: i32 = 0i32;
+        while j < 4i32 {
+            h = norm(h * 263i32 + bytes[(start + j) as usize] + block);
+            j = j + 1i32;
+        }
+        block_hash[block as usize] = h;
+        block = block + 1i32;
+    }
+    let mut round: i32 = 0i32;
+    let mut acc: i32 = 0i32;
+    while round < 50000i32 {
+        let block_id: i32 = (round * 13i32 + seed) % 64i32;
+        let span: i32 = 1i32 + (round % 8i32);
+        let block_end: i32 = block_id + span;
+        let mut mixed: i32 = block_hash[block_id as usize];
+        if (block_end < 64i32) {
+            mixed = mixed + block_hash[block_end as usize];
+        } else {
+            mixed = mixed + block_hash[(block_end - 64i32) as usize];
+        }
+        acc = norm(acc * 911i32 + mixed + prefix[(round % 256i32) as usize]);
+        round = round + 1i32;
+    }
+    printlnInt(acc);
+    exit(0i32);
+}

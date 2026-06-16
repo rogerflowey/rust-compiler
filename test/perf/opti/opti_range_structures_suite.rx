@@ -1,0 +1,53 @@
+fn lowbit(x: i32) -> i32 {
+    return x & (0i32 - x);
+}
+
+fn prefix_sum(tree: [i32; 129], index: i32) -> i32 {
+    let mut i: i32 = index;
+    let mut result: i32 = 0i32;
+    while i > 0i32 {
+        result = result + tree[i as usize];
+        i = i - lowbit(i);
+    }
+    return result;
+}
+
+fn main() {
+    let seed: i32 = getInt();
+    let mut tree: [i32; 129] = [0i32; 129usize];
+    let mut raw: [i32; 128] = [0i32; 128usize];
+    let mut i: i32 = 1i32;
+    while i <= 128i32 {
+        let value: i32 = (seed + i * 23i32 + i * i) % 1000i32;
+        raw[(i - 1i32) as usize] = value;
+        let mut j: i32 = i;
+        while j <= 128i32 {
+            tree[j as usize] = tree[j as usize] + value;
+            j = j + lowbit(j);
+        }
+        i = i + 1i32;
+    }
+    let mut op: i32 = 0i32;
+    let mut checksum: i32 = 0i32;
+    while op < 24000i32 {
+        let pos: i32 = ((op * 17i32 + seed) % 128i32) + 1i32;
+        let delta: i32 = ((op + seed) % 31i32) - 15i32;
+        raw[(pos - 1i32) as usize] = raw[(pos - 1i32) as usize] + delta;
+        let mut j: i32 = pos;
+        while j <= 128i32 {
+            tree[j as usize] = tree[j as usize] + delta;
+            j = j + lowbit(j);
+        }
+        let left: i32 = ((op * 5i32 + 7i32) % 128i32) + 1i32;
+        let right: i32 = ((left + op % 37i32) % 128i32) + 1i32;
+        if (left <= right) {
+            checksum = checksum + prefix_sum(tree, right) - prefix_sum(tree, left - 1i32);
+        } else {
+            checksum = checksum + prefix_sum(tree, left) - prefix_sum(tree, right - 1i32);
+        }
+        op = op + 1i32;
+    }
+    printlnInt(checksum);
+    exit(0i32);
+}
+

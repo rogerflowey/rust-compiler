@@ -1,0 +1,85 @@
+fn norm_hash(value: i32) -> i32 {
+    let r: i32 = value % 1000003i32;
+    if (r < 0i32) {
+        return r + 1000003i32;
+    } else {
+        return r;
+    }
+}
+
+fn main() {
+    let seed: i32 = getInt();
+    let mut data: [i32; 192] = [0i32; 192usize];
+    let mut i: i32 = 0i32;
+    while i < 192i32 {
+        data[i as usize] = (seed + i * 17i32 + (i % 11i32) * 23i32) % 29i32;
+        if (i > 40i32 && i % 9i32 == 0i32) {
+            data[i as usize] = data[(i - 37i32) as usize];
+        }
+        i = i + 1i32;
+    }
+
+    let mut pos: i32 = 0i32;
+    let mut score: i32 = 0i32;
+    while pos < 184i32 {
+        let mut start: i32 = 0i32;
+        let mut cur4: i32 = 0i32;
+        let mut cur8: i32 = 0i32;
+        let mut hash_i: i32 = 0i32;
+        let mut cand: i32 = 0i32;
+        let mut best_len: i32 = 0i32;
+        let mut best_dist: i32 = 0i32;
+        let mut cand4: i32 = 0i32;
+        let mut cand8: i32 = 0i32;
+        if (pos > 48i32) {
+            start = pos - 48i32;
+        }
+        cur4 = 0i32;
+        cur8 = 0i32;
+        while hash_i < 4i32 {
+            cur4 = norm_hash(cur4 * 257i32 + data[(pos + hash_i) as usize] + 1i32);
+            hash_i = hash_i + 1i32;
+        }
+        hash_i = 0i32;
+        while hash_i < 8i32 {
+            cur8 = norm_hash(cur8 * 257i32 + data[(pos + hash_i) as usize] + 1i32);
+            hash_i = hash_i + 1i32;
+        }
+        cand = start;
+        best_len = 0i32;
+        best_dist = 0i32;
+        while cand < pos {
+            cand4 = 0i32;
+            cand8 = 0i32;
+            hash_i = 0i32;
+            while hash_i < 4i32 {
+                cand4 = norm_hash(cand4 * 257i32 + data[(cand + hash_i) as usize] + 1i32);
+                hash_i = hash_i + 1i32;
+            }
+            hash_i = 0i32;
+            while hash_i < 8i32 {
+                cand8 = norm_hash(cand8 * 257i32 + data[(cand + hash_i) as usize] + 1i32);
+                hash_i = hash_i + 1i32;
+            }
+            if (cand8 == cur8) {
+                best_len = 8i32;
+                best_dist = pos - cand;
+            } else {
+                if (cand4 == cur4 && best_len < 4i32) {
+                    best_len = 4i32;
+                    best_dist = pos - cand;
+                }
+            }
+            cand = cand + 1i32;
+        }
+        if (best_len >= 4i32) {
+            score = score + best_len * 101i32 - best_dist;
+            pos = pos + best_len;
+        } else {
+            score = score + data[pos as usize] + 1i32;
+            pos = pos + 1i32;
+        }
+    }
+    printlnInt(score);
+    exit(0i32);
+}

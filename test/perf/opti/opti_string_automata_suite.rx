@@ -1,0 +1,73 @@
+fn main() {
+    let seed: i32 = getInt();
+    let mut pattern: [i32; 18] = [0i32; 18usize];
+    let mut fail: [i32; 18] = [0i32; 18usize];
+    let mut i: i32 = 0i32;
+    while i < 18i32 {
+        pattern[i as usize] = (seed + i * 5i32 + i * i) % 6i32;
+        i = i + 1i32;
+    }
+    i = 1i32;
+    while i < 18i32 {
+        let mut j: i32 = fail[(i - 1i32) as usize];
+        let mut backtrack: i32 = 1i32;
+        while backtrack != 0i32 {
+            if (j <= 0i32) {
+                backtrack = 0i32;
+            } else {
+                if (pattern[i as usize] == pattern[j as usize]) {
+                    backtrack = 0i32;
+                } else {
+                    j = fail[(j - 1i32) as usize];
+                }
+            }
+        }
+        if (pattern[i as usize] == pattern[j as usize]) {
+            j = j + 1i32;
+        }
+        fail[i as usize] = j;
+        i = i + 1i32;
+    }
+    let mut trans: [i32; 108] = [0i32; 108usize];
+    let mut state: i32 = 0i32;
+    while state < 18i32 {
+        let mut ch: i32 = 0i32;
+        while ch < 6i32 {
+            let mut next: i32 = state;
+            let mut fallback: i32 = 1i32;
+            while fallback != 0i32 {
+                if (next <= 0i32) {
+                    fallback = 0i32;
+                } else {
+                    if (pattern[next as usize] == ch) {
+                        fallback = 0i32;
+                    } else {
+                        next = fail[(next - 1i32) as usize];
+                    }
+                }
+            }
+            if (pattern[next as usize] == ch) {
+                next = next + 1i32;
+            }
+            trans[(state * 6i32 + ch) as usize] = next;
+            ch = ch + 1i32;
+        }
+        state = state + 1i32;
+    }
+    let mut checksum: i32 = 0i32;
+    state = 0i32;
+    i = 0i32;
+    while i < 70000i32 {
+        let ch: i32 = (seed + i * 7i32 + checksum) % 6i32;
+        state = trans[(state * 6i32 + ch) as usize];
+        if (state == 18i32) {
+            checksum = checksum + i;
+            state = fail[17usize];
+        } else {
+            checksum = checksum + state;
+        }
+        i = i + 1i32;
+    }
+    printlnInt(checksum);
+    exit(0i32);
+}

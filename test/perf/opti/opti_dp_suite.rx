@@ -1,0 +1,51 @@
+fn max_i32(a: i32, b: i32) -> i32 {
+    if (a > b) { return a; } else { return b; }
+}
+
+fn main() {
+    let seed: i32 = getInt();
+    let mut dp: [i32; 96] = [0i32; 96usize];
+    let mut weight: [i32; 48] = [0i32; 48usize];
+    let mut value: [i32; 48] = [0i32; 48usize];
+    let mut i: i32 = 0i32;
+    while i < 48i32 {
+        weight[i as usize] = (i * 7i32 + seed) % 17i32 + 1i32;
+        value[i as usize] = (i * 11i32 + seed * 3i32) % 101i32 + 5i32;
+        i = i + 1i32;
+    }
+    i = 0i32;
+    while i < 48i32 {
+        let mut cap: i32 = 95i32;
+        while cap >= weight[i as usize] {
+            let candidate: i32 = dp[(cap - weight[i as usize]) as usize] + value[i as usize];
+            dp[cap as usize] = max_i32(dp[cap as usize], candidate);
+            cap = cap - 1i32;
+        }
+        i = i + 1i32;
+    }
+    let mut paths: [i32; 100] = [0i32; 100usize];
+    let mut r: i32 = 0i32;
+    while r < 10i32 {
+        let mut c: i32 = 0i32;
+        while c < 10i32 {
+            let idx: i32 = r * 10i32 + c;
+            let cost: i32 = ((r + 1i32) * (c + 3i32) + seed) % 19i32;
+            if (r == 0i32) {
+                paths[idx as usize] = cost;
+            } else {
+                if (c == 0i32) {
+                    paths[idx as usize] = paths[((r - 1i32) * 10i32 + c) as usize] + cost;
+                } else {
+                    let up: i32 = paths[((r - 1i32) * 10i32 + c) as usize];
+                    let left: i32 = paths[(r * 10i32 + c - 1i32) as usize];
+                    if (up < left) { paths[idx as usize] = up + cost; } else { paths[idx as usize] = left + cost; }
+                }
+            }
+            c = c + 1i32;
+        }
+        r = r + 1i32;
+    }
+    printlnInt(dp[95usize] + paths[99usize]);
+    exit(0i32);
+}
+

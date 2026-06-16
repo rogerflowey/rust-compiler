@@ -1,0 +1,52 @@
+fn next_state(state: i32, input: i32) -> i32 {
+    if (state == 0i32) {
+        if (input < 3i32) { return 1i32; } else { return 4i32; }
+    } else {
+        if (state == 1i32) {
+            if (input == 5i32) { return 3i32; } else { return 2i32; }
+        } else {
+            if (state == 2i32) {
+                if (input > 6i32) { return 5i32; } else { return 0i32; }
+            } else {
+                if (state == 3i32) {
+                    if (input < 4i32) { return 2i32; } else { return 6i32; }
+                } else {
+                    if (state == 4i32) {
+                        if (input == 1i32) { return 6i32; } else { return 3i32; }
+                    } else {
+                        if (state == 5i32) {
+                            if (input < 5i32) { return 4i32; } else { return 1i32; }
+                        } else {
+                            if (input > 7i32) { return 0i32; } else { return 5i32; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    let seed: i32 = getInt();
+    let mut i: i32 = 0i32;
+    let mut state: i32 = seed % 7i32;
+    if (state < 0i32) { state = state + 7i32; }
+    let mut score: i32 = 0i32;
+    while i < 120000i32 {
+        let input: i32 = (seed + i * 13i32 + score / 17i32) % 11i32;
+        state = next_state(state, input);
+        if (state == 0i32) {
+            score = score + input + i % 5i32;
+        } else {
+            if (state == 3i32) {
+                score = score - input * 2i32 + 9i32;
+            } else {
+                score = score + state * input - i % 3i32;
+            }
+        }
+        i = i + 1i32;
+    }
+    printlnInt(score + state);
+    exit(0i32);
+}
+

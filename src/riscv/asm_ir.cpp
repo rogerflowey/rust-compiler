@@ -148,6 +148,8 @@ const char* asm_opcode_name(AsmOpcode opcode) {
         return "sltiu";
     case AsmOpcode::Mul:
         return "mul";
+    case AsmOpcode::Mulh:
+        return "mulh";
     case AsmOpcode::Mulw:
         return "mulw";
     case AsmOpcode::Div:

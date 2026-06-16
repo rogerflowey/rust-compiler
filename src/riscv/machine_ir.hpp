@@ -73,6 +73,7 @@ enum class BinaryOp {
     Add,
     Sub,
     Mul,
+    MulH,
     Div,
     DivU,
     Rem,

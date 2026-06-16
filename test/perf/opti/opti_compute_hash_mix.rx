@@ -1,0 +1,41 @@
+fn positive_mod(value: i32, modulus: i32) -> i32 {
+    let r: i32 = value % modulus;
+    if (r < 0i32) {
+        return r + modulus;
+    } else {
+        return r;
+    }
+}
+
+fn mix_word(value: i32, round: i32) -> i32 {
+    let a: i32 = value ^ (value >> 13i32);
+    let b: i32 = a * 1103515245i32 + round * 97i32 + 12345i32;
+    let c: i32 = b ^ (b / 65536i32);
+    return c + (round * round + 31i32);
+}
+
+fn main() {
+    let seed: i32 = getInt();
+    let mut buckets: [i32; 64] = [0i32; 64usize];
+    let mut i: i32 = 0i32;
+    let mut state: i32 = seed + 17i32;
+    let mut acc: i32 = 0i32;
+    while i < 18000i32 {
+        state = mix_word(state + i, i);
+        let slot: i32 = positive_mod(state + i * 3i32, 64i32);
+        let old: i32 = buckets[slot as usize];
+        let updated: i32 = old + positive_mod(state, 997i32) + i / 2i32;
+        buckets[slot as usize] = updated;
+        acc = acc ^ (updated + state / 97i32);
+        i = i + 1i32;
+    }
+    let mut j: i32 = 0i32;
+    let mut total: i32 = acc;
+    while j < 64i32 {
+        total = total + buckets[j as usize] * (j + 3i32);
+        j = j + 1i32;
+    }
+    printlnInt(total);
+    exit(0i32);
+}
+

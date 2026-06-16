@@ -37,6 +37,7 @@ enum class AsmOpcode {
     Sltu,
     Sltiu,
     Mul,
+    Mulh,
     Mulw,
     Div,
     Divu,

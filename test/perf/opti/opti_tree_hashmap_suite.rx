@@ -1,0 +1,96 @@
+fn map_hash(key: i32) -> i32 {
+    let r: i32 = (key * 4099i32 + key / 11i32) % 127i32;
+    if (r < 0i32) {
+        return r + 127i32;
+    } else {
+        return r;
+    }
+}
+
+fn main() {
+    let seed: i32 = getInt();
+    let mut key: [i32; 96] = [0i32; 96usize];
+    let mut left: [i32; 96] = [0i32; 96usize];
+    let mut right: [i32; 96] = [0i32; 96usize];
+    let mut count: i32 = 0i32;
+    while count < 96i32 {
+        key[count as usize] = (seed * 97i32 + count * 53i32 + count * count) % 1009i32;
+        left[count as usize] = -1i32;
+        right[count as usize] = -1i32;
+        if (count > 0i32) {
+            let mut cur: i32 = 0i32;
+            let mut placed: i32 = 0i32;
+            while placed == 0i32 {
+                if (key[count as usize] < key[cur as usize]) {
+                    if (left[cur as usize] < 0i32) {
+                        left[cur as usize] = count;
+                        placed = 1i32;
+                    } else {
+                        cur = left[cur as usize];
+                    }
+                } else {
+                    if (right[cur as usize] < 0i32) {
+                        right[cur as usize] = count;
+                        placed = 1i32;
+                    } else {
+                        cur = right[cur as usize];
+                    }
+                }
+            }
+        }
+        count = count + 1i32;
+    }
+    let mut table_key: [i32; 127] = [0i32; 127usize];
+    let mut table_val: [i32; 127] = [0i32; 127usize];
+    let mut used: [i32; 127] = [0i32; 127usize];
+    let mut i: i32 = 0i32;
+    while i < 96i32 {
+        let mut slot: i32 = map_hash(key[i as usize]);
+        while used[slot as usize] != 0i32 {
+            slot = (slot + 1i32) % 127i32;
+        }
+        used[slot as usize] = 1i32;
+        table_key[slot as usize] = key[i as usize];
+        table_val[slot as usize] = left[i as usize] + right[i as usize] + i;
+        i = i + 1i32;
+    }
+    let mut query: i32 = 0i32;
+    let mut checksum: i32 = 0i32;
+    while query < 50000i32 {
+        let wanted: i32 = key[(query % 96i32) as usize];
+        let mut cur: i32 = 0i32;
+        let mut walking: i32 = 1i32;
+        while walking != 0i32 {
+            if (cur < 0i32) {
+                walking = 0i32;
+            } else {
+                if (key[cur as usize] == wanted) {
+                    walking = 0i32;
+                } else {
+                    if (wanted < key[cur as usize]) {
+                        cur = left[cur as usize];
+                    } else {
+                        cur = right[cur as usize];
+                    }
+                }
+            }
+        }
+        let mut slot: i32 = map_hash(wanted);
+        let mut probing: i32 = 1i32;
+        while probing != 0i32 {
+            if (used[slot as usize] == 0i32) {
+                probing = 0i32;
+            } else {
+                if (table_key[slot as usize] == wanted) {
+                    probing = 0i32;
+                } else {
+                    slot = (slot + 1i32) % 127i32;
+                }
+            }
+        }
+        checksum = checksum + cur + table_val[slot as usize];
+        query = query + 1i32;
+    }
+    printlnInt(checksum);
+    exit(0i32);
+}

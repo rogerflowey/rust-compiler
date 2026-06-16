@@ -14,11 +14,11 @@ namespace ir3 {
 namespace {
 
 struct InliningOptions {
-    std::size_t max_blocks = 4;
+    std::size_t max_blocks = 8;
     std::size_t max_instructions = 16;
     std::size_t max_slots = 8;
     std::size_t max_returns = 4;
-    std::size_t max_growth_per_function = 48;
+    std::size_t max_growth_per_function = 256;
 };
 
 struct CallGraphInfo {

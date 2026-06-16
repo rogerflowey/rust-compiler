@@ -1,0 +1,50 @@
+fn clamp_index(value: i32, limit: i32) -> i32 {
+    if (value < 0i32) {
+        return 0i32;
+    } else {
+        if (value >= limit) {
+            return limit - 1i32;
+        } else {
+            return value;
+        }
+    }
+}
+
+fn main() {
+    let seed: i32 = getInt();
+    let mut a: [i32; 128] = [0i32; 128usize];
+    let mut b: [i32; 128] = [0i32; 128usize];
+    let mut i: i32 = 0i32;
+    while i < 128i32 {
+        a[i as usize] = (seed + i * 37i32 + i * i) % 1009i32;
+        b[i as usize] = (seed * 3i32 + i * 13i32) % 997i32;
+        i = i + 1i32;
+    }
+    let mut pass: i32 = 0i32;
+    while pass < 140i32 {
+        i = 0i32;
+        while i < 128i32 {
+            let left: i32 = a[clamp_index(i - 1i32, 128i32) as usize];
+            let mid: i32 = a[i as usize];
+            let right: i32 = a[clamp_index(i + 1i32, 128i32) as usize];
+            let blended: i32 = (left + mid * 2i32 + right) / 4i32;
+            b[i as usize] = blended + (b[i as usize] * 3i32 + pass) % 257i32;
+            i = i + 1i32;
+        }
+        i = 0i32;
+        while i < 128i32 {
+            a[i as usize] = b[i as usize] + (i * pass) % 31i32;
+            i = i + 1i32;
+        }
+        pass = pass + 1i32;
+    }
+    let mut checksum: i32 = 0i32;
+    i = 0i32;
+    while i < 128i32 {
+        checksum = checksum + a[i as usize] * ((i % 7i32) + 1i32);
+        i = i + 1i32;
+    }
+    printlnInt(checksum);
+    exit(0i32);
+}
+

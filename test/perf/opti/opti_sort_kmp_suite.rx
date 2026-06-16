@@ -1,0 +1,91 @@
+fn main() {
+    let seed: i32 = getInt();
+    let mut values: [i32; 96] = [0i32; 96usize];
+    let mut i: i32 = 0i32;
+    while i < 96i32 {
+        values[i as usize] = (seed * 41i32 + i * 73i32 + i * i * 3i32) % 10007i32;
+        i = i + 1i32;
+    }
+    i = 1i32;
+    while i < 96i32 {
+        let key: i32 = values[i as usize];
+        let mut j: i32 = i - 1i32;
+        let mut shifting: i32 = 1i32;
+        while shifting != 0i32 {
+            if (j < 0i32) {
+                shifting = 0i32;
+            } else {
+                if (values[j as usize] > key) {
+                    values[(j + 1i32) as usize] = values[j as usize];
+                    j = j - 1i32;
+                } else {
+                    shifting = 0i32;
+                }
+            }
+        }
+        values[(j + 1i32) as usize] = key;
+        i = i + 1i32;
+    }
+    let mut text: [i32; 160] = [0i32; 160usize];
+    let mut pat: [i32; 16] = [0i32; 16usize];
+    i = 0i32;
+    while i < 160i32 {
+        text[i as usize] = values[(i % 96i32) as usize] % 13i32;
+        i = i + 1i32;
+    }
+    i = 0i32;
+    while i < 16i32 {
+        let source_index: i32 = (i * 7i32 + seed) % 160i32;
+        pat[i as usize] = text[source_index as usize];
+        i = i + 1i32;
+    }
+    let mut pi: [i32; 16] = [0i32; 16usize];
+    i = 1i32;
+    while i < 16i32 {
+        let mut j: i32 = pi[(i - 1i32) as usize];
+        let mut backtrack: i32 = 1i32;
+        while backtrack != 0i32 {
+            if (j <= 0i32) {
+                backtrack = 0i32;
+            } else {
+                if (pat[i as usize] == pat[j as usize]) {
+                    backtrack = 0i32;
+                } else {
+                    j = pi[(j - 1i32) as usize];
+                }
+            }
+        }
+        if (pat[i as usize] == pat[j as usize]) {
+            j = j + 1i32;
+        }
+        pi[i as usize] = j;
+        i = i + 1i32;
+    }
+    let mut q: i32 = 0i32;
+    let mut matches: i32 = 0i32;
+    i = 0i32;
+    while i < 160i32 {
+        let mut fallback: i32 = 1i32;
+        while fallback != 0i32 {
+            if (q <= 0i32) {
+                fallback = 0i32;
+            } else {
+                if (text[i as usize] == pat[q as usize]) {
+                    fallback = 0i32;
+                } else {
+                    q = pi[(q - 1i32) as usize];
+                }
+            }
+        }
+        if (text[i as usize] == pat[q as usize]) {
+            q = q + 1i32;
+        }
+        if (q == 16i32) {
+            matches = matches + 1i32;
+            q = pi[15usize];
+        }
+        i = i + 1i32;
+    }
+    printlnInt(values[0usize] + values[95usize] + matches * 97i32);
+    exit(0i32);
+}
