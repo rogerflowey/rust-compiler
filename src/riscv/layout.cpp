@@ -27,18 +27,18 @@ std::uint32_t align_to(std::uint32_t value, std::uint32_t align) {
     return ((value + align - 1) / align) * align;
 }
 
-Layout layout_of(semantic::TypeId type) {
+Layout layout_of(semantic::TypeId type, const TargetConfig& target) {
     if (!type) {
         throw LayoutError("invalid host type during RV64 layout computation");
     }
 
     return std::visit(
-        [](const auto& value) -> Layout {
+        [&](const auto& value) -> Layout {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, semantic::PrimitiveKind>) {
                 switch (value) {
                 case semantic::PrimitiveKind::STRING:
-                    return Layout{.size = 16, .align = 8};
+                    return Layout{.size = target.xlen_bytes * 2, .align = target.xlen_bytes};
                 case semantic::PrimitiveKind::I32:
                 case semantic::PrimitiveKind::U32:
                 case semantic::PrimitiveKind::ISIZE:
@@ -58,7 +58,7 @@ Layout layout_of(semantic::TypeId type) {
                 std::uint32_t offset = 0;
                 std::uint32_t max_align = 1;
                 for (std::size_t i = 0; i < value.symbol->fields.size(); ++i) {
-                    const auto field = layout_of(struct_field_type(*value.symbol, i));
+                    const auto field = layout_of(struct_field_type(*value.symbol, i), target);
                     offset = align_to(offset, field.align);
                     offset += field.size;
                     max_align = std::max(max_align, field.align);
@@ -67,9 +67,9 @@ Layout layout_of(semantic::TypeId type) {
             } else if constexpr (std::is_same_v<T, semantic::EnumType>) {
                 return Layout{.size = 4, .align = 4};
             } else if constexpr (std::is_same_v<T, semantic::ReferenceType>) {
-                return Layout{.size = 8, .align = 8};
+                return Layout{.size = target.xlen_bytes, .align = target.xlen_bytes};
             } else if constexpr (std::is_same_v<T, semantic::ArrayType>) {
-                const auto element = layout_of(value.element_type);
+                const auto element = layout_of(value.element_type, target);
                 const auto stride = align_to(element.size, element.align);
                 return Layout{
                     .size = stride * static_cast<std::uint32_t>(value.size),
@@ -87,15 +87,17 @@ Layout layout_of(semantic::TypeId type) {
         type->value);
 }
 
-std::uint32_t size_of(semantic::TypeId type) {
-    return layout_of(type).size;
+std::uint32_t size_of(semantic::TypeId type, const TargetConfig& target) {
+    return layout_of(type, target).size;
 }
 
-std::uint32_t align_of(semantic::TypeId type) {
-    return layout_of(type).align;
+std::uint32_t align_of(semantic::TypeId type, const TargetConfig& target) {
+    return layout_of(type, target).align;
 }
 
-std::uint32_t field_offset(semantic::TypeId type, std::size_t index) {
+std::uint32_t field_offset(semantic::TypeId type,
+                           std::size_t index,
+                           const TargetConfig& target) {
     auto* struct_type = type ? std::get_if<semantic::StructType>(&type->value) : nullptr;
     if (!struct_type || !struct_type->symbol) {
         throw LayoutError("field_offset requires a resolved struct type");
@@ -106,21 +108,21 @@ std::uint32_t field_offset(semantic::TypeId type, std::size_t index) {
 
     std::uint32_t offset = 0;
     for (std::size_t i = 0; i < index; ++i) {
-        const auto field = layout_of(struct_field_type(*struct_type->symbol, i));
+        const auto field = layout_of(struct_field_type(*struct_type->symbol, i), target);
         offset = align_to(offset, field.align);
         offset += field.size;
     }
 
-    const auto field = layout_of(struct_field_type(*struct_type->symbol, index));
+    const auto field = layout_of(struct_field_type(*struct_type->symbol, index), target);
     return align_to(offset, field.align);
 }
 
-std::uint32_t array_stride(semantic::TypeId type) {
+std::uint32_t array_stride(semantic::TypeId type, const TargetConfig& target) {
     auto* array_type = type ? std::get_if<semantic::ArrayType>(&type->value) : nullptr;
     if (!array_type) {
         throw LayoutError("array_stride requires an array type");
     }
-    const auto element = layout_of(array_type->element_type);
+    const auto element = layout_of(array_type->element_type, target);
     return align_to(element.size, element.align);
 }
 

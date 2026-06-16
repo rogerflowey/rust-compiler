@@ -1,6 +1,7 @@
 #pragma once
 
 #include "semantic/type/type.hpp"
+#include "riscv/target.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,10 +21,13 @@ public:
 };
 
 std::uint32_t align_to(std::uint32_t value, std::uint32_t align);
-Layout layout_of(semantic::TypeId type);
-std::uint32_t size_of(semantic::TypeId type);
-std::uint32_t align_of(semantic::TypeId type);
-std::uint32_t field_offset(semantic::TypeId type, std::size_t index);
-std::uint32_t array_stride(semantic::TypeId type);
+Layout layout_of(semantic::TypeId type, const TargetConfig& target = rv64_target());
+std::uint32_t size_of(semantic::TypeId type, const TargetConfig& target = rv64_target());
+std::uint32_t align_of(semantic::TypeId type, const TargetConfig& target = rv64_target());
+std::uint32_t field_offset(semantic::TypeId type,
+                           std::size_t index,
+                           const TargetConfig& target = rv64_target());
+std::uint32_t array_stride(semantic::TypeId type,
+                           const TargetConfig& target = rv64_target());
 
 } // namespace riscv

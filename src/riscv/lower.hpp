@@ -2,6 +2,7 @@
 
 #include "ir3/ir3.hpp"
 #include "riscv/machine_ir.hpp"
+#include "riscv/target.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -14,6 +15,7 @@ public:
         : std::runtime_error(message) {}
 };
 
-MachineModule lower_module(const ir3::Module& module);
+MachineModule lower_module(const ir3::Module& module,
+                           const TargetConfig& target = rv64_target());
 
 } // namespace riscv

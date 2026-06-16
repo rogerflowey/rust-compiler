@@ -51,7 +51,8 @@ MachineBlock& entry_block(MachineFunction& fn) {
 
 std::unordered_map<PhysicalRegister, FrameId> append_missing_save_slots(
     MachineFunction& fn,
-    const std::vector<PhysicalRegister>& saved_regs) {
+    const std::vector<PhysicalRegister>& saved_regs,
+    const TargetConfig& target) {
     std::unordered_map<PhysicalRegister, FrameId> save_slots;
 
     for (const auto reg : saved_regs) {
@@ -59,8 +60,8 @@ std::unordered_map<PhysicalRegister, FrameId> append_missing_save_slots(
         fn.frame_objects.push_back(FrameObject{
             .id = id,
             .kind = FrameObjectKind::CalleeSave,
-            .size = 8,
-            .align = 8,
+            .size = target.xlen_bytes,
+            .align = target.xlen_bytes,
             .host_type = semantic::invalid_type_id,
             .spill_class = std::nullopt,
             .source_slot = std::nullopt,
@@ -199,7 +200,7 @@ PrologueEpiloguePlan compute_prologue_epilogue_plan(const MachineFunction& fn) {
     return plan;
 }
 
-void insert_prologue_epilogue(MachineFunction& fn) {
+void insert_prologue_epilogue(MachineFunction& fn, const TargetConfig& target) {
     if (fn.frame_base.has_value()) {
         fail(fn, "frame base already selected");
     }
@@ -214,7 +215,7 @@ void insert_prologue_epilogue(MachineFunction& fn) {
     }
 
     const auto plan = compute_prologue_epilogue_plan(fn);
-    auto save_slots = append_missing_save_slots(fn, plan.saved_registers);
+    auto save_slots = append_missing_save_slots(fn, plan.saved_registers, target);
     fn.frame_base = plan.frame_base;
 
     if (plan.saved_registers.empty()) {
@@ -235,9 +236,9 @@ void insert_prologue_epilogue(MachineFunction& fn) {
     }
 }
 
-void insert_prologue_epilogue(MachineModule& module) {
+void insert_prologue_epilogue(MachineModule& module, const TargetConfig& target) {
     for (auto& fn : module.functions) {
-        insert_prologue_epilogue(fn);
+        insert_prologue_epilogue(fn, target);
     }
 }
 

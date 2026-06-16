@@ -36,8 +36,6 @@ constexpr std::array kArgumentRegisters = {
     PhysicalRegister::A7,
 };
 
-constexpr std::uint32_t kXLenBytes = 8;
-
 std::vector<PhysicalRegister> call_arg_uses(std::size_t arg_count) {
     arg_count = std::min(arg_count, kArgumentRegisters.size());
     return std::vector<PhysicalRegister>(kArgumentRegisters.begin(),
@@ -154,8 +152,9 @@ std::string lower_callee_symbol(const std::string& callee) {
 
 class FunctionLowerer {
 public:
-    explicit FunctionLowerer(const ir3::Function& source)
-        : source_(source) {
+    explicit FunctionLowerer(const ir3::Function& source, TargetConfig target)
+        : source_(source),
+          target_(target) {
         function_.symbol = source.symbol;
         function_.entry_block = source.entry_block;
         function_.next_value = source.next_value;
@@ -178,6 +177,7 @@ private:
     };
 
     const ir3::Function& source_;
+    TargetConfig target_;
     MachineFunction function_;
     std::unordered_map<ir3::BlockId, std::size_t> source_block_indices_;
     std::unordered_map<BlockId, std::size_t> machine_block_indices_;
@@ -216,6 +216,10 @@ private:
         return function_.frame_objects.back().id;
     }
 
+    std::uint32_t xlen_bytes() const {
+        return target_.xlen_bytes;
+    }
+
     BlockId add_machine_block(MachineBlock block_ref) {
         const auto id = block_ref.id;
         machine_block_indices_.emplace(id, function_.blocks.size());
@@ -240,8 +244,8 @@ private:
 
     void declare_slot_frames() {
         for (const auto& slot : source_.slots) {
-            const auto size = size_of(slot.host_type);
-            const auto align = align_of(slot.host_type);
+            const auto size = size_of(slot.host_type, target_);
+            const auto align = align_of(slot.host_type, target_);
             const auto frame = add_frame_object(FrameObject{
                 .kind = FrameObjectKind::LocalSlot,
                 .size = size,
@@ -261,8 +265,8 @@ private:
         for (std::size_t i = kArgumentRegisters.size(); i < source_.params.size(); ++i) {
             const auto frame = add_frame_object(FrameObject{
                 .kind = FrameObjectKind::IncomingArg,
-                .size = kXLenBytes,
-                .align = kXLenBytes,
+                .size = xlen_bytes(),
+                .align = xlen_bytes(),
                 .host_type = semantic::invalid_type_id,
                 .spill_class = std::nullopt,
                 .source_slot = std::nullopt,
@@ -292,7 +296,7 @@ private:
             return;
         }
 
-        const auto raw_size = static_cast<std::uint32_t>(max_overflow_args * kXLenBytes);
+        const auto raw_size = static_cast<std::uint32_t>(max_overflow_args * xlen_bytes());
         const auto rounded_size = align_to(raw_size, 16);
         outgoing_arg_area_ = add_frame_object(FrameObject{
                 .kind = FrameObjectKind::OutgoingArg,
@@ -416,7 +420,8 @@ private:
             return;
         }
 
-        const auto size = checked_i32(size_of(copy.dest.host_type), "aggregate copy size");
+        const auto size = checked_i32(size_of(copy.dest.host_type, target_),
+                                      "aggregate copy size");
         auto dest_ptr = fresh_temp();
         auto src_ptr = fresh_temp();
         materialize_pointer(dest, lowered_dest.address, dest_ptr);
@@ -586,7 +591,8 @@ private:
                          .address = FrameAddress{
                          .frame = *outgoing_arg_area_,
                          .offset = checked_i32(static_cast<std::uint32_t>(
-                                                   (i - kArgumentRegisters.size()) * kXLenBytes),
+                                                   (i - kArgumentRegisters.size()) *
+                                                       xlen_bytes()),
                                                "outgoing argument offset"),
                      },
                      .width = MachineWidth::XLen,
@@ -707,13 +713,14 @@ private:
             std::visit(
                 Overloaded{
                     [&](const ir3::FieldProjection& field) {
-                        offset += checked_i32(field_offset(current_type, field.index),
+                        offset += checked_i32(field_offset(current_type, field.index, target_),
                                               "field offset");
                         current_type = field.result_type;
                     },
                     [&](const ir3::IndexProjection& index) {
                         auto base_ptr = ensure_base_pointer();
-                        auto stride = checked_i32(array_stride(current_type), "array stride");
+                        auto stride =
+                            checked_i32(array_stride(current_type, target_), "array stride");
                         auto index_reg = vreg(index.index);
                         VirtualRegister scaled = index_reg;
                         if (stride != 1) {
@@ -845,11 +852,11 @@ private:
 
 } // namespace (anonymous)
 
-MachineModule lower_module(const ir3::Module& module) {
+MachineModule lower_module(const ir3::Module& module, const TargetConfig& target) {
     MachineModule machine_module;
     machine_module.functions.reserve(module.functions.size());
     for (const auto& function : module.functions) {
-        machine_module.functions.push_back(FunctionLowerer(function).lower());
+        machine_module.functions.push_back(FunctionLowerer(function, target).lower());
     }
     return machine_module;
 }

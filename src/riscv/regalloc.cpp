@@ -133,13 +133,15 @@ struct CoalesceScratch {
     int epoch = 1;
 };
 
-FrameId append_spill_frame(MachineFunction& fn, RegisterClass reg_class) {
+FrameId append_spill_frame(MachineFunction& fn,
+                           RegisterClass reg_class,
+                           const TargetConfig& target) {
     const FrameId frame = fn.frame_objects.size();
     fn.frame_objects.push_back(FrameObject{
         .id = frame,
         .kind = FrameObjectKind::Spill,
-        .size = 8,
-        .align = 8,
+        .size = target.xlen_bytes,
+        .align = target.xlen_bytes,
         .host_type = semantic::invalid_type_id,
         .spill_class = reg_class,
         .source_slot = std::nullopt,
@@ -418,7 +420,8 @@ std::unordered_map<MachineValueId, RematInfo> build_remat_map(const MachineFunct
 
 Allocation linear_scan_allocate(MachineFunction& fn,
                                 const NodeTable& table,
-                                const std::unordered_map<MachineValueId, RematInfo>& remat_map) {
+                                const std::unordered_map<MachineValueId, RematInfo>& remat_map,
+                                const TargetConfig& target) {
     Allocation alloc;
 
     struct ActiveInterval {
@@ -461,7 +464,9 @@ Allocation linear_scan_allocate(MachineFunction& fn,
         } else if (!alloc.spilled.contains(vreg)) {
             const auto node = table.vreg_nodes.at(vreg);
             const FrameId frame =
-                append_spill_frame(fn, table.nodes[static_cast<std::size_t>(node)].reg_class);
+                append_spill_frame(fn,
+                                   table.nodes[static_cast<std::size_t>(node)].reg_class,
+                                   target);
             alloc.spilled.emplace(vreg, frame);
         }
     };
@@ -532,7 +537,7 @@ Allocation linear_scan_allocate(MachineFunction& fn,
                 alloc.rematerialized.emplace(vreg, rit->second);
             } else {
                 const FrameId frame = append_spill_frame(
-                    fn, table.nodes[static_cast<std::size_t>(node)].reg_class);
+                    fn, table.nodes[static_cast<std::size_t>(node)].reg_class, target);
                 alloc.spilled.emplace(vreg, frame);
             }
         }
@@ -943,7 +948,8 @@ bool can_coalesce(const CoalescedGraph& graph, int lhs, int rhs, CoalesceScratch
 
 Allocation color_graph(MachineFunction& fn,
                        const GraphInput& input,
-                       const std::unordered_map<MachineValueId, RematInfo>& remat_map) {
+                       const std::unordered_map<MachineValueId, RematInfo>& remat_map,
+                       const TargetConfig& target) {
     Dsu dsu(input.table.nodes.size());
     CoalescedGraph graph = build_coalesced_graph(input, dsu);
 
@@ -1049,7 +1055,9 @@ Allocation color_graph(MachineFunction& fn,
                     alloc.rematerialized.emplace(vreg, rit->second);
                 } else {
                     const FrameId frame = append_spill_frame(
-                        fn, input.table.nodes.at(input.table.vreg_nodes.at(vreg)).reg_class);
+                        fn,
+                        input.table.nodes.at(input.table.vreg_nodes.at(vreg)).reg_class,
+                        target);
                     alloc.spilled.emplace(vreg, frame);
                 }
             }
@@ -1370,7 +1378,9 @@ void rewrite_block(MachineBlock& block, const Allocation& alloc) {
     }
 }
 
-void fixup_remat_phi_operands(MachineFunction& fn, const Allocation& alloc) {
+void fixup_remat_phi_operands(MachineFunction& fn,
+                              const Allocation& alloc,
+                              const TargetConfig& target) {
     if (alloc.rematerialized.empty()) {
         return;
     }
@@ -1430,7 +1440,7 @@ void fixup_remat_phi_operands(MachineFunction& fn, const Allocation& alloc) {
                     materialized = sit->second;
                 } else {
                     materialized = MaterializedPhiSource{
-                        .frame = append_spill_frame(fn, vreg->reg_class),
+                        .frame = append_spill_frame(fn, vreg->reg_class, target),
                         .reg_class = vreg->reg_class,
                     };
                     pred_map[key] = materialized;
@@ -1462,18 +1472,18 @@ void fixup_remat_phi_operands(MachineFunction& fn, const Allocation& alloc) {
 
 } // namespace
 
-AllocationStats allocate_registers(MachineFunction& fn) {
+AllocationStats allocate_registers(MachineFunction& fn, const TargetConfig& target) {
     const auto table = collect_nodes(fn);
     const auto remat_map = build_remat_map(fn);
     Allocation alloc;
     if (table.vreg_nodes.size() > kFastSpillVregThreshold) {
-        alloc = linear_scan_allocate(fn, table, remat_map);
+        alloc = linear_scan_allocate(fn, table, remat_map, target);
     } else {
         auto graph = build_graph(fn, std::move(table));
-        alloc = color_graph(fn, graph, remat_map);
+        alloc = color_graph(fn, graph, remat_map, target);
     }
 
-    fixup_remat_phi_operands(fn, alloc);
+    fixup_remat_phi_operands(fn, alloc, target);
 
     for (auto& block : fn.blocks) {
         rewrite_block(block, alloc);
@@ -1485,9 +1495,9 @@ AllocationStats allocate_registers(MachineFunction& fn) {
     return stats;
 }
 
-void allocate_registers(MachineModule& module) {
+void allocate_registers(MachineModule& module, const TargetConfig& target) {
     for (auto& fn : module.functions) {
-        allocate_registers(fn);
+        allocate_registers(fn, target);
     }
 }
 

@@ -12,7 +12,6 @@ namespace riscv {
 namespace {
 
 constexpr std::uint32_t kCallFrameAlign = 16;
-constexpr std::uint32_t kXLenBytes = 8;
 
 std::string frame_name(FrameId frame) {
     return "fi" + std::to_string(frame);
@@ -140,7 +139,9 @@ void assign_save_slots(const std::vector<FrameObject*>& save_slots, std::uint32_
     }
 }
 
-void assign_incoming_args(MachineFunction& fn, std::uint32_t frame_size) {
+void assign_incoming_args(MachineFunction& fn,
+                          std::uint32_t frame_size,
+                          const TargetConfig& target) {
     std::vector<FrameObject*> incoming;
     for (auto& object : fn.frame_objects) {
         if (object.kind == FrameObjectKind::IncomingArg) {
@@ -152,13 +153,14 @@ void assign_incoming_args(MachineFunction& fn, std::uint32_t frame_size) {
     });
     for (std::size_t i = 0; i < incoming.size(); ++i) {
         incoming[i]->materialized_offset =
-            static_cast<std::int32_t>(frame_size + static_cast<std::uint32_t>(i * kXLenBytes));
+            static_cast<std::int32_t>(frame_size +
+                                      static_cast<std::uint32_t>(i * target.xlen_bytes));
     }
 }
 
 } // namespace
 
-void materialize_frame(MachineFunction& fn) {
+void materialize_frame(MachineFunction& fn, const TargetConfig& target) {
     const auto save_slots = collect_save_slots(fn);
 
     std::uint32_t cursor = 0;
@@ -166,14 +168,14 @@ void materialize_frame(MachineFunction& fn) {
     assign_save_slots(save_slots, cursor);
 
     const std::uint32_t frame_size = align_to(cursor, kCallFrameAlign);
-    assign_incoming_args(fn, frame_size);
+    assign_incoming_args(fn, frame_size, target);
 
     fn.frame_size = frame_size;
 }
 
-void materialize_frame(MachineModule& module) {
+void materialize_frame(MachineModule& module, const TargetConfig& target) {
     for (auto& fn : module.functions) {
-        materialize_frame(fn);
+        materialize_frame(fn, target);
     }
 }
 

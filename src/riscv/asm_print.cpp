@@ -35,34 +35,80 @@ std::string u_immediate_text(const AsmImmediate& imm) {
         imm);
 }
 
-void print_instruction(std::ostream& out, const AsmInst& inst) {
+const char* load_opcode_name(MachineWidth width, const TargetConfig& target) {
+    return width == MachineWidth::XLen && is_rv64(target) ? "ld" : "lw";
+}
+
+const char* store_opcode_name(MachineWidth width, const TargetConfig& target) {
+    return width == MachineWidth::XLen && is_rv64(target) ? "sd" : "sw";
+}
+
+const char* asm_opcode_name(AsmOpcode opcode, const TargetConfig& target) {
+    if (is_rv64(target)) {
+        return riscv::asm_opcode_name(opcode);
+    }
+    switch (opcode) {
+    case AsmOpcode::Addw:
+        return "add";
+    case AsmOpcode::Addiw:
+        return "addi";
+    case AsmOpcode::Subw:
+        return "sub";
+    case AsmOpcode::Sllw:
+        return "sll";
+    case AsmOpcode::Slliw:
+        return "slli";
+    case AsmOpcode::Srlw:
+        return "srl";
+    case AsmOpcode::Srliw:
+        return "srli";
+    case AsmOpcode::Sraw:
+        return "sra";
+    case AsmOpcode::Sraiw:
+        return "srai";
+    case AsmOpcode::Mulw:
+        return "mul";
+    case AsmOpcode::Divw:
+        return "div";
+    case AsmOpcode::Divuw:
+        return "divu";
+    case AsmOpcode::Remw:
+        return "rem";
+    case AsmOpcode::Remuw:
+        return "remu";
+    default:
+        return riscv::asm_opcode_name(opcode);
+    }
+}
+
+void print_instruction(std::ostream& out, const AsmInst& inst, const TargetConfig& target) {
     std::visit(
         [&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, AsmRInst>) {
-                out << "  " << asm_opcode_name(value.opcode) << " "
+                out << "  " << asm_opcode_name(value.opcode, target) << " "
                     << physical_register_name(value.rd) << ", "
                     << physical_register_name(value.rs1) << ", "
                     << physical_register_name(value.rs2) << "\n";
             } else if constexpr (std::is_same_v<T, AsmIInst>) {
-                out << "  " << asm_opcode_name(value.opcode) << " "
+                out << "  " << asm_opcode_name(value.opcode, target) << " "
                     << physical_register_name(value.rd) << ", "
                     << physical_register_name(value.rs1) << ", "
                     << immediate_text(value.imm) << "\n";
             } else if constexpr (std::is_same_v<T, AsmUInst>) {
-                out << "  " << asm_opcode_name(value.opcode) << " "
+                out << "  " << asm_opcode_name(value.opcode, target) << " "
                     << physical_register_name(value.rd) << ", "
                     << u_immediate_text(value.imm) << "\n";
             } else if constexpr (std::is_same_v<T, AsmLoadInst>) {
-                out << "  " << (value.width == MachineWidth::XLen ? "ld" : "lw") << " "
+                out << "  " << load_opcode_name(value.width, target) << " "
                     << physical_register_name(value.rd) << ", " << value.offset
                     << "(" << physical_register_name(value.base) << ")\n";
             } else if constexpr (std::is_same_v<T, AsmStoreInst>) {
-                out << "  " << (value.width == MachineWidth::XLen ? "sd" : "sw") << " "
+                out << "  " << store_opcode_name(value.width, target) << " "
                     << physical_register_name(value.rs) << ", " << value.offset
                     << "(" << physical_register_name(value.base) << ")\n";
             } else if constexpr (std::is_same_v<T, AsmBranchInst>) {
-                out << "  " << asm_opcode_name(value.opcode) << " "
+                out << "  " << asm_opcode_name(value.opcode, target) << " "
                     << physical_register_name(value.rs1) << ", "
                     << physical_register_name(value.rs2) << ", " << value.target << "\n";
             } else if constexpr (std::is_same_v<T, AsmJalInst>) {
@@ -81,7 +127,10 @@ void print_instruction(std::ostream& out, const AsmInst& inst) {
         inst);
 }
 
-void print_function(std::ostream& out, const AsmFunction& function, bool global) {
+void print_function(std::ostream& out,
+                    const AsmFunction& function,
+                    bool global,
+                    const TargetConfig& target) {
     if (global) {
         out << ".globl " << function.symbol << "\n";
     }
@@ -89,39 +138,40 @@ void print_function(std::ostream& out, const AsmFunction& function, bool global)
     for (const auto& block : function.blocks) {
         out << block.label << ":\n";
         for (const auto& inst : block.instructions) {
-            print_instruction(out, inst);
+            print_instruction(out, inst, target);
         }
     }
 }
 
 } // namespace
 
-void print_gnu_as(std::ostream& out, const AsmModule& module) {
+void print_gnu_as(std::ostream& out, const AsmModule& module, const TargetConfig& target) {
     out << ".text\n";
     for (std::size_t i = 0; i < module.functions.size(); ++i) {
         if (i != 0) {
             out << "\n";
         }
-        print_function(out, module.functions[i], true);
+        print_function(out, module.functions[i], true, target);
     }
 }
 
 void print_gnu_as(std::ostream& out,
                   const AsmModule& module,
-                  const std::unordered_set<std::string>& global_symbols) {
+                  const std::unordered_set<std::string>& global_symbols,
+                  const TargetConfig& target) {
     out << ".text\n";
     for (std::size_t i = 0; i < module.functions.size(); ++i) {
         if (i != 0) {
             out << "\n";
         }
         const auto& function = module.functions[i];
-        print_function(out, function, global_symbols.contains(function.symbol));
+        print_function(out, function, global_symbols.contains(function.symbol), target);
     }
 }
 
-std::string to_gnu_as(const AsmModule& module) {
+std::string to_gnu_as(const AsmModule& module, const TargetConfig& target) {
     std::ostringstream out;
-    print_gnu_as(out, module);
+    print_gnu_as(out, module, target);
     return out.str();
 }
 

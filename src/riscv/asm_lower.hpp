@@ -2,6 +2,7 @@
 
 #include "riscv/asm_ir.hpp"
 #include "riscv/machine_ir.hpp"
+#include "riscv/target.hpp"
 
 #include <stdexcept>
 
@@ -13,8 +14,11 @@ public:
         : std::runtime_error(message) {}
 };
 
-AsmFunction lower_to_asm(const MachineFunction& fn);
-AsmModule lower_functions_to_asm(const MachineModule& module);
-AsmModule lower_to_asm(const MachineModule& module);
+AsmFunction lower_to_asm(const MachineFunction& fn,
+                         const TargetConfig& target = rv64_target());
+AsmModule lower_functions_to_asm(const MachineModule& module,
+                                 const TargetConfig& target = rv64_target());
+AsmModule lower_to_asm(const MachineModule& module,
+                       const TargetConfig& target = rv64_target());
 
 } // namespace riscv

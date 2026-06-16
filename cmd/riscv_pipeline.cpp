@@ -64,6 +64,22 @@ std::optional<OutputStage> parse_stage_arg(const std::string& arg) {
     return std::nullopt;
 }
 
+std::optional<riscv::TargetConfig> parse_target_arg(const std::string& arg) {
+    constexpr std::string_view prefix = "--target=";
+    if (!arg.starts_with(prefix)) {
+        return std::nullopt;
+    }
+
+    const std::string value = arg.substr(prefix.size());
+    if (value == "rv64") {
+        return riscv::rv64_target();
+    }
+    if (value == "rv32") {
+        return riscv::rv32_target();
+    }
+    return std::nullopt;
+}
+
 void print_parse_error(const parsec::ParseError& error,
                        const std::vector<Token>& tokens,
                        const span::SourceManager& sources) {
@@ -98,21 +114,28 @@ void print_semantic_error(const SemanticError& error,
 } // namespace
 
 int main(int argc, char* argv[]) {
-    if (argc < 2 || argc > 3) {
+    if (argc < 2 || argc > 4) {
         std::cerr << "Usage: " << argv[0]
-                  << " <file> [--stage=mir|post-ra|post-phi|asmir|asm]\n";
+                  << " <file> [--stage=mir|post-ra|post-phi|asmir|asm]"
+                  << " [--target=rv64|rv32]\n";
         return 1;
     }
 
     OutputStage stage = OutputStage::Asm;
-    if (argc == 3) {
-        const auto parsed = parse_stage_arg(argv[2]);
-        if (!parsed) {
-            std::cerr << "Error: unsupported stage option '" << argv[2] << "'. "
-                      << "Expected --stage=mir|post-ra|post-phi|asmir|asm\n";
-            return 1;
+    riscv::TargetConfig target = riscv::rv64_target();
+    for (int i = 2; i < argc; ++i) {
+        if (const auto parsed_stage = parse_stage_arg(argv[i])) {
+            stage = *parsed_stage;
+            continue;
         }
-        stage = *parsed;
+        if (const auto parsed_target = parse_target_arg(argv[i])) {
+            target = *parsed_target;
+            continue;
+        }
+        std::cerr << "Error: unsupported option '" << argv[i] << "'. "
+                  << "Expected --stage=mir|post-ra|post-phi|asmir|asm or "
+                  << "--target=rv64|rv32\n";
+        return 1;
     }
 
     span::SourceManager sources;
@@ -169,7 +192,7 @@ int main(int argc, char* argv[]) {
 
         auto ir3_module = ir3::lower_program(*hir_program);
         ir3::optimize_module(ir3_module);
-        auto machine_module = riscv::lower_module(ir3_module);
+        auto machine_module = riscv::lower_module(ir3_module, target);
         riscv::optimize_strength_reduction(machine_module);
         riscv::optimize_compare_branch_fusion(machine_module);
         if (stage == OutputStage::Mir) {
@@ -177,7 +200,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        riscv::allocate_registers(machine_module);
+        riscv::allocate_registers(machine_module, target);
         if (stage == OutputStage::PostRa) {
             riscv::print_module(std::cout, machine_module);
             return 0;
@@ -190,15 +213,15 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        riscv::insert_prologue_epilogue(machine_module);
-        riscv::materialize_frame(machine_module);
-        auto asm_module = riscv::lower_to_asm(machine_module);
+        riscv::insert_prologue_epilogue(machine_module, target);
+        riscv::materialize_frame(machine_module, target);
+        auto asm_module = riscv::lower_to_asm(machine_module, target);
         if (stage == OutputStage::Asmir) {
             riscv::print_module(std::cout, asm_module);
             return 0;
         }
 
-        riscv::print_gnu_as(std::cout, asm_module);
+        riscv::print_gnu_as(std::cout, asm_module, target);
         return 0;
     } catch (const LexerError& error) {
         std::cerr << "Error: " << error.what() << "\n";

@@ -2,6 +2,7 @@
 
 #include "riscv/asm_ir.hpp"
 #include "riscv/machine_ir.hpp"
+#include "riscv/target.hpp"
 
 namespace riscv {
 
@@ -14,6 +15,8 @@ struct RuntimeHelperSelection {
 };
 
 RuntimeHelperSelection collect_runtime_helpers(const MachineModule& module);
-void append_runtime_helpers(AsmModule& module, const RuntimeHelperSelection& helpers);
+void append_runtime_helpers(AsmModule& module,
+                            const RuntimeHelperSelection& helpers,
+                            const TargetConfig& target = rv64_target());
 
 } // namespace riscv

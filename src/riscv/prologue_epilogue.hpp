@@ -1,6 +1,7 @@
 #pragma once
 
 #include "riscv/machine_ir.hpp"
+#include "riscv/target.hpp"
 
 #include <stdexcept>
 #include <vector>
@@ -20,7 +21,9 @@ public:
 
 PrologueEpiloguePlan compute_prologue_epilogue_plan(const MachineFunction& fn);
 
-void insert_prologue_epilogue(MachineFunction& fn);
-void insert_prologue_epilogue(MachineModule& module);
+void insert_prologue_epilogue(MachineFunction& fn,
+                              const TargetConfig& target = rv64_target());
+void insert_prologue_epilogue(MachineModule& module,
+                              const TargetConfig& target = rv64_target());
 
 } // namespace riscv

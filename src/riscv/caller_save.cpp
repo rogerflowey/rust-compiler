@@ -260,7 +260,8 @@ BlockInstructionLiveness compute_block_instruction_liveness(
 
 std::unordered_map<PhysicalRegister, FrameId> ensure_caller_save_slots(
     MachineFunction& fn,
-    const std::unordered_set<PhysicalRegister>& regs) {
+    const std::unordered_set<PhysicalRegister>& regs,
+    const TargetConfig& target) {
     std::unordered_map<PhysicalRegister, FrameId> slots;
 
     for (const auto& object : fn.frame_objects) {
@@ -277,8 +278,8 @@ std::unordered_map<PhysicalRegister, FrameId> ensure_caller_save_slots(
         fn.frame_objects.push_back(FrameObject{
             .id = id,
             .kind = FrameObjectKind::CallerSave,
-            .size = 8,
-            .align = 8,
+            .size = target.xlen_bytes,
+            .align = target.xlen_bytes,
             .host_type = semantic::invalid_type_id,
             .spill_class = std::nullopt,
             .source_slot = std::nullopt,
@@ -339,7 +340,7 @@ std::vector<CallRegion> find_call_regions(const MachineFunction& fn,
 
 } // namespace
 
-void preserve_caller_saved(MachineFunction& fn) {
+void preserve_caller_saved(MachineFunction& fn, const TargetConfig& target) {
     const auto cfg = compute_cfg(fn);
     const auto block_liveness = compute_physical_liveness(fn, cfg);
 
@@ -361,7 +362,7 @@ void preserve_caller_saved(MachineFunction& fn) {
         return;
     }
 
-    const auto slots = ensure_caller_save_slots(fn, needed_slots);
+    const auto slots = ensure_caller_save_slots(fn, needed_slots, target);
     for (std::size_t block_index = 0; block_index < fn.blocks.size(); ++block_index) {
         const auto& regions = regions_by_block[block_index];
         if (regions.empty()) {
@@ -403,9 +404,9 @@ void preserve_caller_saved(MachineFunction& fn) {
     }
 }
 
-void preserve_caller_saved(MachineModule& module) {
+void preserve_caller_saved(MachineModule& module, const TargetConfig& target) {
     for (auto& fn : module.functions) {
-        preserve_caller_saved(fn);
+        preserve_caller_saved(fn, target);
     }
 }
 

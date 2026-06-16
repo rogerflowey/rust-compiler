@@ -23,11 +23,13 @@ namespace {
 
 struct FunctionLoweringContext {
     const MachineFunction& fn;
+    TargetConfig target;
     std::unordered_map<BlockId, const MachineBlock*> blocks_by_id;
     std::unordered_map<FrameId, const FrameObject*> frame_objects_by_id;
 
-    explicit FunctionLoweringContext(const MachineFunction& fn)
-        : fn(fn) {
+    explicit FunctionLoweringContext(const MachineFunction& fn, TargetConfig target)
+        : fn(fn),
+          target(target) {
         blocks_by_id.reserve(fn.blocks.size());
         for (const auto& block : fn.blocks) {
             if (!blocks_by_id.emplace(block.id, &block).second) {
@@ -86,6 +88,13 @@ PhysicalRegister frame_base_reg(const FunctionLoweringContext& ctx,
         return PhysicalRegister::S0;
     }
     fail(ctx.fn, "frame-relative access requires frame base s0");
+}
+
+MachineWidth asm_width(const FunctionLoweringContext& ctx, MachineWidth width) {
+    if (width == MachineWidth::XLen && is_rv32(ctx.target)) {
+        return MachineWidth::Word;
+    }
+    return width;
 }
 
 std::int32_t resolve_frame_offset(const FunctionLoweringContext& ctx,
@@ -305,7 +314,7 @@ void lower_load(std::vector<AsmInst>& out,
 
     if (fits_imm12(offset)) {
         out.push_back(AsmLoadInst{
-            .width = width,
+            .width = asm_width(ctx, width),
             .rd = dest,
             .base = base,
             .offset = offset,
@@ -315,7 +324,7 @@ void lower_load(std::vector<AsmInst>& out,
 
     emit_add_imm(out, PhysicalRegister::T2, base, offset);
     out.push_back(AsmLoadInst{
-        .width = width,
+        .width = asm_width(ctx, width),
         .rd = dest,
         .base = PhysicalRegister::T2,
         .offset = 0,
@@ -346,7 +355,7 @@ void lower_store(std::vector<AsmInst>& out,
 
     if (fits_imm12(offset)) {
         out.push_back(AsmStoreInst{
-            .width = width,
+            .width = asm_width(ctx, width),
             .rs = src,
             .base = base,
             .offset = offset,
@@ -356,15 +365,15 @@ void lower_store(std::vector<AsmInst>& out,
 
     emit_add_imm(out, PhysicalRegister::T2, base, offset);
     out.push_back(AsmStoreInst{
-        .width = width,
+        .width = asm_width(ctx, width),
         .rs = src,
         .base = PhysicalRegister::T2,
         .offset = 0,
     });
 }
 
-AsmOpcode lower_binary_opcode(BinaryOp op, MachineWidth width) {
-    const bool word = width == MachineWidth::Word;
+AsmOpcode lower_binary_opcode(BinaryOp op, MachineWidth width, const TargetConfig& target) {
+    const bool word = width == MachineWidth::Word && is_rv64(target);
     switch (op) {
     case BinaryOp::Add:
         return word ? AsmOpcode::Addw : AsmOpcode::Add;
@@ -400,8 +409,8 @@ AsmOpcode lower_binary_opcode(BinaryOp op, MachineWidth width) {
     return AsmOpcode::Add;
 }
 
-AsmOpcode lower_shift_imm_opcode(BinaryOp op, MachineWidth width) {
-    const bool word = width == MachineWidth::Word;
+AsmOpcode lower_shift_imm_opcode(BinaryOp op, MachineWidth width, const TargetConfig& target) {
+    const bool word = width == MachineWidth::Word && is_rv64(target);
     switch (op) {
     case BinaryOp::Sll:
         return word ? AsmOpcode::Slliw : AsmOpcode::Slli;
@@ -554,14 +563,14 @@ void lower_instruction(std::vector<AsmInst>& out,
                 emit_li(out, expect_phys_reg(ctx, value.dest, "li destination"), value.value);
             } else if constexpr (std::is_same_v<T, Binary>) {
                 out.push_back(AsmRInst{
-                    .opcode = lower_binary_opcode(value.op, value.width),
+                    .opcode = lower_binary_opcode(value.op, value.width, ctx.target),
                     .rd = expect_phys_reg(ctx, value.dest, "binary destination"),
                     .rs1 = expect_phys_reg(ctx, value.lhs, "binary lhs"),
                     .rs2 = expect_phys_reg(ctx, value.rhs, "binary rhs"),
                 });
             } else if constexpr (std::is_same_v<T, ShiftImm>) {
                 out.push_back(AsmIInst{
-                    .opcode = lower_shift_imm_opcode(value.op, value.width),
+                    .opcode = lower_shift_imm_opcode(value.op, value.width, ctx.target),
                     .rd = expect_phys_reg(ctx, value.dest, "shift destination"),
                     .rs1 = expect_phys_reg(ctx, value.lhs, "shift lhs"),
                     .imm = static_cast<std::int32_t>(value.amount),
@@ -710,8 +719,8 @@ void lower_terminator(std::vector<AsmInst>& out,
 
 } // namespace
 
-AsmFunction lower_to_asm(const MachineFunction& fn) {
-    const FunctionLoweringContext ctx(fn);
+AsmFunction lower_to_asm(const MachineFunction& fn, const TargetConfig& target) {
+    const FunctionLoweringContext ctx(fn, target);
     if (!ctx.find_block(fn.entry_block)) {
         fail(fn, "entry block bb" + std::to_string(fn.entry_block) + " is undefined");
     }
@@ -794,22 +803,22 @@ AsmFunction lower_to_asm(const MachineFunction& fn) {
     return asm_fn;
 }
 
-AsmModule lower_functions_to_asm(const MachineModule& module) {
+AsmModule lower_functions_to_asm(const MachineModule& module, const TargetConfig& target) {
     AsmModule asm_module;
     asm_module.functions.reserve(module.functions.size());
     for (const auto& fn : module.functions) {
-        asm_module.functions.push_back(lower_to_asm(fn));
+        asm_module.functions.push_back(lower_to_asm(fn, target));
     }
     return asm_module;
 }
 
-AsmModule lower_to_asm(const MachineModule& module) {
-    AsmModule asm_module = lower_functions_to_asm(module);
+AsmModule lower_to_asm(const MachineModule& module, const TargetConfig& target) {
+    AsmModule asm_module = lower_functions_to_asm(module, target);
     const auto helpers = collect_runtime_helpers(module);
     asm_module.functions.reserve(
         asm_module.functions.size() + helpers.memmove + helpers.print_int +
         helpers.println_int + helpers.get_int + helpers.exit);
-    append_runtime_helpers(asm_module, helpers);
+    append_runtime_helpers(asm_module, helpers, target);
     return asm_module;
 }
 
