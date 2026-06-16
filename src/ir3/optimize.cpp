@@ -5,6 +5,8 @@
 #include "ir3/passes/cfg_simplify.hpp"
 #include "ir3/passes/dead_block_elim.hpp"
 #include "ir3/passes/dead_code_elim.hpp"
+#include "ir3/passes/global_code_motion.hpp"
+#include "ir3/passes/global_value_numbering.hpp"
 #include "ir3/passes/inlining.hpp"
 #include "ir3/passes/load_forwarding.hpp"
 #include "ir3/passes/phi_simplify.hpp"
@@ -38,6 +40,8 @@ std::vector<std::unique_ptr<FunctionPass>> build_passes() {
     passes.push_back(std::make_unique<LoadForwardingPass>());
     append_cfg_cleanup(passes);
     passes.push_back(std::make_unique<SccpPass>());
+    passes.push_back(std::make_unique<GlobalValueNumberingPass>());
+    passes.push_back(std::make_unique<GlobalCodeMotionPass>());
     append_cfg_cleanup(passes);
     return passes;
 }
