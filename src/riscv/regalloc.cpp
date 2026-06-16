@@ -1,6 +1,7 @@
 #include "riscv/regalloc.hpp"
 
 #include "riscv/analysis/cfg.hpp"
+#include "riscv/analysis/intervals.hpp"
 #include "riscv/analysis/liveness.hpp"
 
 #include "semantic/type/type.hpp"
@@ -30,6 +31,20 @@ constexpr std::array<PhysicalRegister, 19> kAllocatable = {
     PhysicalRegister::A1,  PhysicalRegister::A2,  PhysicalRegister::A3,
     PhysicalRegister::A4,  PhysicalRegister::A5,  PhysicalRegister::A6,
     PhysicalRegister::A7,
+};
+
+constexpr std::array<PhysicalRegister, 11> kLinearScanAllocatable = {
+    PhysicalRegister::S1,
+    PhysicalRegister::S2,
+    PhysicalRegister::S3,
+    PhysicalRegister::S4,
+    PhysicalRegister::S5,
+    PhysicalRegister::S6,
+    PhysicalRegister::S7,
+    PhysicalRegister::S8,
+    PhysicalRegister::S9,
+    PhysicalRegister::S10,
+    PhysicalRegister::S11,
 };
 
 constexpr PhysicalRegister kScratch0 = PhysicalRegister::T0;
@@ -117,6 +132,23 @@ struct CoalesceScratch {
     std::vector<int> seen;
     int epoch = 1;
 };
+
+FrameId append_spill_frame(MachineFunction& fn, RegisterClass reg_class) {
+    const FrameId frame = fn.frame_objects.size();
+    fn.frame_objects.push_back(FrameObject{
+        .id = frame,
+        .kind = FrameObjectKind::Spill,
+        .size = 8,
+        .align = 8,
+        .host_type = semantic::invalid_type_id,
+        .spill_class = reg_class,
+        .source_slot = std::nullopt,
+        .debug_name = "",
+        .saved_reg = std::nullopt,
+        .materialized_offset = std::nullopt,
+    });
+    return frame;
+}
 
 class Dsu {
 public:
@@ -384,31 +416,128 @@ std::unordered_map<MachineValueId, RematInfo> build_remat_map(const MachineFunct
     return map;
 }
 
-Allocation spill_all_virtual_registers(MachineFunction& fn,
-                                       const NodeTable& table,
-                                       const std::unordered_map<MachineValueId, RematInfo>& remat_map) {
+Allocation linear_scan_allocate(MachineFunction& fn,
+                                const NodeTable& table,
+                                const std::unordered_map<MachineValueId, RematInfo>& remat_map) {
     Allocation alloc;
-    for (const auto& [vreg, _] : table.vreg_nodes) {
+
+    struct ActiveInterval {
+        MachineValueId vreg = 0;
+        Position end = 0;
+        PhysicalRegister reg = PhysicalRegister::S1;
+    };
+
+    const auto cfg = compute_cfg(fn);
+    const auto live = compute_liveness(fn, cfg);
+    const auto intervals = compute_intervals(fn, cfg, live);
+
+    std::vector<PhysicalRegister> free_regs(kLinearScanAllocatable.begin(),
+                                            kLinearScanAllocatable.end());
+    std::vector<ActiveInterval> active;
+    active.reserve(kLinearScanAllocatable.size());
+
+    auto expire_old = [&](Position position) {
+        for (auto it = active.begin(); it != active.end();) {
+            if (it->end < position) {
+                free_regs.push_back(it->reg);
+                it = active.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        std::sort(active.begin(),
+                  active.end(),
+                  [](const ActiveInterval& lhs, const ActiveInterval& rhs) {
+                      if (lhs.end != rhs.end) {
+                          return lhs.end < rhs.end;
+                      }
+                      return lhs.vreg < rhs.vreg;
+                  });
+    };
+
+    auto spill_vreg = [&](MachineValueId vreg) {
         if (const auto rit = remat_map.find(vreg); rit != remat_map.end()) {
             alloc.rematerialized.emplace(vreg, rit->second);
+        } else if (!alloc.spilled.contains(vreg)) {
+            const auto node = table.vreg_nodes.at(vreg);
+            const FrameId frame =
+                append_spill_frame(fn, table.nodes[static_cast<std::size_t>(node)].reg_class);
+            alloc.spilled.emplace(vreg, frame);
+        }
+    };
+
+    for (const auto& interval : intervals.intervals) {
+        if (!table.vreg_nodes.contains(interval.vreg)) {
             continue;
         }
 
-        const FrameId frame = fn.frame_objects.size();
-        fn.frame_objects.push_back(FrameObject{
-            .id = frame,
-            .kind = FrameObjectKind::Spill,
-            .size = 8,
-            .align = 8,
-            .host_type = semantic::invalid_type_id,
-            .spill_class = RegisterClass::Gpr64,
-            .source_slot = std::nullopt,
-            .debug_name = "",
-            .saved_reg = std::nullopt,
-            .materialized_offset = std::nullopt,
-        });
-        alloc.spilled.emplace(vreg, frame);
+        expire_old(interval.start);
+        if (!free_regs.empty()) {
+            const PhysicalRegister reg = free_regs.back();
+            free_regs.pop_back();
+            alloc.assigned.emplace(interval.vreg, reg);
+            active.push_back(ActiveInterval{
+                .vreg = interval.vreg,
+                .end = interval.end,
+                .reg = reg,
+            });
+            std::sort(active.begin(),
+                      active.end(),
+                      [](const ActiveInterval& lhs, const ActiveInterval& rhs) {
+                          if (lhs.end != rhs.end) {
+                              return lhs.end < rhs.end;
+                          }
+                          return lhs.vreg < rhs.vreg;
+                      });
+            continue;
+        }
+
+        auto victim = std::max_element(
+            active.begin(),
+            active.end(),
+            [](const ActiveInterval& lhs, const ActiveInterval& rhs) {
+                if (lhs.end != rhs.end) {
+                    return lhs.end < rhs.end;
+                }
+                return lhs.vreg < rhs.vreg;
+            });
+        if (victim != active.end() && victim->end > interval.end) {
+            const PhysicalRegister reg = victim->reg;
+            alloc.assigned.erase(victim->vreg);
+            spill_vreg(victim->vreg);
+            *victim = ActiveInterval{
+                .vreg = interval.vreg,
+                .end = interval.end,
+                .reg = reg,
+            };
+            alloc.assigned.emplace(interval.vreg, reg);
+            std::sort(active.begin(),
+                      active.end(),
+                      [](const ActiveInterval& lhs, const ActiveInterval& rhs) {
+                          if (lhs.end != rhs.end) {
+                              return lhs.end < rhs.end;
+                          }
+                          return lhs.vreg < rhs.vreg;
+                      });
+        } else {
+            spill_vreg(interval.vreg);
+        }
     }
+
+    for (const auto& [vreg, node] : table.vreg_nodes) {
+        if (!alloc.assigned.contains(vreg) && !alloc.spilled.contains(vreg) &&
+            !alloc.rematerialized.contains(vreg)) {
+            const auto rit = remat_map.find(vreg);
+            if (rit != remat_map.end()) {
+                alloc.rematerialized.emplace(vreg, rit->second);
+            } else {
+                const FrameId frame = append_spill_frame(
+                    fn, table.nodes[static_cast<std::size_t>(node)].reg_class);
+                alloc.spilled.emplace(vreg, frame);
+            }
+        }
+    }
+
     return alloc;
 }
 
@@ -919,19 +1048,8 @@ Allocation color_graph(MachineFunction& fn,
                 if (const auto rit = remat_map.find(vreg); rit != remat_map.end()) {
                     alloc.rematerialized.emplace(vreg, rit->second);
                 } else {
-                    const FrameId frame = fn.frame_objects.size();
-                    fn.frame_objects.push_back(FrameObject{
-                        .id = frame,
-                        .kind = FrameObjectKind::Spill,
-                        .size = 8,
-                        .align = 8,
-                        .host_type = semantic::invalid_type_id,
-                        .spill_class = RegisterClass::Gpr64,
-                        .source_slot = std::nullopt,
-                        .debug_name = "",
-                        .saved_reg = std::nullopt,
-                        .materialized_offset = std::nullopt,
-                    });
+                    const FrameId frame = append_spill_frame(
+                        fn, input.table.nodes.at(input.table.vreg_nodes.at(vreg)).reg_class);
                     alloc.spilled.emplace(vreg, frame);
                 }
             }
@@ -1073,6 +1191,9 @@ std::optional<Instruction> rewrite_instruction(const Instruction& inst,
                 }
                 return Copy{.dest = new_dest, .src = new_src};
             } else if constexpr (std::is_same_v<T, Li>) {
+                if (const auto* phys = std::get_if<PhysicalRegister>(&value.dest)) {
+                    return Li{.dest = *phys, .value = value.value};
+                }
                 const auto vreg_id = std::get<VirtualRegister>(value.dest).id;
                 if (alloc.rematerialized.contains(vreg_id)) {
                     return std::nullopt;
@@ -1103,6 +1224,9 @@ std::optional<Instruction> rewrite_instruction(const Instruction& inst,
                     .rhs = rewrite_src(value.rhs, alloc, pre, scratch0_used, scratch1_used),
                 };
             } else if constexpr (std::is_same_v<T, FrameAddr>) {
+                if (const auto* phys = std::get_if<PhysicalRegister>(&value.dest)) {
+                    return FrameAddr{.dest = *phys, .frame = value.frame, .offset = value.offset};
+                }
                 const auto vreg_id = std::get<VirtualRegister>(value.dest).id;
                 if (alloc.rematerialized.contains(vreg_id)) {
                     return std::nullopt;
@@ -1276,9 +1400,13 @@ void fixup_remat_phi_operands(MachineFunction& fn, const Allocation& alloc) {
         }
     };
 
+    struct MaterializedPhiSource {
+        FrameId frame = 0;
+        RegisterClass reg_class = RegisterClass::Gpr64;
+    };
     std::unordered_map<BlockId,
-                       std::unordered_map<RematKey, PhysicalRegister, RematKeyHash>>
-        pred_remat_scratch;
+                       std::unordered_map<RematKey, MaterializedPhiSource, RematKeyHash>>
+        pred_remat_spills;
 
     for (auto& block : fn.blocks) {
         for (auto& phi : block.phis) {
@@ -1296,32 +1424,37 @@ void fixup_remat_phi_operands(MachineFunction& fn, const Allocation& alloc) {
                                    .imm = rit->second.imm,
                                    .frame = rit->second.frame,
                                    .offset = rit->second.offset};
-                auto& pred_map = pred_remat_scratch[incoming.pred];
-
-                PhysicalRegister scratch;
+                auto& pred_map = pred_remat_spills[incoming.pred];
+                MaterializedPhiSource materialized;
                 if (auto sit = pred_map.find(key); sit != pred_map.end()) {
-                    scratch = sit->second;
+                    materialized = sit->second;
                 } else {
-                    if (pred_map.size() >= 2) {
-                        throw std::runtime_error(
-                            "Exceeded 2-scratch-register budget in remat phi fixup");
-                    }
-                    scratch = pred_map.empty() ? kScratch0 : kScratch1;
-                    pred_map[key] = scratch;
-
+                    materialized = MaterializedPhiSource{
+                        .frame = append_spill_frame(fn, vreg->reg_class),
+                        .reg_class = vreg->reg_class,
+                    };
+                    pred_map[key] = materialized;
                     auto& pred_block = fn.blocks[block_index.at(incoming.pred)];
                     if (rit->second.kind == RematInfo::Kind::Li) {
                         pred_block.instructions.push_back(
-                            Li{.dest = scratch, .value = rit->second.imm});
+                            Li{.dest = kScratch0, .value = rit->second.imm});
                     } else {
                         pred_block.instructions.push_back(
-                            FrameAddr{.dest = scratch,
+                            FrameAddr{.dest = kScratch0,
                                       .frame = rit->second.frame,
                                       .offset = rit->second.offset});
                     }
+                    pred_block.instructions.push_back(Store{
+                        .address = FrameAddress{.frame = materialized.frame, .offset = 0},
+                        .width = MachineWidth::XLen,
+                        .src = kScratch0,
+                    });
                 }
 
-                incoming.value = scratch;
+                incoming.value = SpillRef{
+                    .frame = materialized.frame,
+                    .reg_class = materialized.reg_class,
+                };
             }
         }
     }
@@ -1334,7 +1467,7 @@ AllocationStats allocate_registers(MachineFunction& fn) {
     const auto remat_map = build_remat_map(fn);
     Allocation alloc;
     if (table.vreg_nodes.size() > kFastSpillVregThreshold) {
-        alloc = spill_all_virtual_registers(fn, table, remat_map);
+        alloc = linear_scan_allocate(fn, table, remat_map);
     } else {
         auto graph = build_graph(fn, std::move(table));
         alloc = color_graph(fn, graph, remat_map);
