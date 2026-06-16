@@ -425,6 +425,37 @@ AsmOpcode lower_shift_imm_opcode(BinaryOp op, MachineWidth width, const TargetCo
     }
 }
 
+void lower_binary(std::vector<AsmInst>& out,
+                  BinaryOp op,
+                  MachineWidth width,
+                  PhysicalRegister dest,
+                  PhysicalRegister lhs,
+                  PhysicalRegister rhs,
+                  const TargetConfig& target) {
+    if (op == BinaryOp::MulH && width == MachineWidth::Word && is_rv64(target)) {
+        out.push_back(AsmRInst{
+            .opcode = AsmOpcode::Mul,
+            .rd = dest,
+            .rs1 = lhs,
+            .rs2 = rhs,
+        });
+        out.push_back(AsmIInst{
+            .opcode = AsmOpcode::Srai,
+            .rd = dest,
+            .rs1 = dest,
+            .imm = 32,
+        });
+        return;
+    }
+
+    out.push_back(AsmRInst{
+        .opcode = lower_binary_opcode(op, width, target),
+        .rd = dest,
+        .rs1 = lhs,
+        .rs2 = rhs,
+    });
+}
+
 void lower_compare(std::vector<AsmInst>& out,
                    PhysicalRegister dest,
                    CompareOp op,
@@ -564,12 +595,13 @@ void lower_instruction(std::vector<AsmInst>& out,
             } else if constexpr (std::is_same_v<T, Li>) {
                 emit_li(out, expect_phys_reg(ctx, value.dest, "li destination"), value.value);
             } else if constexpr (std::is_same_v<T, Binary>) {
-                out.push_back(AsmRInst{
-                    .opcode = lower_binary_opcode(value.op, value.width, ctx.target),
-                    .rd = expect_phys_reg(ctx, value.dest, "binary destination"),
-                    .rs1 = expect_phys_reg(ctx, value.lhs, "binary lhs"),
-                    .rs2 = expect_phys_reg(ctx, value.rhs, "binary rhs"),
-                });
+                lower_binary(out,
+                             value.op,
+                             value.width,
+                             expect_phys_reg(ctx, value.dest, "binary destination"),
+                             expect_phys_reg(ctx, value.lhs, "binary lhs"),
+                             expect_phys_reg(ctx, value.rhs, "binary rhs"),
+                             ctx.target);
             } else if constexpr (std::is_same_v<T, ShiftImm>) {
                 out.push_back(AsmIInst{
                     .opcode = lower_shift_imm_opcode(value.op, value.width, ctx.target),
