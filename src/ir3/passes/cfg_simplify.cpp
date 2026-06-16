@@ -43,6 +43,14 @@ bool retarget_terminator_edge(Terminator& term, BlockId from, BlockId to) {
         term);
 }
 
+bool is_jump_to(const BasicBlock& block, BlockId target) {
+    if (!block.terminator) {
+        return false;
+    }
+    const auto* jump = std::get_if<Jump>(&*block.terminator);
+    return jump && jump->target == target;
+}
+
 void tombstone_block(BasicBlock& block) {
     block.phis.clear();
     block.instructions.clear();
@@ -81,6 +89,11 @@ bool try_thread_empty_trampoline(Function& fn, const CfgInfo& cfg) {
         }
         const auto& preds = cfg.predecessors[block_id];
         if (preds.empty()) {
+            continue;
+        }
+        if (!std::all_of(preds.begin(), preds.end(), [&](BlockId pred) {
+                return is_jump_to(fn.blocks[pred], block_id);
+            })) {
             continue;
         }
 
