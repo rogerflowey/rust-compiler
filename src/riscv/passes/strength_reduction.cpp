@@ -292,23 +292,30 @@ void rewrite_unsigned_div_pow2(MachineBlock& block,
                                          .amount = shift};
 }
 
-void rewrite_rem_pow2(MachineBlock& block,
+void rewrite_rem_pow2(MachineFunction& fn,
+                      MachineBlock& block,
                       std::size_t index,
                       const Binary& binary,
                       std::int32_t divisor,
                       std::uint8_t shift) {
+    const RegisterRef dest = binary.dest;
+    const RegisterRef lhs = binary.lhs;
+    const MachineWidth width = binary.width;
+
     if (shift == 0) {
-        block.instructions[index] = Li{.dest = binary.dest, .value = 0};
+        block.instructions[index] = Li{.dest = dest, .value = 0};
         return;
     }
 
     if (binary.op == BinaryOp::RemU) {
-        const auto mask = binary.rhs;
-        block.instructions[index] = Binary{.dest = binary.dest,
-                                           .op = BinaryOp::And,
-                                           .width = binary.width,
-                                           .lhs = binary.lhs,
-                                           .rhs = mask};
+        const auto mask = make_vreg(next_temp_id(fn));
+        block.instructions[index] = Li{.dest = mask, .value = divisor - 1};
+        block.instructions.insert(block.instructions.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                                  Binary{.dest = dest,
+                                         .op = BinaryOp::And,
+                                         .width = width,
+                                         .lhs = lhs,
+                                         .rhs = mask});
         return;
     }
 
@@ -509,7 +516,7 @@ void reduce_block(MachineFunction& fn, MachineBlock& block) {
                         }
                     }
                     if (shift) {
-                        rewrite_rem_pow2(block, index, *binary, divisor, *shift);
+                        rewrite_rem_pow2(fn, block, index, *binary, divisor, *shift);
                         continue;
                     }
                 }
