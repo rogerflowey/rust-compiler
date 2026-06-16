@@ -2,10 +2,12 @@
 
 #include "ir3/analysis/manager.hpp"
 #include "ir3/passes/copy_coalesce.hpp"
+#include "ir3/passes/cfg_simplify.hpp"
 #include "ir3/passes/dead_block_elim.hpp"
 #include "ir3/passes/dead_code_elim.hpp"
 #include "ir3/passes/inlining.hpp"
 #include "ir3/passes/load_forwarding.hpp"
+#include "ir3/passes/phi_simplify.hpp"
 #include "ir3/passes/pointer_to_place.hpp"
 #include "ir3/passes/sccp.hpp"
 #include "ir3/passes/sroa.hpp"
@@ -17,18 +19,26 @@
 namespace ir3 {
 namespace {
 
+void append_cfg_cleanup(std::vector<std::unique_ptr<FunctionPass>>& passes) {
+    passes.push_back(std::make_unique<DeadBlockEliminationPass>());
+    passes.push_back(std::make_unique<PhiSimplifyPass>());
+    passes.push_back(std::make_unique<CfgSimplifyPass>());
+    passes.push_back(std::make_unique<DeadBlockEliminationPass>());
+    passes.push_back(std::make_unique<DeadCodeEliminationPass>());
+}
+
 std::vector<std::unique_ptr<FunctionPass>> build_passes() {
     std::vector<std::unique_ptr<FunctionPass>> passes;
-    passes.push_back(std::make_unique<DeadBlockEliminationPass>());
+    append_cfg_cleanup(passes);
     passes.push_back(std::make_unique<PointerToPlacePass>());
     passes.push_back(std::make_unique<DeadCodeEliminationPass>());
     passes.push_back(std::make_unique<SroaPass>());
     passes.push_back(std::make_unique<CopyCoalescePass>());
     passes.push_back(std::make_unique<SlotToSsaPass>());
     passes.push_back(std::make_unique<LoadForwardingPass>());
+    append_cfg_cleanup(passes);
     passes.push_back(std::make_unique<SccpPass>());
-    passes.push_back(std::make_unique<DeadBlockEliminationPass>());
-    passes.push_back(std::make_unique<DeadCodeEliminationPass>());
+    append_cfg_cleanup(passes);
     return passes;
 }
 
