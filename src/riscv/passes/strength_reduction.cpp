@@ -1,5 +1,7 @@
 #include "riscv/passes/strength_reduction.hpp"
 
+#include "riscv/target.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -43,23 +45,26 @@ bool is_div_rem_op(BinaryOp op) {
            op == BinaryOp::Rem || op == BinaryOp::RemU;
 }
 
-std::optional<std::uint8_t> shift_amount(std::int32_t value) {
-    if (value < 0 || value >= 32) {
+std::uint8_t bit_width(MachineWidth width, const TargetConfig& target) {
+    return width == MachineWidth::Word || is_rv32(target) ? 32 : 64;
+}
+
+std::optional<std::uint8_t> shift_amount(std::int64_t value, std::uint8_t bits) {
+    if (value < 0 || value >= bits) {
         return std::nullopt;
     }
     return static_cast<std::uint8_t>(value);
 }
 
-std::optional<std::uint8_t> power_of_two_shift(std::int32_t value) {
+std::optional<std::uint8_t> power_of_two_shift(std::uint64_t value) {
     if (value <= 0) {
         return std::nullopt;
     }
-    const auto unsigned_value = static_cast<std::uint32_t>(value);
-    if ((unsigned_value & (unsigned_value - 1U)) != 0U) {
+    if ((value & (value - 1U)) != 0U) {
         return std::nullopt;
     }
     std::uint8_t shift = 0;
-    auto current = unsigned_value;
+    auto current = value;
     while (current > 1U) {
         current >>= 1U;
         ++shift;
@@ -67,14 +72,17 @@ std::optional<std::uint8_t> power_of_two_shift(std::int32_t value) {
     return shift;
 }
 
-std::optional<std::uint8_t> abs_power_of_two_shift(std::int32_t value) {
-    if (value == std::numeric_limits<std::int32_t>::min()) {
-        return std::uint8_t{31};
-    }
+std::optional<std::uint8_t> abs_power_of_two_shift(std::int64_t value, std::uint8_t bits) {
+    std::uint64_t magnitude = 0;
     if (value < 0) {
-        value = -value;
+        magnitude = static_cast<std::uint64_t>(-(static_cast<__int128>(value)));
+    } else {
+        magnitude = static_cast<std::uint64_t>(value);
     }
-    return power_of_two_shift(value);
+    if (bits == 32) {
+        magnitude &= std::numeric_limits<std::uint32_t>::max();
+    }
+    return power_of_two_shift(magnitude);
 }
 
 RegisterRef make_vreg(MachineValueId id) {
@@ -82,23 +90,24 @@ RegisterRef make_vreg(MachineValueId id) {
 }
 
 struct SignedMagic {
-    std::int32_t multiplier = 0;
+    std::int64_t multiplier = 0;
     std::uint8_t shift = 0;
 };
 
-std::optional<SignedMagic> signed_magic_for_positive_divisor(std::int32_t divisor) {
+std::optional<SignedMagic> signed_magic_for_positive_divisor(std::int64_t divisor,
+                                                             std::uint8_t bits) {
     if (divisor <= 1) {
         return std::nullopt;
     }
 
-    const std::uint32_t ad = static_cast<std::uint32_t>(divisor);
-    const std::uint64_t two31 = std::uint64_t{1} << 31;
-    const std::uint64_t anc = two31 - 1U - ((two31 - 1U) % ad);
-    std::uint32_t p = 31;
-    std::uint64_t q1 = two31 / anc;
-    std::uint64_t r1 = two31 - q1 * anc;
-    std::uint64_t q2 = two31 / ad;
-    std::uint64_t r2 = two31 - q2 * ad;
+    const auto ad = static_cast<std::uint64_t>(divisor);
+    const auto two_n_minus_1 = static_cast<__uint128_t>(1) << (bits - 1);
+    const auto anc = two_n_minus_1 - 1U - ((two_n_minus_1 - 1U) % ad);
+    std::uint32_t p = bits - 1;
+    auto q1 = two_n_minus_1 / anc;
+    auto r1 = two_n_minus_1 - q1 * anc;
+    auto q2 = two_n_minus_1 / ad;
+    auto r2 = two_n_minus_1 - q2 * ad;
 
     while (true) {
         ++p;
@@ -114,15 +123,21 @@ std::optional<SignedMagic> signed_magic_for_positive_divisor(std::int32_t diviso
             ++q2;
             r2 -= ad;
         }
-        const std::uint64_t delta = ad - r2;
+        const auto delta = ad - r2;
         if (!(q1 < delta || (q1 == delta && r1 == 0))) {
             break;
         }
     }
 
+    const auto multiplier = q2 + 1U;
+    auto signed_multiplier = static_cast<__int128>(multiplier);
+    const auto sign_bit = static_cast<__uint128_t>(1) << (bits - 1);
+    if (multiplier >= sign_bit) {
+        signed_multiplier -= static_cast<__int128>(static_cast<__uint128_t>(1) << bits);
+    }
     return SignedMagic{
-        .multiplier = static_cast<std::int32_t>(q2 + 1U),
-        .shift = static_cast<std::uint8_t>(p - 32U),
+        .multiplier = static_cast<std::int64_t>(signed_multiplier),
+        .shift = static_cast<std::uint8_t>(p - bits),
     };
 }
 
@@ -204,8 +219,9 @@ std::size_t rewrite_signed_div_pow2(MachineFunction& fn,
                                     MachineBlock& block,
                                     std::size_t index,
                                     const Binary& binary,
-                                    std::int32_t divisor,
-                                    std::uint8_t shift) {
+                                    std::int64_t divisor,
+                                    std::uint8_t shift,
+                                    std::uint8_t bits) {
     if (shift == 0) {
         if (divisor == 1) {
             block.instructions[index] = Copy{.dest = binary.dest, .src = binary.lhs};
@@ -235,9 +251,9 @@ std::size_t rewrite_signed_div_pow2(MachineFunction& fn,
         .op = BinaryOp::Sra,
         .width = binary.width,
         .lhs = binary.lhs,
-        .amount = 31,
+        .amount = static_cast<std::uint8_t>(bits - 1),
     });
-    replacement.push_back(Li{.dest = mask, .value = (std::int32_t{1} << shift) - 1});
+    replacement.push_back(Li{.dest = mask, .value = (std::int64_t{1} << shift) - 1});
     replacement.push_back(Binary{.dest = bias,
                                  .op = BinaryOp::And,
                                  .width = binary.width,
@@ -296,7 +312,6 @@ void rewrite_rem_pow2(MachineFunction& fn,
                       MachineBlock& block,
                       std::size_t index,
                       const Binary& binary,
-                      std::int32_t divisor,
                       std::uint8_t shift) {
     const RegisterRef dest = binary.dest;
     const RegisterRef lhs = binary.lhs;
@@ -309,7 +324,7 @@ void rewrite_rem_pow2(MachineFunction& fn,
 
     if (binary.op == BinaryOp::RemU) {
         const auto mask = make_vreg(next_temp_id(fn));
-        block.instructions[index] = Li{.dest = mask, .value = divisor - 1};
+        block.instructions[index] = Li{.dest = mask, .value = (std::int64_t{1} << shift) - 1};
         block.instructions.insert(block.instructions.begin() + static_cast<std::ptrdiff_t>(index + 1),
                                   Binary{.dest = dest,
                                          .op = BinaryOp::And,
@@ -321,19 +336,55 @@ void rewrite_rem_pow2(MachineFunction& fn,
 
     // Only use the simple mask form for values known non-negative by construction
     // is unavailable here, so keep signed remainder exact by leaving it unchanged.
-    (void)divisor;
+}
+
+std::size_t rewrite_signed_rem_pow2(MachineFunction& fn,
+                                    MachineBlock& block,
+                                    std::size_t index,
+                                    const Binary& binary,
+                                    std::int64_t divisor,
+                                    std::uint8_t shift,
+                                    std::uint8_t bits) {
+    const RegisterRef result_dest = binary.dest;
+    const RegisterRef dividend = binary.lhs;
+    const MachineWidth width = binary.width;
+    const auto quotient = make_vreg(next_temp_id(fn));
+    Binary div_inst = binary;
+    div_inst.dest = quotient;
+    div_inst.op = BinaryOp::Div;
+    const std::size_t div_size =
+        rewrite_signed_div_pow2(fn, block, index, div_inst, divisor, shift, bits);
+    if (div_size == 0) {
+        return 0;
+    }
+
+    const auto product = make_vreg(next_temp_id(fn));
+    std::vector<Instruction> tail;
+    tail.reserve(2);
+    tail.push_back(ShiftImm{.dest = product,
+                            .op = BinaryOp::Sll,
+                            .width = width,
+                            .lhs = quotient,
+                            .amount = shift});
+    tail.push_back(Binary{.dest = result_dest,
+                          .op = BinaryOp::Sub,
+                          .width = width,
+                          .lhs = dividend,
+                          .rhs = product});
+    block.instructions.insert(block.instructions.begin() +
+                                  static_cast<std::ptrdiff_t>(index + div_size),
+                              tail.begin(),
+                              tail.end());
+    return div_size + tail.size();
 }
 
 std::size_t rewrite_signed_div_const_positive(MachineFunction& fn,
                                               MachineBlock& block,
                                               std::size_t index,
                                               const Binary& binary,
-                                              std::int32_t divisor) {
-    if (const auto shift = abs_power_of_two_shift(divisor)) {
-        return rewrite_signed_div_pow2(fn, block, index, binary, divisor, *shift);
-    }
-
-    const auto magic = signed_magic_for_positive_divisor(divisor);
+                                              std::int64_t divisor,
+                                              std::uint8_t bits) {
+    const auto magic = signed_magic_for_positive_divisor(divisor, bits);
     if (!magic) {
         return 0;
     }
@@ -369,7 +420,7 @@ std::size_t rewrite_signed_div_const_positive(MachineFunction& fn,
                                    .op = BinaryOp::Srl,
                                    .width = binary.width,
                                    .lhs = shifted,
-                                   .amount = 31});
+                                   .amount = static_cast<std::uint8_t>(bits - 1)});
     replacement.push_back(Binary{.dest = binary.dest,
                                  .op = BinaryOp::Add,
                                  .width = binary.width,
@@ -387,7 +438,8 @@ std::size_t rewrite_signed_rem_const_positive(MachineFunction& fn,
                                               MachineBlock& block,
                                               std::size_t index,
                                               const Binary& binary,
-                                              std::int32_t divisor) {
+                                              std::int64_t divisor,
+                                              std::uint8_t bits) {
     const RegisterRef result_dest = binary.dest;
     const RegisterRef dividend = binary.lhs;
     const MachineWidth width = binary.width;
@@ -396,7 +448,7 @@ std::size_t rewrite_signed_rem_const_positive(MachineFunction& fn,
     div_inst.dest = quotient;
     div_inst.op = BinaryOp::Div;
     const std::size_t div_size =
-        rewrite_signed_div_const_positive(fn, block, index, div_inst, divisor);
+        rewrite_signed_div_const_positive(fn, block, index, div_inst, divisor, bits);
     if (div_size == 0) {
         return 0;
     }
@@ -423,8 +475,8 @@ std::size_t rewrite_signed_rem_const_positive(MachineFunction& fn,
     return div_size + tail.size();
 }
 
-void reduce_block(MachineFunction& fn, MachineBlock& block) {
-    std::unordered_map<MachineValueId, std::int32_t> constants;
+void reduce_block(MachineFunction& fn, MachineBlock& block, const TargetConfig& target) {
+    std::unordered_map<MachineValueId, std::int64_t> constants;
 
     for (std::size_t index = 0; index < block.instructions.size(); ++index) {
         auto& inst = block.instructions[index];
@@ -445,7 +497,8 @@ void reduce_block(MachineFunction& fn, MachineBlock& block) {
                 if (const auto rhs_id = vreg_id(binary->rhs)) {
                     if (const auto it = constants.find(*rhs_id);
                         it != constants.end()) {
-                        if (const auto amount = shift_amount(it->second)) {
+                        if (const auto amount =
+                                shift_amount(it->second, bit_width(binary->width, target))) {
                             inst = ShiftImm{.dest = binary->dest,
                                             .op = binary->op,
                                             .width = binary->width,
@@ -465,8 +518,11 @@ void reduce_block(MachineFunction& fn, MachineBlock& block) {
                     if (it == constants.end()) {
                         return false;
                     }
-                    const auto amount = power_of_two_shift(it->second);
+                    const auto amount = power_of_two_shift(static_cast<std::uint64_t>(it->second));
                     if (!amount) {
+                        return false;
+                    }
+                    if (it->second <= 0) {
                         return false;
                     }
                     inst = ShiftImm{.dest = binary->dest,
@@ -489,34 +545,48 @@ void reduce_block(MachineFunction& fn, MachineBlock& block) {
                 if (it == constants.end() || it->second == 0) {
                     continue;
                 }
-                const std::int32_t divisor = it->second;
-                const auto shift = abs_power_of_two_shift(divisor);
-                if (binary->op == BinaryOp::Div && divisor > 0) {
-                    const std::size_t inserted =
-                        rewrite_signed_div_const_positive(fn, block, index, *binary, divisor);
-                    if (inserted != 0) {
-                        index += inserted - 1;
-                        continue;
-                    }
-                }
-                if (binary->op == BinaryOp::DivU && divisor > 0) {
-                    if (shift) {
+                const std::int64_t divisor = it->second;
+                const auto bits = bit_width(binary->width, target);
+                const auto shift = abs_power_of_two_shift(divisor, bits);
+                if (shift) {
+                    if (binary->op == BinaryOp::DivU && divisor > 0) {
                         rewrite_unsigned_div_pow2(block, index, *binary, *shift);
                         continue;
                     }
-                }
-                if ((binary->op == BinaryOp::RemU && divisor > 0) ||
-                    binary->op == BinaryOp::Rem) {
-                    if (binary->op == BinaryOp::Rem && divisor > 0) {
+                    if (binary->op == BinaryOp::RemU && divisor > 0) {
+                        rewrite_rem_pow2(fn, block, index, *binary, *shift);
+                        continue;
+                    }
+                    if (binary->op == BinaryOp::Div) {
                         const std::size_t inserted =
-                            rewrite_signed_rem_const_positive(fn, block, index, *binary, divisor);
+                            rewrite_signed_div_pow2(fn, block, index, *binary, divisor, *shift, bits);
                         if (inserted != 0) {
                             index += inserted - 1;
                             continue;
                         }
                     }
-                    if (shift) {
-                        rewrite_rem_pow2(fn, block, index, *binary, divisor, *shift);
+                    if (binary->op == BinaryOp::Rem && divisor > 0) {
+                        const std::size_t inserted =
+                            rewrite_signed_rem_pow2(fn, block, index, *binary, divisor, *shift, bits);
+                        if (inserted != 0) {
+                            index += inserted - 1;
+                            continue;
+                        }
+                    }
+                }
+                if (binary->op == BinaryOp::Div && divisor > 0) {
+                    const std::size_t inserted =
+                        rewrite_signed_div_const_positive(fn, block, index, *binary, divisor, bits);
+                    if (inserted != 0) {
+                        index += inserted - 1;
+                        continue;
+                    }
+                }
+                if (binary->op == BinaryOp::Rem && divisor > 0) {
+                    const std::size_t inserted =
+                        rewrite_signed_rem_const_positive(fn, block, index, *binary, divisor, bits);
+                    if (inserted != 0) {
+                        index += inserted - 1;
                         continue;
                     }
                 }
@@ -527,17 +597,25 @@ void reduce_block(MachineFunction& fn, MachineBlock& block) {
 
 } // namespace
 
-void optimize_strength_reduction(MachineFunction& fn) {
+void optimize_strength_reduction(MachineFunction& fn, const TargetConfig& target) {
     refresh_next_value(fn);
     for (auto& block : fn.blocks) {
-        reduce_block(fn, block);
+        reduce_block(fn, block, target);
+    }
+}
+
+void optimize_strength_reduction(MachineFunction& fn) {
+    optimize_strength_reduction(fn, rv64_target());
+}
+
+void optimize_strength_reduction(MachineModule& module, const TargetConfig& target) {
+    for (auto& fn : module.functions) {
+        optimize_strength_reduction(fn, target);
     }
 }
 
 void optimize_strength_reduction(MachineModule& module) {
-    for (auto& fn : module.functions) {
-        optimize_strength_reduction(fn);
-    }
+    optimize_strength_reduction(module, rv64_target());
 }
 
 } // namespace riscv

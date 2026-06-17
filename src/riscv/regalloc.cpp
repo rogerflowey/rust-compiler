@@ -58,7 +58,7 @@ struct RematInfo {
         FrameAddr,
     };
     Kind kind;
-    int32_t imm = 0;
+    int64_t imm = 0;
     FrameId frame = 0;
     int32_t offset = 0;
 };
@@ -1433,7 +1433,7 @@ void fixup_remat_phi_operands(MachineFunction& fn,
 
     struct RematKey {
         RematInfo::Kind kind;
-        int32_t imm = 0;
+        int64_t imm = 0;
         FrameId frame = 0;
         int32_t offset = 0;
         bool operator==(const RematKey& other) const {
@@ -1444,7 +1444,7 @@ void fixup_remat_phi_operands(MachineFunction& fn,
     struct RematKeyHash {
         std::size_t operator()(const RematKey& key) const {
             auto h = std::hash<int>{}(static_cast<int>(key.kind));
-            h ^= std::hash<int32_t>{}(key.imm) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<int64_t>{}(key.imm) + 0x9e3779b9 + (h << 6) + (h >> 2);
             h ^= std::hash<FrameId>{}(key.frame) + 0x9e3779b9 + (h << 6) + (h >> 2);
             h ^= std::hash<int32_t>{}(key.offset) + 0x9e3779b9 + (h << 6) + (h >> 2);
             return h;

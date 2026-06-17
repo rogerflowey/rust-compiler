@@ -14,7 +14,7 @@ std::pair<std::int32_t, std::int32_t> split_imm32(std::int32_t value);
 
 void emit_move(std::vector<AsmInst>& out, PhysicalRegister dest, PhysicalRegister src);
 void emit_symbol_call(std::vector<AsmInst>& out, std::string_view symbol);
-void emit_li(std::vector<AsmInst>& out, PhysicalRegister dest, std::int32_t value);
+void emit_li(std::vector<AsmInst>& out, PhysicalRegister dest, std::int64_t value);
 void emit_add_imm(std::vector<AsmInst>& out,
                   PhysicalRegister dest,
                   PhysicalRegister base,

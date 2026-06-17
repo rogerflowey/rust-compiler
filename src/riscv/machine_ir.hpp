@@ -138,7 +138,7 @@ struct Copy {
 
 struct Li {
     RegisterRef dest;
-    std::int32_t value = 0;
+    std::int64_t value = 0;
 };
 
 struct Binary {

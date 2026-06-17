@@ -1,6 +1,7 @@
 #include "riscv/asm_emit.hpp"
 
 #include <cstdint>
+#include <limits>
 
 namespace riscv {
 namespace {
@@ -50,18 +51,45 @@ void emit_symbol_call(std::vector<AsmInst>& out, std::string_view symbol) {
     out.push_back(AsmCallInst{.target = std::string(symbol)});
 }
 
-void emit_li(std::vector<AsmInst>& out, PhysicalRegister dest, std::int32_t value) {
-    if (fits_imm12(value)) {
+void emit_li(std::vector<AsmInst>& out, PhysicalRegister dest, std::int64_t value) {
+    if (value < std::numeric_limits<std::int32_t>::min() ||
+        value > std::numeric_limits<std::int32_t>::max()) {
+        const auto lo = static_cast<std::int32_t>(value);
+        const auto hi =
+            static_cast<std::int64_t>((static_cast<__int128>(value) - lo) >> 32);
+        emit_li(out, dest, hi);
+        out.push_back(AsmIInst{
+            .opcode = AsmOpcode::Slli,
+            .rd = dest,
+            .rs1 = dest,
+            .imm = 32,
+        });
+        if (lo != 0) {
+            const PhysicalRegister low_reg =
+                dest == kLateScratch ? PhysicalRegister::T1 : kLateScratch;
+            emit_li(out, low_reg, lo);
+            out.push_back(AsmRInst{
+                .opcode = AsmOpcode::Add,
+                .rd = dest,
+                .rs1 = dest,
+                .rs2 = low_reg,
+            });
+        }
+        return;
+    }
+
+    const auto value32 = static_cast<std::int32_t>(value);
+    if (fits_imm12(value32)) {
         out.push_back(AsmIInst{
             .opcode = AsmOpcode::Addi,
             .rd = dest,
             .rs1 = PhysicalRegister::Zero,
-            .imm = value,
+            .imm = value32,
         });
         return;
     }
 
-    const auto [hi, lo] = split_imm32(value);
+    const auto [hi, lo] = split_imm32(value32);
     out.push_back(AsmUInst{
         .opcode = AsmOpcode::Lui,
         .rd = dest,
