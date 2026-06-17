@@ -49,7 +49,8 @@ constexpr std::array<PhysicalRegister, 11> kLinearScanAllocatable = {
 
 constexpr PhysicalRegister kScratch0 = PhysicalRegister::T0;
 constexpr PhysicalRegister kScratch1 = PhysicalRegister::T1;
-constexpr std::size_t kFastSpillVregThreshold = 1200;
+constexpr std::size_t kFastSpillVregThreshold = 4096;
+constexpr std::size_t kFastSpillLiveThreshold = 384;
 
 struct RematInfo {
     enum class Kind {
@@ -416,6 +417,46 @@ std::unordered_map<MachineValueId, RematInfo> build_remat_map(const MachineFunct
         }
     }
     return map;
+}
+
+std::size_t estimate_max_live_vregs(const MachineFunction& fn) {
+    const auto cfg = compute_cfg(fn);
+    const auto live = compute_liveness(fn, cfg);
+    std::size_t max_live = 0;
+
+    for (std::size_t block_index = 0; block_index < fn.blocks.size(); ++block_index) {
+        const auto& block = fn.blocks[block_index];
+        auto current_live = live.live_out[block_index];
+        max_live = std::max(max_live, current_live.size());
+
+        if (block.terminator) {
+            for_each_terminator_use(*block.terminator, [&](const auto& reg) {
+                using T = std::decay_t<decltype(reg)>;
+                if constexpr (std::is_same_v<T, VirtualRegister>) {
+                    current_live.insert(reg.id);
+                }
+            });
+            max_live = std::max(max_live, current_live.size());
+        }
+
+        for (auto it = block.instructions.rbegin(); it != block.instructions.rend(); ++it) {
+            for_each_instruction_def(*it, [&](const auto& reg) {
+                using T = std::decay_t<decltype(reg)>;
+                if constexpr (std::is_same_v<T, VirtualRegister>) {
+                    current_live.erase(reg.id);
+                }
+            });
+            for_each_instruction_use(*it, [&](const auto& reg) {
+                using T = std::decay_t<decltype(reg)>;
+                if constexpr (std::is_same_v<T, VirtualRegister>) {
+                    current_live.insert(reg.id);
+                }
+            });
+            max_live = std::max(max_live, current_live.size());
+        }
+    }
+
+    return max_live;
 }
 
 Allocation linear_scan_allocate(MachineFunction& fn,
@@ -1476,7 +1517,8 @@ AllocationStats allocate_registers(MachineFunction& fn, const TargetConfig& targ
     const auto table = collect_nodes(fn);
     const auto remat_map = build_remat_map(fn);
     Allocation alloc;
-    if (table.vreg_nodes.size() > kFastSpillVregThreshold) {
+    if (table.vreg_nodes.size() > kFastSpillVregThreshold &&
+        estimate_max_live_vregs(fn) > kFastSpillLiveThreshold) {
         alloc = linear_scan_allocate(fn, table, remat_map, target);
     } else {
         auto graph = build_graph(fn, std::move(table));
