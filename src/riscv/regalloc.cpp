@@ -49,8 +49,8 @@ constexpr std::array<PhysicalRegister, 11> kLinearScanAllocatable = {
 
 constexpr PhysicalRegister kScratch0 = PhysicalRegister::T0;
 constexpr PhysicalRegister kScratch1 = PhysicalRegister::T1;
-constexpr std::size_t kFastSpillVregThreshold = 4096;
-constexpr std::size_t kFastSpillLiveThreshold = 384;
+constexpr std::size_t kFastSpillVregThreshold = 2048;
+constexpr std::size_t kFastSpillLiveThreshold = 256;
 
 struct RematInfo {
     enum class Kind {
