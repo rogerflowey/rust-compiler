@@ -11,6 +11,7 @@
 #include "ir3/passes/load_forwarding.hpp"
 #include "ir3/passes/phi_simplify.hpp"
 #include "ir3/passes/pointer_to_place.hpp"
+#include "ir3/passes/readonly_arg_copy_elim.hpp"
 #include "ir3/passes/sccp.hpp"
 #include "ir3/passes/sroa.hpp"
 #include "ir3/passes/slot_to_ssa.hpp"
@@ -65,7 +66,9 @@ void optimize_module(Module& module) {
     for (auto& fn : module.functions) {
         run_function_passes(fn);
     }
+    run_readonly_arg_copy_elim(module);
     run_inlining(module);
+    run_readonly_arg_copy_elim(module);
     for (auto& fn : module.functions) {
         run_function_passes(fn);
     }
