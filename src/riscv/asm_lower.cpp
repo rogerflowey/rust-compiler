@@ -6,6 +6,7 @@
 #include "riscv/frame_materialize.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <string>
@@ -236,47 +237,103 @@ BranchInfo compare_to_inverted_branch_opcode(CompareOp op) {
     __builtin_unreachable();
 }
 
-void relax_conditional_branches(const MachineFunction& fn, AsmFunction& asm_fn) {
-    std::vector<AsmBlock> relaxed_blocks;
-    relaxed_blocks.reserve(asm_fn.blocks.size());
+constexpr std::int32_t kAsmInstBytes = 4;
+constexpr std::int32_t kBranchReachMin = -4096;
+constexpr std::int32_t kBranchReachMax = 4094;
 
-    std::size_t relax_counter = 0;
+std::unordered_map<std::string, std::int32_t> block_offsets(const AsmFunction& asm_fn) {
+    std::unordered_map<std::string, std::int32_t> offsets;
+    offsets.reserve(asm_fn.blocks.size());
+
+    std::int32_t offset = 0;
     for (const auto& block : asm_fn.blocks) {
-        AsmBlock current{
-            .label = block.label,
-            .instructions = {},
-        };
-
-        for (const auto& inst : block.instructions) {
-            const auto* branch = std::get_if<AsmBranchInst>(&inst);
-            if (!branch) {
-                current.instructions.push_back(inst);
-                continue;
-            }
-
-            const auto skip_label =
-                block.label + ".relax" + std::to_string(relax_counter++);
-            current.instructions.push_back(AsmBranchInst{
-                .opcode = invert_branch_opcode(fn, branch->opcode),
-                .rs1 = branch->rs1,
-                .rs2 = branch->rs2,
-                .target = skip_label,
-            });
-            current.instructions.push_back(AsmJalInst{
-                .rd = PhysicalRegister::Zero,
-                .target = branch->target,
-            });
-            relaxed_blocks.push_back(std::move(current));
-            current = AsmBlock{
-                .label = skip_label,
-                .instructions = {},
-            };
+        offsets.emplace(block.label, offset);
+        const auto block_size =
+            static_cast<std::int32_t>(block.instructions.size()) * kAsmInstBytes;
+        if (block_size > 0 &&
+            offset > std::numeric_limits<std::int32_t>::max() - block_size) {
+            offset = std::numeric_limits<std::int32_t>::max();
+        } else {
+            offset += block_size;
         }
+    }
+    return offsets;
+}
 
-        relaxed_blocks.push_back(std::move(current));
+bool conditional_branch_fits(const MachineFunction& fn,
+                             const std::unordered_map<std::string, std::int32_t>& offsets,
+                             const AsmBlock& block,
+                             std::size_t inst_index,
+                             const AsmBranchInst& branch) {
+    const auto source_it = offsets.find(block.label);
+    if (source_it == offsets.end()) {
+        fail(fn, "missing source label offset for " + block.label);
+    }
+    const auto target_it = offsets.find(branch.target);
+    if (target_it == offsets.end()) {
+        fail(fn, "missing branch target label offset for " + branch.target);
     }
 
-    asm_fn.blocks = std::move(relaxed_blocks);
+    const auto inst_offset =
+        static_cast<std::int32_t>(inst_index) * kAsmInstBytes;
+    const std::int32_t branch_pc = source_it->second + inst_offset;
+    const std::int32_t delta = target_it->second - branch_pc;
+    return delta >= kBranchReachMin && delta <= kBranchReachMax;
+}
+
+void relax_conditional_branches(const MachineFunction& fn, AsmFunction& asm_fn) {
+    std::size_t relax_counter = 0;
+
+    bool changed = false;
+    do {
+        changed = false;
+        const auto offsets = block_offsets(asm_fn);
+
+        std::vector<AsmBlock> relaxed_blocks;
+        relaxed_blocks.reserve(asm_fn.blocks.size());
+
+        for (const auto& block : asm_fn.blocks) {
+            AsmBlock current{
+                .label = block.label,
+                .instructions = {},
+            };
+
+            for (std::size_t i = 0; i < block.instructions.size(); ++i) {
+                const auto& inst = block.instructions[i];
+                const auto* branch = std::get_if<AsmBranchInst>(&inst);
+                if (!branch ||
+                    conditional_branch_fits(fn, offsets, block, i, *branch)) {
+                    current.instructions.push_back(inst);
+                    continue;
+                }
+
+                const auto skip_label =
+                    block.label + ".relax" + std::to_string(relax_counter++);
+                current.instructions.push_back(AsmBranchInst{
+                    .opcode = invert_branch_opcode(fn, branch->opcode),
+                    .rs1 = branch->rs1,
+                    .rs2 = branch->rs2,
+                    .target = skip_label,
+                });
+                current.instructions.push_back(AsmJalInst{
+                    .rd = PhysicalRegister::Zero,
+                    .target = branch->target,
+                });
+                relaxed_blocks.push_back(std::move(current));
+                current = AsmBlock{
+                    .label = skip_label,
+                    .instructions = {},
+                };
+                changed = true;
+            }
+
+            relaxed_blocks.push_back(std::move(current));
+        }
+
+        if (changed) {
+            asm_fn.blocks = std::move(relaxed_blocks);
+        }
+    } while (changed);
 }
 
 void lower_frame_addr(std::vector<AsmInst>& out,
@@ -833,6 +890,7 @@ AsmFunction lower_to_asm(const MachineFunction& fn, const TargetConfig& target) 
         asm_fn.blocks.push_back(std::move(asm_block));
     }
 
+    relax_conditional_branches(fn, asm_fn);
     return asm_fn;
 }
 
