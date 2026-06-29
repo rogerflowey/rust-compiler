@@ -21,6 +21,8 @@ struct Overloaded : Ts... {
 template <class... Ts>
 Overloaded(Ts...) -> Overloaded<Ts...>;
 
+constexpr std::uint32_t kBulkMemsetMinSize = 64;
+
 semantic::TypeId resolved_type(const hir::TypeAnnotation& annotation) {
     if (auto* type = std::get_if<semantic::TypeId>(&annotation)) {
         return *type;
@@ -1678,15 +1680,19 @@ private:
 
         auto element_type = expr_type(*repeat.value);
         if (const auto fill_byte = byte_repeat_literal(*repeat.value, element_type)) {
+            const auto dest_size = riscv::size_of(dest.host_type, target_);
+            if (dest_size < kBulkMemsetMinSize) {
+                goto fallback_repeat_lowering;
+            }
             auto ptr = new_value(SsaClass::Ptr);
             emit(Borrow{.result = ptr, .is_mutable = true, .source = dest});
             auto fill = iconst(*fill_byte);
-            auto size =
-                iconst(static_cast<std::int64_t>(riscv::size_of(dest.host_type, target_)));
+            auto size = iconst(static_cast<std::int64_t>(dest_size));
             emit_direct_call_void_raw("__rcomp_memset", {ptr.id, fill.id, size.id});
             return;
         }
 
+fallback_repeat_lowering:
         auto element_temp = slot_place(temp_slot(element_type));
         materialize(*repeat.value, element_temp);
         if (!current_is_open()) {
