@@ -833,7 +833,6 @@ AsmFunction lower_to_asm(const MachineFunction& fn, const TargetConfig& target) 
         asm_fn.blocks.push_back(std::move(asm_block));
     }
 
-    relax_conditional_branches(fn, asm_fn);
     return asm_fn;
 }
 
