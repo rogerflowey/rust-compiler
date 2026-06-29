@@ -16,6 +16,7 @@
 #include "src/parser/parser.hpp"
 #include "src/riscv/frame_materialize.hpp"
 #include "src/riscv/lower.hpp"
+#include "src/riscv/passes/large_frame_base_hoist.hpp"
 #include "src/riscv/passes/cfg_cleanup.hpp"
 #include "src/riscv/passes/compare_branch_fusion.hpp"
 #include "src/riscv/passes/strength_reduction.hpp"
@@ -190,11 +191,12 @@ int main(int argc, char* argv[]) {
         semantic::ExitCheckVisitor exit_checker;
         exit_checker.check_program(*hir_program);
 
-        auto ir3_module = ir3::lower_program(*hir_program);
+        auto ir3_module = ir3::lower_program(*hir_program, target);
         ir3::optimize_module(ir3_module);
         auto machine_module = riscv::lower_module(ir3_module, target);
         riscv::optimize_strength_reduction(machine_module, target);
         riscv::optimize_compare_branch_fusion(machine_module);
+        riscv::optimize_large_frame_base_hoist(machine_module);
         if (stage == OutputStage::Mir) {
             riscv::print_module(std::cout, machine_module);
             return 0;

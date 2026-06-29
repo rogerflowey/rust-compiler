@@ -99,6 +99,7 @@ semantic::TypeId array_element_type(semantic::TypeId type) {
 
 bool is_supported_runtime_builtin_symbol(const std::string& callee) {
     static const std::unordered_map<std::string, bool> supported = {
+        {"__rcomp_memset", true},
         {"__rcomp_printInt", true},
         {"__rcomp_printlnInt", true},
         {"__rcomp_getInt", true},

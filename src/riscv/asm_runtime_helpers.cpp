@@ -57,6 +57,25 @@ AsmFunction make_runtime_memmove_function() {
     return fn;
 }
 
+AsmFunction make_runtime_memset_function() {
+    AsmFunction fn{
+        .symbol = "__rcomp_memset",
+        .frame_size = 0,
+        .blocks = {},
+    };
+
+    AsmBlock entry{
+        .label = runtime_label(fn.symbol, "entry"),
+        .instructions = {},
+    };
+    entry.instructions.push_back(AsmJalInst{
+        .rd = PhysicalRegister::Zero,
+        .target = "memset",
+    });
+    fn.blocks.push_back(std::move(entry));
+    return fn;
+}
+
 AsmFunction make_runtime_print_int_function() {
     AsmFunction fn{
         .symbol = "__rcomp_printInt",
@@ -690,6 +709,8 @@ RuntimeHelperSelection collect_runtime_helpers(const MachineModule& module) {
                 }
                 if (call->callee == "__rcomp_memmove") {
                     helpers.memmove = true;
+                } else if (call->callee == "__rcomp_memset") {
+                    helpers.memset = true;
                 } else if (call->callee == "__rcomp_printInt") {
                     helpers.print_int = true;
                 } else if (call->callee == "__rcomp_printlnInt") {
@@ -715,6 +736,9 @@ void append_runtime_helpers(AsmModule& module,
                             const TargetConfig& target) {
     if (helpers.memmove) {
         module.functions.push_back(make_runtime_memmove_function());
+    }
+    if (helpers.memset) {
+        module.functions.push_back(make_runtime_memset_function());
     }
     if (helpers.print_int) {
         module.functions.push_back(make_runtime_print_int_function());

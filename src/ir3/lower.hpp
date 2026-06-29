@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ir3/ir3.hpp"
+#include "riscv/target.hpp"
 #include "semantic/hir/hir.hpp"
 
 #include <stdexcept>
@@ -14,6 +15,7 @@ public:
         : std::runtime_error(message) {}
 };
 
-Module lower_program(const hir::Program& program);
+Module lower_program(const hir::Program& program,
+                     const riscv::TargetConfig& target = riscv::rv64_target());
 
 } // namespace ir3

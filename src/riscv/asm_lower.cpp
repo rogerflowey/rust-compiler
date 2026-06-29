@@ -907,7 +907,7 @@ AsmModule lower_to_asm(const MachineModule& module, const TargetConfig& target) 
     AsmModule asm_module = lower_functions_to_asm(module, target);
     const auto helpers = collect_runtime_helpers(module);
     asm_module.functions.reserve(
-        asm_module.functions.size() + helpers.memmove + helpers.print_int +
+        asm_module.functions.size() + helpers.memmove + helpers.memset + helpers.print_int +
         helpers.println_int + helpers.get_int + helpers.exit);
     append_runtime_helpers(asm_module, helpers, target);
     return asm_module;

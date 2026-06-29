@@ -8,6 +8,7 @@ namespace riscv {
 
 struct RuntimeHelperSelection {
     bool memmove = false;
+    bool memset = false;
     bool print_int = false;
     bool println_int = false;
     bool get_int = false;

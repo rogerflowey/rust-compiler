@@ -20,6 +20,7 @@
 #include "src/riscv/asm_runtime_helpers.hpp"
 #include "src/riscv/frame_materialize.hpp"
 #include "src/riscv/lower.hpp"
+#include "src/riscv/passes/large_frame_base_hoist.hpp"
 #include "src/riscv/passes/cfg_cleanup.hpp"
 #include "src/riscv/passes/compare_branch_fusion.hpp"
 #include "src/riscv/passes/strength_reduction.hpp"
@@ -173,6 +174,7 @@ int run_submission(int argc, char* argv[]) {
         auto machine_module = riscv::lower_module(ir3_module);
         riscv::optimize_strength_reduction(machine_module);
         riscv::optimize_compare_branch_fusion(machine_module);
+        riscv::optimize_large_frame_base_hoist(machine_module);
         riscv::allocate_registers(machine_module);
         riscv::eliminate_phis(machine_module);
         riscv::optimize_cfg_cleanup(machine_module);

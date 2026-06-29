@@ -109,7 +109,13 @@ void assign_object(FrameObject& object, std::uint32_t& cursor) {
 void assign_primary_frame_objects(MachineFunction& fn, std::uint32_t& cursor) {
     auto by_id = [](const FrameObject* lhs, const FrameObject* rhs) { return lhs->id < rhs->id; };
     std::vector<FrameObject*> outgoing;
-    std::vector<FrameObject*> locals_and_spills;
+    std::vector<FrameObject*> small_hot;
+    std::vector<FrameObject*> large_locals;
+
+    auto is_large_local = [](const FrameObject& object) {
+        return object.kind == FrameObjectKind::LocalSlot && object.size > 2048;
+    };
+
     for (auto& object : fn.frame_objects) {
         if (object.kind == FrameObjectKind::IncomingArg ||
             object.kind == FrameObjectKind::CalleeSave) {
@@ -117,18 +123,24 @@ void assign_primary_frame_objects(MachineFunction& fn, std::uint32_t& cursor) {
         }
         if (object.kind == FrameObjectKind::OutgoingArg) {
             outgoing.push_back(&object);
+        } else if (is_large_local(object)) {
+            large_locals.push_back(&object);
         } else {
-            locals_and_spills.push_back(&object);
+            small_hot.push_back(&object);
         }
     }
 
     std::sort(outgoing.begin(), outgoing.end(), by_id);
-    std::sort(locals_and_spills.begin(), locals_and_spills.end(), by_id);
+    std::sort(small_hot.begin(), small_hot.end(), by_id);
+    std::sort(large_locals.begin(), large_locals.end(), by_id);
 
     for (auto* object : outgoing) {
         assign_object(*object, cursor);
     }
-    for (auto* object : locals_and_spills) {
+    for (auto* object : small_hot) {
+        assign_object(*object, cursor);
+    }
+    for (auto* object : large_locals) {
         assign_object(*object, cursor);
     }
 }

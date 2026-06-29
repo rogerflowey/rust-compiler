@@ -1,8 +1,10 @@
 #include "ir3/lower.hpp"
 
+#include "riscv/layout.hpp"
 #include "semantic/symbol/predefined.hpp"
 #include "semantic/type/helper.hpp"
 
+#include <cstdint>
 #include <cctype>
 #include <optional>
 #include <string>
@@ -78,6 +80,68 @@ bool is_unsigned_integer_type(semantic::TypeId type) {
     }
     return false;
 }
+
+std::optional<std::uint8_t> byte_repeat_literal(const hir::Expr& expr,
+                                                semantic::TypeId type) {
+    const auto* literal = std::get_if<hir::Literal>(&expr.value);
+    if (!literal) {
+        return std::nullopt;
+    }
+
+    const auto primitive = primitive_kind(type);
+    if (!primitive) {
+        return std::nullopt;
+    }
+
+    return std::visit(
+        Overloaded{
+            [&](const hir::Literal::Integer& value) -> std::optional<std::uint8_t> {
+                switch (*primitive) {
+                case semantic::PrimitiveKind::I32:
+                case semantic::PrimitiveKind::U32:
+                case semantic::PrimitiveKind::ISIZE:
+                case semantic::PrimitiveKind::USIZE:
+                case semantic::PrimitiveKind::CHAR:
+                case semantic::PrimitiveKind::__ANYINT__:
+                case semantic::PrimitiveKind::__ANYUINT__: {
+                    std::int64_t signed_value = static_cast<std::int64_t>(value.value);
+                    if (value.is_negative) {
+                        signed_value = -signed_value;
+                    }
+                    if (signed_value == 0) {
+                        return std::uint8_t{0x00};
+                    }
+                    if (signed_value == -1) {
+                        return std::uint8_t{0xff};
+                    }
+                    return std::nullopt;
+                }
+                case semantic::PrimitiveKind::BOOL:
+                    return std::nullopt;
+                case semantic::PrimitiveKind::STRING:
+                    return std::nullopt;
+                }
+                return std::nullopt;
+            },
+            [&](bool value) -> std::optional<std::uint8_t> {
+                if (*primitive != semantic::PrimitiveKind::BOOL) {
+                    return std::nullopt;
+                }
+                return value ? std::uint8_t{0x01} : std::uint8_t{0x00};
+            },
+            [&](char value) -> std::optional<std::uint8_t> {
+                if (*primitive != semantic::PrimitiveKind::CHAR) {
+                    return std::nullopt;
+                }
+                return static_cast<std::uint8_t>(value);
+            },
+            [&](const hir::Literal::String&) -> std::optional<std::uint8_t> {
+                return std::nullopt;
+            },
+        },
+        literal->value);
+}
+
 
 const char* host_class_name(HostClass klass) {
     switch (klass) {
@@ -331,8 +395,13 @@ CastOp lower_cast_op(SsaClass source, SsaClass dest) {
 
 class FunctionLowerer {
 public:
-    explicit FunctionLowerer(Module& module, LoweringSymbols& symbols, std::string symbol)
-        : module_(module), symbols_(symbols) {
+    FunctionLowerer(Module& module,
+                    LoweringSymbols& symbols,
+                    std::string symbol,
+                    riscv::TargetConfig target)
+        : module_(module),
+          symbols_(symbols),
+          target_(target) {
         function_.symbol = std::move(symbol);
         current_ = add_block("bb0");
         function_.entry_block = current_;
@@ -389,6 +458,7 @@ private:
 
     Module& module_;
     LoweringSymbols& symbols_;
+    riscv::TargetConfig target_;
     Function function_;
     BlockId current_ = 0;
     const hir::Function* source_function_ = nullptr;
@@ -720,7 +790,8 @@ private:
         std::visit(
             Overloaded{
                 [&](const hir::Function& function) {
-                    FunctionLowerer lowerer(module_, symbols_, symbols_.symbol_for(function));
+                    FunctionLowerer lowerer(module_, symbols_, symbols_.symbol_for(function),
+                                           target_);
                     lowerer.lower_function(function);
                     module_.functions.push_back(lowerer.finish());
                 },
@@ -731,13 +802,17 @@ private:
                             Overloaded{
                                 [&](const hir::Function& function) {
                                     symbols_.define_function(function, impl_type);
-                                    FunctionLowerer lowerer(module_, symbols_, symbols_.symbol_for(function));
+                                    FunctionLowerer lowerer(module_, symbols_,
+                                                           symbols_.symbol_for(function),
+                                                           target_);
                                     lowerer.lower_function(function);
                                     module_.functions.push_back(lowerer.finish());
                                 },
                                 [&](const hir::Method& method) {
                                     symbols_.define_method(method);
-                                    FunctionLowerer lowerer(module_, symbols_, symbols_.symbol_for(method));
+                                    FunctionLowerer lowerer(module_, symbols_,
+                                                           symbols_.symbol_for(method),
+                                                           target_);
                                     lowerer.lower_method(method);
                                     module_.functions.push_back(lowerer.finish());
                                 },
@@ -1187,6 +1262,15 @@ private:
         });
     }
 
+    void emit_direct_call_void_raw(const std::string& callee,
+                                   std::vector<ValueId> args) {
+        emit(Call{
+            .result = std::nullopt,
+            .callee = callee,
+            .args = std::move(args),
+        });
+    }
+
     void emit_direct_call_materialize(const std::string& callee,
                                       const std::vector<std::unique_ptr<hir::Expr>>& args,
                                       const Place& dest) {
@@ -1593,6 +1677,16 @@ private:
         }
 
         auto element_type = expr_type(*repeat.value);
+        if (const auto fill_byte = byte_repeat_literal(*repeat.value, element_type)) {
+            auto ptr = new_value(SsaClass::Ptr);
+            emit(Borrow{.result = ptr, .is_mutable = true, .source = dest});
+            auto fill = iconst(*fill_byte);
+            auto size =
+                iconst(static_cast<std::int64_t>(riscv::size_of(dest.host_type, target_)));
+            emit_direct_call_void_raw("__rcomp_memset", {ptr.id, fill.id, size.id});
+            return;
+        }
+
         auto element_temp = slot_place(temp_slot(element_type));
         materialize(*repeat.value, element_temp);
         if (!current_is_open()) {
@@ -1749,11 +1843,14 @@ void collect_item_symbols(LoweringSymbols& symbols, const hir::Item& item) {
         item.value);
 }
 
-void lower_top_level_item(Module& module, LoweringSymbols& symbols, const hir::Item& item) {
+void lower_top_level_item(Module& module,
+                          LoweringSymbols& symbols,
+                          const hir::Item& item,
+                          const riscv::TargetConfig& target) {
     std::visit(
         Overloaded{
             [&](const hir::Function& function) {
-                FunctionLowerer lowerer(module, symbols, symbols.symbol_for(function));
+                FunctionLowerer lowerer(module, symbols, symbols.symbol_for(function), target);
                 lowerer.lower_function(function);
                 module.functions.push_back(lowerer.finish());
             },
@@ -1764,13 +1861,15 @@ void lower_top_level_item(Module& module, LoweringSymbols& symbols, const hir::I
                         Overloaded{
                             [&](const hir::Function& function) {
                                 symbols.define_function(function, impl_type);
-                                FunctionLowerer lowerer(module, symbols, symbols.symbol_for(function));
+                                FunctionLowerer lowerer(module, symbols,
+                                                       symbols.symbol_for(function), target);
                                 lowerer.lower_function(function);
                                 module.functions.push_back(lowerer.finish());
                             },
                             [&](const hir::Method& method) {
                                 symbols.define_method(method);
-                                FunctionLowerer lowerer(module, symbols, symbols.symbol_for(method));
+                                FunctionLowerer lowerer(module, symbols,
+                                                       symbols.symbol_for(method), target);
                                 lowerer.lower_method(method);
                                 module.functions.push_back(lowerer.finish());
                             },
@@ -1786,14 +1885,14 @@ void lower_top_level_item(Module& module, LoweringSymbols& symbols, const hir::I
 
 } // namespace
 
-Module lower_program(const hir::Program& program) {
+Module lower_program(const hir::Program& program, const riscv::TargetConfig& target) {
     Module module;
     LoweringSymbols symbols;
     for (const auto& item : program.items) {
         collect_item_symbols(symbols, *item);
     }
     for (const auto& item : program.items) {
-        lower_top_level_item(module, symbols, *item);
+        lower_top_level_item(module, symbols, *item, target);
     }
     return module;
 }
